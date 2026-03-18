@@ -9,6 +9,7 @@ import {
   buildPaymentRequiredResponse,
   buildPaymentRequirementForRoute,
   buildPaymentResponseHeaders,
+  buildPayoutSplit,
   createChallenge,
   createOpaqueToken,
   createSessionToken,
@@ -233,6 +234,13 @@ export function createMarketplaceApi(options: MarketplaceApiOptions): Express {
       return res.status(500).json({ error: `Provider adapter missing: ${route.provider}` });
     }
 
+    const quotedPrice = quotedPriceRaw(route);
+    const payoutSplit = buildPayoutSplit({
+      route,
+      marketplaceWallet: options.payTo,
+      quotedPrice
+    });
+
     const executeResult = await provider.execute({
       route,
       input: parsedBody.data,
@@ -253,7 +261,8 @@ export function createMarketplaceApi(options: MarketplaceApiOptions): Express {
         buyerWallet,
         routeId: route.routeId,
         routeVersion: route.version,
-        quotedPrice: quotedPriceRaw(route),
+        quotedPrice,
+        payoutSplit,
         paymentPayload: paymentHeaders.paymentPayload,
         facilitatorResponse: verifyResult,
         statusCode: executeResult.statusCode,
@@ -288,7 +297,8 @@ export function createMarketplaceApi(options: MarketplaceApiOptions): Express {
       normalizedRequestHash: requestHash,
       buyerWallet,
       route,
-      quotedPrice: quotedPriceRaw(route),
+      quotedPrice,
+      payoutSplit,
       paymentPayload: paymentHeaders.paymentPayload,
       facilitatorResponse: verifyResult,
       jobToken,

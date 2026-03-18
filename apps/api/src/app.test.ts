@@ -66,7 +66,7 @@ describe("marketplace api", () => {
   });
 
   it("accepts legacy X-PAYMENT on a sync route", async () => {
-    const { app } = await createTestApp();
+    const { app, store } = await createTestApp();
 
     const response = await request(app)
       .post("/api/mock/quick-insight")
@@ -77,6 +77,11 @@ describe("marketplace api", () => {
     expect(response.status).toBe(200);
     expect(response.headers["payment-response"]).toBeDefined();
     expect(response.body.operation).toBe("quick-insight");
+
+    const record = await store.getIdempotencyByPaymentId("payment_sync_1");
+    expect(record?.payoutSplit.marketplaceAmount).toBe("50000");
+    expect(record?.payoutSplit.providerAmount).toBe("0");
+    expect(record?.payoutSplit.providerAccountId).toBe("mock");
   });
 
   it("replays the same sync response for the same payment id and request", async () => {
@@ -106,7 +111,7 @@ describe("marketplace api", () => {
   });
 
   it("creates an async job and lets the paying wallet poll it for free", async () => {
-    const { app, buyer } = await createTestApp();
+    const { app, buyer, store } = await createTestApp();
 
     const accepted = await request(app)
       .post("/api/mock/async-report")
@@ -147,5 +152,10 @@ describe("marketplace api", () => {
 
     expect(polled.status).toBe(200);
     expect(polled.body.status).toBe("pending");
+
+    const job = await store.getJob(jobToken);
+    expect(job?.payoutSplit.marketplaceAmount).toBe("150000");
+    expect(job?.payoutSplit.providerAmount).toBe("0");
+    expect(job?.payoutSplit.providerAccountId).toBe("mock");
   });
 });

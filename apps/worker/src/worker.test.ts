@@ -22,14 +22,29 @@ describe("marketplace worker", () => {
         operation: "async-report",
         version: "v1",
         mode: "async",
-        network: "fast-mainnet",
-        price: "$0.15",
-        title: "Async Report",
-        description: "desc",
-        inputSchema: null as never,
-        outputSchema: null as never
+      network: "fast-mainnet",
+      price: "$0.15",
+      title: "Async Report",
+      description: "desc",
+      payout: {
+        providerAccountId: "mock",
+        providerWallet: null,
+        providerBps: 0
       },
+      inputSchema: null as never,
+      outputSchema: null as never
+    },
       quotedPrice: "150000",
+      payoutSplit: {
+        currency: "fastUSDC",
+        marketplaceWallet: "fast1marketplacetreasury000000000000000000000000000000000000",
+        marketplaceBps: 10000,
+        marketplaceAmount: "150000",
+        providerAccountId: "mock",
+        providerWallet: null,
+        providerBps: 0,
+        providerAmount: "0"
+      },
       paymentPayload: "payload",
       facilitatorResponse: { isValid: true },
       jobToken: "job_worker_1",

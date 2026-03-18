@@ -39,6 +39,11 @@ export const marketplaceRoutes: MarketplaceRoute[] = [
     price: "$0.05",
     title: "Quick Insight",
     description: "Return a paid single-shot mock insight response.",
+    payout: {
+      providerAccountId: "mock",
+      providerWallet: null,
+      providerBps: 0
+    },
     inputSchema: quickInsightInputSchema,
     outputSchema: quickInsightOutputSchema
   },
@@ -52,6 +57,11 @@ export const marketplaceRoutes: MarketplaceRoute[] = [
     price: "$0.15",
     title: "Async Report",
     description: "Create a paid async mock report job and return a job token.",
+    payout: {
+      providerAccountId: "mock",
+      providerWallet: null,
+      providerBps: 0
+    },
     inputSchema: asyncReportInputSchema,
     outputSchema: asyncReportOutputSchema
   }

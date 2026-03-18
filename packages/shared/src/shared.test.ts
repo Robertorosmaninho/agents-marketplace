@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   buildOpenApiDocument,
+  buildPayoutSplit,
   createChallenge,
   hashNormalizedRequest,
   marketplaceRoutes,
@@ -103,5 +104,17 @@ describe("shared marketplace helpers", () => {
     const document = buildOpenApiDocument("http://localhost:3000");
     expect(document.paths["/api/mock/quick-insight"]).toBeDefined();
     expect(document.paths["/api/mock/async-report"]).toBeDefined();
+  });
+
+  it("freezes payout split amounts from the quoted price", () => {
+    const split = buildPayoutSplit({
+      route: marketplaceRoutes[0],
+      marketplaceWallet: "fast1marketplacetreasury000000000000000000000000000000000000",
+      quotedPrice: "50000"
+    });
+
+    expect(split.providerBps).toBe(0);
+    expect(split.marketplaceAmount).toBe("50000");
+    expect(split.providerAmount).toBe("0");
   });
 });

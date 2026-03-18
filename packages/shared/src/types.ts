@@ -5,6 +5,23 @@ export type ResourceType = "job";
 export type JobStatus = "pending" | "completed" | "failed";
 export type RefundStatus = "not_required" | "pending" | "sent" | "failed";
 
+export interface RoutePayoutConfig {
+  providerAccountId: string;
+  providerWallet: string | null;
+  providerBps: number;
+}
+
+export interface PersistedPayoutSplit {
+  currency: "fastUSDC";
+  marketplaceWallet: string;
+  marketplaceBps: number;
+  marketplaceAmount: string;
+  providerAccountId: string;
+  providerWallet: string | null;
+  providerBps: number;
+  providerAmount: string;
+}
+
 export interface MarketplaceRoute<
   TInput extends ZodTypeAny = ZodTypeAny,
   TOutput extends ZodTypeAny = ZodTypeAny
@@ -18,6 +35,7 @@ export interface MarketplaceRoute<
   price: string;
   title: string;
   description: string;
+  payout: RoutePayoutConfig;
   inputSchema: TInput;
   outputSchema: TOutput;
 }
@@ -103,6 +121,7 @@ export interface IdempotencyRecord {
   routeId: string;
   routeVersion: string;
   quotedPrice: string;
+  payoutSplit: PersistedPayoutSplit;
   paymentPayload: string;
   facilitatorResponse: unknown;
   responseKind: "sync" | "job";
@@ -122,6 +141,7 @@ export interface JobRecord {
   operation: string;
   buyerWallet: string;
   quotedPrice: string;
+  payoutSplit: PersistedPayoutSplit;
   providerJobId: string;
   requestBody: unknown;
   providerState: Record<string, unknown> | null;
@@ -175,6 +195,7 @@ export interface SaveSyncIdempotencyInput {
   routeId: string;
   routeVersion: string;
   quotedPrice: string;
+  payoutSplit: PersistedPayoutSplit;
   paymentPayload: string;
   facilitatorResponse: unknown;
   statusCode: number;
@@ -188,6 +209,7 @@ export interface SaveAsyncAcceptanceInput {
   buyerWallet: string;
   route: MarketplaceRoute;
   quotedPrice: string;
+  payoutSplit: PersistedPayoutSplit;
   paymentPayload: string;
   facilitatorResponse: unknown;
   jobToken: string;

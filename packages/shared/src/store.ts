@@ -44,6 +44,7 @@ export class InMemoryMarketplaceStore implements MarketplaceStore {
       routeId: input.routeId,
       routeVersion: input.routeVersion,
       quotedPrice: input.quotedPrice,
+      payoutSplit: clone(input.payoutSplit),
       paymentPayload: input.paymentPayload,
       facilitatorResponse: clone(input.facilitatorResponse),
       responseKind: "sync",
@@ -67,6 +68,7 @@ export class InMemoryMarketplaceStore implements MarketplaceStore {
       routeId: input.route.routeId,
       routeVersion: input.route.version,
       quotedPrice: input.quotedPrice,
+      payoutSplit: clone(input.payoutSplit),
       paymentPayload: input.paymentPayload,
       facilitatorResponse: clone(input.facilitatorResponse),
       responseKind: "job",
@@ -86,6 +88,7 @@ export class InMemoryMarketplaceStore implements MarketplaceStore {
       operation: input.route.operation,
       buyerWallet: input.buyerWallet,
       quotedPrice: input.quotedPrice,
+      payoutSplit: clone(input.payoutSplit),
       providerJobId: input.providerJobId,
       requestBody: clone(input.requestBody),
       providerState: clone(input.providerState ?? null),
@@ -340,6 +343,7 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
         route_id TEXT NOT NULL,
         route_version TEXT NOT NULL,
         quoted_price TEXT NOT NULL,
+        payout_split JSONB NOT NULL DEFAULT '{}'::jsonb,
         payment_payload TEXT NOT NULL,
         facilitator_response JSONB NOT NULL,
         response_kind TEXT NOT NULL,
@@ -359,6 +363,7 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
         operation TEXT NOT NULL,
         buyer_wallet TEXT NOT NULL,
         quoted_price TEXT NOT NULL,
+        payout_split JSONB NOT NULL DEFAULT '{}'::jsonb,
         provider_job_id TEXT NOT NULL,
         request_body JSONB NOT NULL,
         provider_state JSONB,
@@ -405,6 +410,12 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
+
+      ALTER TABLE idempotency_records
+      ADD COLUMN IF NOT EXISTS payout_split JSONB NOT NULL DEFAULT '{}'::jsonb;
+
+      ALTER TABLE jobs
+      ADD COLUMN IF NOT EXISTS payout_split JSONB NOT NULL DEFAULT '{}'::jsonb;
     `);
   }
 
@@ -418,9 +429,9 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
       `
       INSERT INTO idempotency_records (
         payment_id, normalized_request_hash, buyer_wallet, route_id, route_version,
-        quoted_price, payment_payload, facilitator_response, response_kind,
+        quoted_price, payout_split, payment_payload, facilitator_response, response_kind,
         response_status_code, response_body, response_headers
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, 'sync', $9, $10::jsonb, $11::jsonb)
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9::jsonb, 'sync', $10, $11::jsonb, $12::jsonb)
       RETURNING *
       `,
       [
@@ -430,6 +441,7 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
         input.routeId,
         input.routeVersion,
         input.quotedPrice,
+        JSON.stringify(input.payoutSplit),
         input.paymentPayload,
         JSON.stringify(input.facilitatorResponse),
         input.statusCode,
@@ -450,9 +462,9 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
         `
         INSERT INTO idempotency_records (
           payment_id, normalized_request_hash, buyer_wallet, route_id, route_version,
-          quoted_price, payment_payload, facilitator_response, response_kind,
+          quoted_price, payout_split, payment_payload, facilitator_response, response_kind,
           response_status_code, response_body, response_headers, job_token
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, 'job', 202, $9::jsonb, $10::jsonb, $11)
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9::jsonb, 'job', 202, $10::jsonb, $11::jsonb, $12)
         RETURNING *
         `,
         [
@@ -462,6 +474,7 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
           input.route.routeId,
           input.route.version,
           input.quotedPrice,
+          JSON.stringify(input.payoutSplit),
           input.paymentPayload,
           JSON.stringify(input.facilitatorResponse),
           JSON.stringify(input.responseBody),
@@ -474,9 +487,9 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
         `
         INSERT INTO jobs (
           job_token, payment_id, route_id, provider, operation, buyer_wallet, quoted_price,
-          provider_job_id, request_body, provider_state, status, result_body, error_message,
+          payout_split, provider_job_id, request_body, provider_state, status, result_body, error_message,
           refund_status, refund_id
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb, 'pending', NULL, NULL, 'not_required', NULL)
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10::jsonb, $11::jsonb, 'pending', NULL, NULL, 'not_required', NULL)
         RETURNING *
         `,
         [
@@ -487,6 +500,7 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
           input.route.operation,
           input.buyerWallet,
           input.quotedPrice,
+          JSON.stringify(input.payoutSplit),
           input.providerJobId,
           JSON.stringify(input.requestBody),
           JSON.stringify(input.providerState ?? null)
@@ -719,6 +733,7 @@ function mapIdempotencyRow(row: Record<string, unknown>): IdempotencyRecord {
     routeId: row.route_id as string,
     routeVersion: row.route_version as string,
     quotedPrice: row.quoted_price as string,
+    payoutSplit: row.payout_split as IdempotencyRecord["payoutSplit"],
     paymentPayload: row.payment_payload as string,
     facilitatorResponse: row.facilitator_response,
     responseKind: row.response_kind as "sync" | "job",
@@ -740,6 +755,7 @@ function mapJobRow(row: Record<string, unknown>): JobRecord {
     operation: row.operation as string,
     buyerWallet: row.buyer_wallet as string,
     quotedPrice: row.quoted_price as string,
+    payoutSplit: row.payout_split as JobRecord["payoutSplit"],
     providerJobId: row.provider_job_id as string,
     requestBody: row.request_body,
     providerState: (row.provider_state as Record<string, unknown> | null) ?? null,
