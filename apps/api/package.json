@@ -1,0 +1,11 @@
+{
+  "name": "@marketplace/api",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@marketplace/shared": "*"
+  },
+  "exports": {
+    ".": "./src/index.ts"
+  }
+}

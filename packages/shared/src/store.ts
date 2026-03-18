@@ -1,0 +1,794 @@
+import { randomUUID } from "node:crypto";
+
+import { Pool } from "pg";
+
+import type {
+  AccessGrantRecord,
+  IdempotencyRecord,
+  JobRecord,
+  MarketplaceStore,
+  ProviderAttemptRecord,
+  RefundRecord,
+  SaveAsyncAcceptanceInput,
+  SaveSyncIdempotencyInput
+} from "./types.js";
+
+function timestamp(): string {
+  return new Date().toISOString();
+}
+
+function clone<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T;
+}
+
+export class InMemoryMarketplaceStore implements MarketplaceStore {
+  private readonly idempotencyByPaymentId = new Map<string, IdempotencyRecord>();
+  private readonly jobsByToken = new Map<string, JobRecord>();
+  private readonly accessGrants = new Map<string, AccessGrantRecord>();
+  private readonly refundsById = new Map<string, RefundRecord>();
+  private readonly refundsByJobToken = new Map<string, RefundRecord>();
+  private readonly attempts: ProviderAttemptRecord[] = [];
+
+  async ensureSchema(): Promise<void> {}
+
+  async getIdempotencyByPaymentId(paymentId: string): Promise<IdempotencyRecord | null> {
+    return clone(this.idempotencyByPaymentId.get(paymentId) ?? null);
+  }
+
+  async saveSyncIdempotency(input: SaveSyncIdempotencyInput): Promise<IdempotencyRecord> {
+    const now = timestamp();
+    const record: IdempotencyRecord = {
+      paymentId: input.paymentId,
+      normalizedRequestHash: input.normalizedRequestHash,
+      buyerWallet: input.buyerWallet,
+      routeId: input.routeId,
+      routeVersion: input.routeVersion,
+      quotedPrice: input.quotedPrice,
+      paymentPayload: input.paymentPayload,
+      facilitatorResponse: clone(input.facilitatorResponse),
+      responseKind: "sync",
+      responseStatusCode: input.statusCode,
+      responseBody: clone(input.body),
+      responseHeaders: clone(input.headers ?? {}),
+      createdAt: now,
+      updatedAt: now
+    };
+
+    this.idempotencyByPaymentId.set(record.paymentId, record);
+    return clone(record);
+  }
+
+  async saveAsyncAcceptance(input: SaveAsyncAcceptanceInput): Promise<{ idempotency: IdempotencyRecord; job: JobRecord }> {
+    const now = timestamp();
+    const idempotency: IdempotencyRecord = {
+      paymentId: input.paymentId,
+      normalizedRequestHash: input.normalizedRequestHash,
+      buyerWallet: input.buyerWallet,
+      routeId: input.route.routeId,
+      routeVersion: input.route.version,
+      quotedPrice: input.quotedPrice,
+      paymentPayload: input.paymentPayload,
+      facilitatorResponse: clone(input.facilitatorResponse),
+      responseKind: "job",
+      responseStatusCode: 202,
+      responseBody: clone(input.responseBody),
+      responseHeaders: clone(input.responseHeaders ?? {}),
+      jobToken: input.jobToken,
+      createdAt: now,
+      updatedAt: now
+    };
+
+    const job: JobRecord = {
+      jobToken: input.jobToken,
+      paymentId: input.paymentId,
+      routeId: input.route.routeId,
+      provider: input.route.provider,
+      operation: input.route.operation,
+      buyerWallet: input.buyerWallet,
+      quotedPrice: input.quotedPrice,
+      providerJobId: input.providerJobId,
+      requestBody: clone(input.requestBody),
+      providerState: clone(input.providerState ?? null),
+      status: "pending",
+      resultBody: null,
+      errorMessage: null,
+      refundStatus: "not_required",
+      refundId: null,
+      createdAt: now,
+      updatedAt: now
+    };
+
+    this.idempotencyByPaymentId.set(idempotency.paymentId, idempotency);
+    this.jobsByToken.set(job.jobToken, job);
+
+    return {
+      idempotency: clone(idempotency),
+      job: clone(job)
+    };
+  }
+
+  async getJob(jobToken: string): Promise<JobRecord | null> {
+    return clone(this.jobsByToken.get(jobToken) ?? null);
+  }
+
+  async listPendingJobs(limit: number): Promise<JobRecord[]> {
+    return clone(
+      Array.from(this.jobsByToken.values())
+        .filter((job) => job.status === "pending")
+        .slice(0, limit)
+    );
+  }
+
+  async updateJobPending(jobToken: string, providerState?: Record<string, unknown>): Promise<JobRecord> {
+    const existing = this.jobsByToken.get(jobToken);
+    if (!existing) {
+      throw new Error(`Job not found: ${jobToken}`);
+    }
+
+    const updated: JobRecord = {
+      ...existing,
+      providerState: clone(providerState ?? existing.providerState),
+      updatedAt: timestamp()
+    };
+
+    this.jobsByToken.set(jobToken, updated);
+    return clone(updated);
+  }
+
+  async completeJob(jobToken: string, body: unknown): Promise<JobRecord> {
+    const existing = this.jobsByToken.get(jobToken);
+    if (!existing) {
+      throw new Error(`Job not found: ${jobToken}`);
+    }
+
+    const updated: JobRecord = {
+      ...existing,
+      status: "completed",
+      resultBody: clone(body),
+      errorMessage: null,
+      updatedAt: timestamp()
+    };
+
+    this.jobsByToken.set(jobToken, updated);
+    return clone(updated);
+  }
+
+  async failJob(jobToken: string, error: string): Promise<JobRecord> {
+    const existing = this.jobsByToken.get(jobToken);
+    if (!existing) {
+      throw new Error(`Job not found: ${jobToken}`);
+    }
+
+    const updated: JobRecord = {
+      ...existing,
+      status: "failed",
+      errorMessage: error,
+      updatedAt: timestamp()
+    };
+
+    this.jobsByToken.set(jobToken, updated);
+    return clone(updated);
+  }
+
+  async createAccessGrant(input: {
+    resourceType: "job";
+    resourceId: string;
+    wallet: string;
+    paymentId: string;
+    metadata?: Record<string, unknown>;
+  }): Promise<AccessGrantRecord> {
+    const key = `${input.resourceType}:${input.resourceId}:${input.wallet}`;
+    const existing = this.accessGrants.get(key);
+    if (existing) {
+      return clone(existing);
+    }
+
+    const record: AccessGrantRecord = {
+      id: randomUUID(),
+      resourceType: input.resourceType,
+      resourceId: input.resourceId,
+      wallet: input.wallet,
+      paymentId: input.paymentId,
+      metadata: clone(input.metadata ?? {}),
+      createdAt: timestamp()
+    };
+
+    this.accessGrants.set(key, record);
+    return clone(record);
+  }
+
+  async getAccessGrant(resourceType: "job", resourceId: string, wallet: string): Promise<AccessGrantRecord | null> {
+    return clone(this.accessGrants.get(`${resourceType}:${resourceId}:${wallet}`) ?? null);
+  }
+
+  async recordProviderAttempt(input: {
+    jobToken: string;
+    phase: "execute" | "poll" | "refund";
+    status: "succeeded" | "failed";
+    requestPayload?: unknown;
+    responsePayload?: unknown;
+    errorMessage?: string;
+  }): Promise<ProviderAttemptRecord> {
+    const record: ProviderAttemptRecord = {
+      id: randomUUID(),
+      jobToken: input.jobToken,
+      phase: input.phase,
+      status: input.status,
+      requestPayload: clone(input.requestPayload ?? null),
+      responsePayload: clone(input.responsePayload ?? null),
+      errorMessage: input.errorMessage ?? null,
+      createdAt: timestamp()
+    };
+
+    this.attempts.push(record);
+    return clone(record);
+  }
+
+  async createRefund(input: {
+    jobToken: string;
+    paymentId: string;
+    wallet: string;
+    amount: string;
+  }): Promise<RefundRecord> {
+    const existing = this.refundsByJobToken.get(input.jobToken);
+    if (existing) {
+      return clone(existing);
+    }
+
+    const record: RefundRecord = {
+      id: randomUUID(),
+      jobToken: input.jobToken,
+      paymentId: input.paymentId,
+      wallet: input.wallet,
+      amount: input.amount,
+      status: "pending",
+      txHash: null,
+      errorMessage: null,
+      createdAt: timestamp(),
+      updatedAt: timestamp()
+    };
+
+    this.refundsById.set(record.id, record);
+    this.refundsByJobToken.set(record.jobToken, record);
+
+    const job = this.jobsByToken.get(input.jobToken);
+    if (job) {
+      this.jobsByToken.set(input.jobToken, {
+        ...job,
+        refundStatus: "pending",
+        refundId: record.id,
+        updatedAt: timestamp()
+      });
+    }
+
+    return clone(record);
+  }
+
+  async markRefundSent(refundId: string, txHash: string): Promise<RefundRecord> {
+    const existing = this.refundsById.get(refundId);
+    if (!existing) {
+      throw new Error(`Refund not found: ${refundId}`);
+    }
+
+    const updated: RefundRecord = {
+      ...existing,
+      status: "sent",
+      txHash,
+      errorMessage: null,
+      updatedAt: timestamp()
+    };
+
+    this.refundsById.set(refundId, updated);
+    this.refundsByJobToken.set(updated.jobToken, updated);
+
+    const job = this.jobsByToken.get(updated.jobToken);
+    if (job) {
+      this.jobsByToken.set(updated.jobToken, {
+        ...job,
+        refundStatus: "sent",
+        refundId: refundId,
+        updatedAt: timestamp()
+      });
+    }
+
+    return clone(updated);
+  }
+
+  async markRefundFailed(refundId: string, errorMessage: string): Promise<RefundRecord> {
+    const existing = this.refundsById.get(refundId);
+    if (!existing) {
+      throw new Error(`Refund not found: ${refundId}`);
+    }
+
+    const updated: RefundRecord = {
+      ...existing,
+      status: "failed",
+      errorMessage,
+      updatedAt: timestamp()
+    };
+
+    this.refundsById.set(refundId, updated);
+    this.refundsByJobToken.set(updated.jobToken, updated);
+
+    const job = this.jobsByToken.get(updated.jobToken);
+    if (job) {
+      this.jobsByToken.set(updated.jobToken, {
+        ...job,
+        refundStatus: "failed",
+        refundId,
+        updatedAt: timestamp()
+      });
+    }
+
+    return clone(updated);
+  }
+
+  async getRefundByJobToken(jobToken: string): Promise<RefundRecord | null> {
+    return clone(this.refundsByJobToken.get(jobToken) ?? null);
+  }
+}
+
+export class PostgresMarketplaceStore implements MarketplaceStore {
+  constructor(private readonly pool: Pool) {}
+
+  async ensureSchema(): Promise<void> {
+    await this.pool.query(`
+      CREATE TABLE IF NOT EXISTS idempotency_records (
+        payment_id TEXT PRIMARY KEY,
+        normalized_request_hash TEXT NOT NULL,
+        buyer_wallet TEXT NOT NULL,
+        route_id TEXT NOT NULL,
+        route_version TEXT NOT NULL,
+        quoted_price TEXT NOT NULL,
+        payment_payload TEXT NOT NULL,
+        facilitator_response JSONB NOT NULL,
+        response_kind TEXT NOT NULL,
+        response_status_code INTEGER NOT NULL,
+        response_body JSONB NOT NULL,
+        response_headers JSONB NOT NULL DEFAULT '{}'::jsonb,
+        job_token TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+
+      CREATE TABLE IF NOT EXISTS jobs (
+        job_token TEXT PRIMARY KEY,
+        payment_id TEXT NOT NULL REFERENCES idempotency_records(payment_id),
+        route_id TEXT NOT NULL,
+        provider TEXT NOT NULL,
+        operation TEXT NOT NULL,
+        buyer_wallet TEXT NOT NULL,
+        quoted_price TEXT NOT NULL,
+        provider_job_id TEXT NOT NULL,
+        request_body JSONB NOT NULL,
+        provider_state JSONB,
+        status TEXT NOT NULL,
+        result_body JSONB,
+        error_message TEXT,
+        refund_status TEXT NOT NULL DEFAULT 'not_required',
+        refund_id TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+
+      CREATE TABLE IF NOT EXISTS provider_attempts (
+        id TEXT PRIMARY KEY,
+        job_token TEXT NOT NULL REFERENCES jobs(job_token),
+        phase TEXT NOT NULL,
+        status TEXT NOT NULL,
+        request_payload JSONB,
+        response_payload JSONB,
+        error_message TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+
+      CREATE TABLE IF NOT EXISTS access_grants (
+        id TEXT PRIMARY KEY,
+        resource_type TEXT NOT NULL,
+        resource_id TEXT NOT NULL,
+        wallet TEXT NOT NULL,
+        payment_id TEXT NOT NULL,
+        metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE(resource_type, resource_id, wallet)
+      );
+
+      CREATE TABLE IF NOT EXISTS refunds (
+        id TEXT PRIMARY KEY,
+        job_token TEXT UNIQUE NOT NULL REFERENCES jobs(job_token),
+        payment_id TEXT NOT NULL,
+        wallet TEXT NOT NULL,
+        amount TEXT NOT NULL,
+        status TEXT NOT NULL,
+        tx_hash TEXT,
+        error_message TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+    `);
+  }
+
+  async getIdempotencyByPaymentId(paymentId: string): Promise<IdempotencyRecord | null> {
+    const result = await this.pool.query("SELECT * FROM idempotency_records WHERE payment_id = $1", [paymentId]);
+    return result.rowCount ? mapIdempotencyRow(result.rows[0]) : null;
+  }
+
+  async saveSyncIdempotency(input: SaveSyncIdempotencyInput): Promise<IdempotencyRecord> {
+    const result = await this.pool.query(
+      `
+      INSERT INTO idempotency_records (
+        payment_id, normalized_request_hash, buyer_wallet, route_id, route_version,
+        quoted_price, payment_payload, facilitator_response, response_kind,
+        response_status_code, response_body, response_headers
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, 'sync', $9, $10::jsonb, $11::jsonb)
+      RETURNING *
+      `,
+      [
+        input.paymentId,
+        input.normalizedRequestHash,
+        input.buyerWallet,
+        input.routeId,
+        input.routeVersion,
+        input.quotedPrice,
+        input.paymentPayload,
+        JSON.stringify(input.facilitatorResponse),
+        input.statusCode,
+        JSON.stringify(input.body),
+        JSON.stringify(input.headers ?? {})
+      ]
+    );
+
+    return mapIdempotencyRow(result.rows[0]);
+  }
+
+  async saveAsyncAcceptance(input: SaveAsyncAcceptanceInput): Promise<{ idempotency: IdempotencyRecord; job: JobRecord }> {
+    const client = await this.pool.connect();
+
+    try {
+      await client.query("BEGIN");
+      const idempotencyResult = await client.query(
+        `
+        INSERT INTO idempotency_records (
+          payment_id, normalized_request_hash, buyer_wallet, route_id, route_version,
+          quoted_price, payment_payload, facilitator_response, response_kind,
+          response_status_code, response_body, response_headers, job_token
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, 'job', 202, $9::jsonb, $10::jsonb, $11)
+        RETURNING *
+        `,
+        [
+          input.paymentId,
+          input.normalizedRequestHash,
+          input.buyerWallet,
+          input.route.routeId,
+          input.route.version,
+          input.quotedPrice,
+          input.paymentPayload,
+          JSON.stringify(input.facilitatorResponse),
+          JSON.stringify(input.responseBody),
+          JSON.stringify(input.responseHeaders ?? {}),
+          input.jobToken
+        ]
+      );
+
+      const jobResult = await client.query(
+        `
+        INSERT INTO jobs (
+          job_token, payment_id, route_id, provider, operation, buyer_wallet, quoted_price,
+          provider_job_id, request_body, provider_state, status, result_body, error_message,
+          refund_status, refund_id
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb, 'pending', NULL, NULL, 'not_required', NULL)
+        RETURNING *
+        `,
+        [
+          input.jobToken,
+          input.paymentId,
+          input.route.routeId,
+          input.route.provider,
+          input.route.operation,
+          input.buyerWallet,
+          input.quotedPrice,
+          input.providerJobId,
+          JSON.stringify(input.requestBody),
+          JSON.stringify(input.providerState ?? null)
+        ]
+      );
+
+      await client.query("COMMIT");
+      return {
+        idempotency: mapIdempotencyRow(idempotencyResult.rows[0]),
+        job: mapJobRow(jobResult.rows[0])
+      };
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async getJob(jobToken: string): Promise<JobRecord | null> {
+    const result = await this.pool.query("SELECT * FROM jobs WHERE job_token = $1", [jobToken]);
+    return result.rowCount ? mapJobRow(result.rows[0]) : null;
+  }
+
+  async listPendingJobs(limit: number): Promise<JobRecord[]> {
+    const result = await this.pool.query(
+      "SELECT * FROM jobs WHERE status = 'pending' ORDER BY created_at ASC LIMIT $1",
+      [limit]
+    );
+    return result.rows.map(mapJobRow);
+  }
+
+  async updateJobPending(jobToken: string, providerState?: Record<string, unknown>): Promise<JobRecord> {
+    const result = await this.pool.query(
+      `
+      UPDATE jobs
+      SET provider_state = $2::jsonb, updated_at = NOW()
+      WHERE job_token = $1
+      RETURNING *
+      `,
+      [jobToken, JSON.stringify(providerState ?? null)]
+    );
+
+    return mapJobRow(result.rows[0]);
+  }
+
+  async completeJob(jobToken: string, body: unknown): Promise<JobRecord> {
+    const result = await this.pool.query(
+      `
+      UPDATE jobs
+      SET status = 'completed', result_body = $2::jsonb, error_message = NULL, updated_at = NOW()
+      WHERE job_token = $1
+      RETURNING *
+      `,
+      [jobToken, JSON.stringify(body)]
+    );
+
+    return mapJobRow(result.rows[0]);
+  }
+
+  async failJob(jobToken: string, error: string): Promise<JobRecord> {
+    const result = await this.pool.query(
+      `
+      UPDATE jobs
+      SET status = 'failed', error_message = $2, updated_at = NOW()
+      WHERE job_token = $1
+      RETURNING *
+      `,
+      [jobToken, error]
+    );
+
+    return mapJobRow(result.rows[0]);
+  }
+
+  async createAccessGrant(input: {
+    resourceType: "job";
+    resourceId: string;
+    wallet: string;
+    paymentId: string;
+    metadata?: Record<string, unknown>;
+  }): Promise<AccessGrantRecord> {
+    const existing = await this.getAccessGrant(input.resourceType, input.resourceId, input.wallet);
+    if (existing) {
+      return existing;
+    }
+
+    const result = await this.pool.query(
+      `
+      INSERT INTO access_grants (id, resource_type, resource_id, wallet, payment_id, metadata)
+      VALUES ($1, $2, $3, $4, $5, $6::jsonb)
+      RETURNING *
+      `,
+      [randomUUID(), input.resourceType, input.resourceId, input.wallet, input.paymentId, JSON.stringify(input.metadata ?? {})]
+    );
+
+    return mapAccessGrantRow(result.rows[0]);
+  }
+
+  async getAccessGrant(resourceType: "job", resourceId: string, wallet: string): Promise<AccessGrantRecord | null> {
+    const result = await this.pool.query(
+      `
+      SELECT * FROM access_grants
+      WHERE resource_type = $1 AND resource_id = $2 AND wallet = $3
+      `,
+      [resourceType, resourceId, wallet]
+    );
+    return result.rowCount ? mapAccessGrantRow(result.rows[0]) : null;
+  }
+
+  async recordProviderAttempt(input: {
+    jobToken: string;
+    phase: "execute" | "poll" | "refund";
+    status: "succeeded" | "failed";
+    requestPayload?: unknown;
+    responsePayload?: unknown;
+    errorMessage?: string;
+  }): Promise<ProviderAttemptRecord> {
+    const result = await this.pool.query(
+      `
+      INSERT INTO provider_attempts (id, job_token, phase, status, request_payload, response_payload, error_message)
+      VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7)
+      RETURNING *
+      `,
+      [
+        randomUUID(),
+        input.jobToken,
+        input.phase,
+        input.status,
+        JSON.stringify(input.requestPayload ?? null),
+        JSON.stringify(input.responsePayload ?? null),
+        input.errorMessage ?? null
+      ]
+    );
+
+    return mapAttemptRow(result.rows[0]);
+  }
+
+  async createRefund(input: {
+    jobToken: string;
+    paymentId: string;
+    wallet: string;
+    amount: string;
+  }): Promise<RefundRecord> {
+    const existing = await this.getRefundByJobToken(input.jobToken);
+    if (existing) {
+      return existing;
+    }
+
+    const result = await this.pool.query(
+      `
+      INSERT INTO refunds (id, job_token, payment_id, wallet, amount, status)
+      VALUES ($1, $2, $3, $4, $5, 'pending')
+      RETURNING *
+      `,
+      [randomUUID(), input.jobToken, input.paymentId, input.wallet, input.amount]
+    );
+
+    const refund = mapRefundRow(result.rows[0]);
+    await this.pool.query(
+      `
+      UPDATE jobs
+      SET refund_status = 'pending', refund_id = $2, updated_at = NOW()
+      WHERE job_token = $1
+      `,
+      [input.jobToken, refund.id]
+    );
+
+    return refund;
+  }
+
+  async markRefundSent(refundId: string, txHash: string): Promise<RefundRecord> {
+    const result = await this.pool.query(
+      `
+      UPDATE refunds
+      SET status = 'sent', tx_hash = $2, error_message = NULL, updated_at = NOW()
+      WHERE id = $1
+      RETURNING *
+      `,
+      [refundId, txHash]
+    );
+
+    const refund = mapRefundRow(result.rows[0]);
+    await this.pool.query(
+      `
+      UPDATE jobs
+      SET refund_status = 'sent', refund_id = $2, updated_at = NOW()
+      WHERE job_token = $1
+      `,
+      [refund.jobToken, refund.id]
+    );
+
+    return refund;
+  }
+
+  async markRefundFailed(refundId: string, errorMessage: string): Promise<RefundRecord> {
+    const result = await this.pool.query(
+      `
+      UPDATE refunds
+      SET status = 'failed', error_message = $2, updated_at = NOW()
+      WHERE id = $1
+      RETURNING *
+      `,
+      [refundId, errorMessage]
+    );
+
+    const refund = mapRefundRow(result.rows[0]);
+    await this.pool.query(
+      `
+      UPDATE jobs
+      SET refund_status = 'failed', refund_id = $2, updated_at = NOW()
+      WHERE job_token = $1
+      `,
+      [refund.jobToken, refund.id]
+    );
+
+    return refund;
+  }
+
+  async getRefundByJobToken(jobToken: string): Promise<RefundRecord | null> {
+    const result = await this.pool.query("SELECT * FROM refunds WHERE job_token = $1", [jobToken]);
+    return result.rowCount ? mapRefundRow(result.rows[0]) : null;
+  }
+}
+
+function mapIdempotencyRow(row: Record<string, unknown>): IdempotencyRecord {
+  return {
+    paymentId: row.payment_id as string,
+    normalizedRequestHash: row.normalized_request_hash as string,
+    buyerWallet: row.buyer_wallet as string,
+    routeId: row.route_id as string,
+    routeVersion: row.route_version as string,
+    quotedPrice: row.quoted_price as string,
+    paymentPayload: row.payment_payload as string,
+    facilitatorResponse: row.facilitator_response,
+    responseKind: row.response_kind as "sync" | "job",
+    responseStatusCode: row.response_status_code as number,
+    responseBody: row.response_body,
+    responseHeaders: (row.response_headers as Record<string, string>) ?? {},
+    jobToken: (row.job_token as string | null) ?? undefined,
+    createdAt: new Date(row.created_at as string | Date).toISOString(),
+    updatedAt: new Date(row.updated_at as string | Date).toISOString()
+  };
+}
+
+function mapJobRow(row: Record<string, unknown>): JobRecord {
+  return {
+    jobToken: row.job_token as string,
+    paymentId: row.payment_id as string,
+    routeId: row.route_id as string,
+    provider: row.provider as string,
+    operation: row.operation as string,
+    buyerWallet: row.buyer_wallet as string,
+    quotedPrice: row.quoted_price as string,
+    providerJobId: row.provider_job_id as string,
+    requestBody: row.request_body,
+    providerState: (row.provider_state as Record<string, unknown> | null) ?? null,
+    status: row.status as JobRecord["status"],
+    resultBody: row.result_body,
+    errorMessage: (row.error_message as string | null) ?? null,
+    refundStatus: row.refund_status as JobRecord["refundStatus"],
+    refundId: (row.refund_id as string | null) ?? null,
+    createdAt: new Date(row.created_at as string | Date).toISOString(),
+    updatedAt: new Date(row.updated_at as string | Date).toISOString()
+  };
+}
+
+function mapAttemptRow(row: Record<string, unknown>): ProviderAttemptRecord {
+  return {
+    id: row.id as string,
+    jobToken: row.job_token as string,
+    phase: row.phase as ProviderAttemptRecord["phase"],
+    status: row.status as ProviderAttemptRecord["status"],
+    requestPayload: row.request_payload,
+    responsePayload: row.response_payload,
+    errorMessage: (row.error_message as string | null) ?? null,
+    createdAt: new Date(row.created_at as string | Date).toISOString()
+  };
+}
+
+function mapAccessGrantRow(row: Record<string, unknown>): AccessGrantRecord {
+  return {
+    id: row.id as string,
+    resourceType: row.resource_type as "job",
+    resourceId: row.resource_id as string,
+    wallet: row.wallet as string,
+    paymentId: row.payment_id as string,
+    metadata: (row.metadata as Record<string, unknown>) ?? {},
+    createdAt: new Date(row.created_at as string | Date).toISOString()
+  };
+}
+
+function mapRefundRow(row: Record<string, unknown>): RefundRecord {
+  return {
+    id: row.id as string,
+    jobToken: row.job_token as string,
+    paymentId: row.payment_id as string,
+    wallet: row.wallet as string,
+    amount: row.amount as string,
+    status: row.status as RefundRecord["status"],
+    txHash: (row.tx_hash as string | null) ?? null,
+    errorMessage: (row.error_message as string | null) ?? null,
+    createdAt: new Date(row.created_at as string | Date).toISOString(),
+    updatedAt: new Date(row.updated_at as string | Date).toISOString()
+  };
+}
