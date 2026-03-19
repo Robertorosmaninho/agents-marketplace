@@ -305,6 +305,14 @@ describe("shared marketplace helpers", () => {
       responseHeaders: {}
     });
 
+    expect(
+      await store.getAccessGrant(
+        "job",
+        "job_catalog_1",
+        "fast1buyer00000000000000000000000000000000000000000000000000000000"
+      )
+    ).not.toBeNull();
+
     await store.completeJob("job_catalog_1", { report: "done" });
 
     await store.saveSyncIdempotency({

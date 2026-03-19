@@ -1607,7 +1607,7 @@ async function handleX402Route(input: {
     payer: buyerWallet
   });
 
-  const { job } = await input.store.saveAsyncAcceptance({
+  await input.store.saveAsyncAcceptance({
     paymentId: paymentHeaders.paymentId,
     normalizedRequestHash: requestHash,
     buyerWallet,
@@ -1622,16 +1622,6 @@ async function handleX402Route(input: {
     providerState: executeResult.state,
     responseBody: acceptedBody,
     responseHeaders: paymentResponseHeaders
-  });
-
-  await input.store.createAccessGrant({
-    resourceType: "job",
-    resourceId: job.jobToken,
-    wallet: buyerWallet,
-    paymentId: job.paymentId,
-    metadata: {
-      routeId: job.routeId
-    }
   });
 
   await input.store.recordProviderAttempt({
@@ -2318,6 +2308,15 @@ async function replayExistingResponse(
   }
 
   if (record.responseKind === "job" && record.jobToken) {
+    await store.createAccessGrant({
+      resourceType: "job",
+      resourceId: record.jobToken,
+      wallet: buyerWallet,
+      paymentId: record.paymentId,
+      metadata: {
+        routeId: record.routeId
+      }
+    });
     const job = await store.getJob(record.jobToken);
     return res.status(202).set(record.responseHeaders).json({
       jobToken: record.jobToken,

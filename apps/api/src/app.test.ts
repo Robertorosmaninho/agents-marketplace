@@ -500,6 +500,42 @@ describe("marketplace api", () => {
     expect(job?.payoutSplit.providerAccountId).toBe("provider_marketplace");
   });
 
+  it("repairs a missing async job access grant when replaying an existing payment", async () => {
+    const { app, buyer, store } = await createTestApp();
+
+    const accepted = await request(app)
+      .post("/api/mock/async-report")
+      .set("X-PAYMENT", Buffer.from(JSON.stringify({ paid: true })).toString("base64"))
+      .set("PAYMENT-IDENTIFIER", "payment_async_replay_repair_1")
+      .send({ topic: "market depth", delayMs: 60_000 });
+
+    expect(accepted.status).toBe(202);
+    const { jobToken } = accepted.body as { jobToken: string };
+
+    const accessGrants = (store as unknown as {
+      accessGrants: Map<string, unknown>;
+    }).accessGrants;
+    accessGrants.delete(`job:${jobToken}:${buyer.address}`);
+
+    const replayed = await request(app)
+      .post("/api/mock/async-report")
+      .set("X-PAYMENT", Buffer.from(JSON.stringify({ paid: true })).toString("base64"))
+      .set("PAYMENT-IDENTIFIER", "payment_async_replay_repair_1")
+      .send({ topic: "market depth", delayMs: 60_000 });
+
+    expect(replayed.status).toBe(202);
+
+    const challenge = await request(app)
+      .post("/auth/challenge")
+      .send({
+        wallet: buyer.address,
+        resourceType: "job",
+        resourceId: jobToken
+      });
+
+    expect(challenge.status).toBe(200);
+  });
+
   it("creates a website wallet session from a signed challenge", async () => {
     const { app, buyer } = await createTestApp();
 

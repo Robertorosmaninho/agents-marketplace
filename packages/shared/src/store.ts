@@ -351,6 +351,15 @@ export class InMemoryMarketplaceStore implements MarketplaceStore {
 
     this.idempotencyByPaymentId.set(idempotency.paymentId, idempotency);
     this.jobsByToken.set(job.jobToken, job);
+    await this.createAccessGrant({
+      resourceType: "job",
+      resourceId: job.jobToken,
+      wallet: input.buyerWallet,
+      paymentId: input.paymentId,
+      metadata: {
+        routeId: input.route.routeId
+      }
+    });
 
     return {
       idempotency: clone(idempotency),
@@ -2978,6 +2987,23 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
           JSON.stringify(input.requestBody),
           JSON.stringify(input.route),
           JSON.stringify(input.providerState ?? null)
+        ]
+      );
+
+      await client.query(
+        `
+        INSERT INTO access_grants (id, resource_type, resource_id, wallet, payment_id, metadata)
+        VALUES ($1, 'job', $2, $3, $4, $5::jsonb)
+        ON CONFLICT (resource_type, resource_id, wallet) DO NOTHING
+        `,
+        [
+          randomUUID(),
+          input.jobToken,
+          input.buyerWallet,
+          input.paymentId,
+          JSON.stringify({
+            routeId: input.route.routeId
+          })
         ]
       );
 
