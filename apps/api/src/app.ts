@@ -1437,6 +1437,7 @@ async function handleX402Route(input: {
     buyerWallet,
     routeId: input.route.routeId,
     routeVersion: input.route.version,
+    pendingRecoveryAction: pendingPaymentRecoveryActionForRoute(input.route),
     quotedPrice,
     payoutSplit,
     paymentPayload: paymentHeaders.paymentPayload,
@@ -1489,7 +1490,7 @@ async function handleX402Route(input: {
       });
     }
 
-    if (!isPendingExecutionRecoverySafe(input.route)) {
+    if (existing.pendingRecoveryAction !== "retry") {
       return input.res.status(409).json({
         error:
           "This paid request is being reconciled automatically because the upstream outcome was not durably recorded. Do not retry with a new payment identifier."
@@ -2432,8 +2433,10 @@ function isPendingExecutionRecoverable(record: IdempotencyRecord) {
   return Date.now() - updatedAt >= PAYMENT_EXECUTION_RECOVERY_MS;
 }
 
-function isPendingExecutionRecoverySafe(route: PublishedEndpointVersionRecord) {
-  return route.executorKind === "mock" || route.executorKind === "tavily" || route.executorKind === "marketplace";
+function pendingPaymentRecoveryActionForRoute(route: Pick<PublishedEndpointVersionRecord, "executorKind">) {
+  return route.executorKind === "mock" || route.executorKind === "tavily" || route.executorKind === "marketplace"
+    ? "retry"
+    : "refund";
 }
 
 function hasStoredTopupResponseBody(body: unknown): body is {

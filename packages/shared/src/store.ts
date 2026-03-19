@@ -213,6 +213,7 @@ function buildPendingPaymentExecutionRecord(input: ClaimPaymentExecutionInput, n
     buyerWallet: input.buyerWallet,
     routeId: input.routeId,
     routeVersion: input.routeVersion,
+    pendingRecoveryAction: input.pendingRecoveryAction,
     quotedPrice: input.quotedPrice,
     payoutSplit: clone(input.payoutSplit),
     paymentPayload: input.paymentPayload,
@@ -394,6 +395,7 @@ export class InMemoryMarketplaceStore implements MarketplaceStore {
       buyerWallet: input.buyerWallet,
       routeId: input.routeId,
       routeVersion: input.routeVersion,
+      pendingRecoveryAction: existing?.pendingRecoveryAction ?? "retry",
       quotedPrice: input.quotedPrice,
       payoutSplit: clone(input.payoutSplit),
       paymentPayload: input.paymentPayload,
@@ -424,6 +426,7 @@ export class InMemoryMarketplaceStore implements MarketplaceStore {
       buyerWallet: input.buyerWallet,
       routeId: input.route.routeId,
       routeVersion: input.route.version,
+      pendingRecoveryAction: existing?.pendingRecoveryAction ?? "retry",
       quotedPrice: input.quotedPrice,
       payoutSplit: clone(input.payoutSplit),
       paymentPayload: input.paymentPayload,
@@ -939,6 +942,7 @@ export class InMemoryMarketplaceStore implements MarketplaceStore {
       buyerWallet: input.buyerWallet,
       routeId: input.routeId,
       routeVersion: input.routeVersion,
+      pendingRecoveryAction: existingIdempotency?.pendingRecoveryAction ?? "retry",
       quotedPrice: input.quotedPrice,
       payoutSplit: clone(input.payoutSplit),
       paymentPayload: input.paymentPayload,
@@ -2282,6 +2286,7 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
         buyer_wallet TEXT NOT NULL,
         route_id TEXT NOT NULL,
         route_version TEXT NOT NULL,
+        pending_recovery_action TEXT NOT NULL DEFAULT 'retry',
         quoted_price TEXT NOT NULL,
         payout_split JSONB NOT NULL DEFAULT '{}'::jsonb,
         payment_payload TEXT NOT NULL,
@@ -2304,6 +2309,9 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
 
       ALTER TABLE idempotency_records
       ADD COLUMN IF NOT EXISTS request_id TEXT;
+
+      ALTER TABLE idempotency_records
+      ADD COLUMN IF NOT EXISTS pending_recovery_action TEXT;
 
       CREATE TABLE IF NOT EXISTS jobs (
         job_token TEXT PRIMARY KEY,
@@ -2696,6 +2704,29 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
 
       ALTER TABLE published_endpoint_versions
       ADD COLUMN IF NOT EXISTS billing JSONB NOT NULL DEFAULT '{}'::jsonb;
+
+      UPDATE idempotency_records records
+      SET pending_recovery_action = CASE
+        WHEN published.executor_kind IN ('mock', 'tavily', 'marketplace') THEN 'retry'
+        ELSE 'refund'
+      END
+      FROM (
+        SELECT DISTINCT ON (route_id) route_id, executor_kind
+        FROM published_endpoint_versions
+        ORDER BY route_id, updated_at DESC, created_at DESC
+      ) AS published
+      WHERE records.pending_recovery_action IS NULL
+        AND records.route_id = published.route_id;
+
+      UPDATE idempotency_records
+      SET pending_recovery_action = 'refund'
+      WHERE pending_recovery_action IS NULL;
+
+      ALTER TABLE idempotency_records
+      ALTER COLUMN pending_recovery_action SET DEFAULT 'retry';
+
+      ALTER TABLE idempotency_records
+      ALTER COLUMN pending_recovery_action SET NOT NULL;
 
       UPDATE provider_endpoint_drafts
       SET billing = jsonb_build_object('type', 'fixed_x402', 'price', price)
@@ -3192,12 +3223,12 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
         `
         INSERT INTO idempotency_records (
           payment_id, normalized_request_hash, buyer_wallet, route_id, route_version,
-          quoted_price, payout_split, payment_payload, facilitator_response, response_kind,
+          pending_recovery_action, quoted_price, payout_split, payment_payload, facilitator_response, response_kind,
           response_status_code, response_body, response_headers, provider_payout_source_kind,
           execution_status, request_id, job_token
         ) VALUES (
-          $1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9::jsonb, $10,
-          202, $11::jsonb, $12::jsonb, NULL, 'pending', $13, $14
+          $1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10::jsonb, $11,
+          202, $12::jsonb, $13::jsonb, NULL, 'pending', $14, $15
         )
         RETURNING *
         `,
@@ -3207,6 +3238,7 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
           input.buyerWallet,
           input.routeId,
           input.routeVersion,
+          input.pendingRecoveryAction,
           input.quotedPrice,
           JSON.stringify(input.payoutSplit),
           input.paymentPayload,
@@ -3283,11 +3315,11 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
       `
       INSERT INTO idempotency_records (
         payment_id, normalized_request_hash, buyer_wallet, route_id, route_version,
-        quoted_price, payout_split, payment_payload, facilitator_response, response_kind,
+        pending_recovery_action, quoted_price, payout_split, payment_payload, facilitator_response, response_kind,
         response_status_code, response_body, response_headers, provider_payout_source_kind,
         execution_status, request_id, job_token
       ) VALUES (
-        $1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9::jsonb, 'sync', $10, $11::jsonb, $12::jsonb, $13,
+        $1, $2, $3, $4, $5, 'retry', $6, $7::jsonb, $8, $9::jsonb, 'sync', $10, $11::jsonb, $12::jsonb, $13,
         'completed', $14, NULL
       )
       ON CONFLICT (payment_id) DO UPDATE
@@ -3296,6 +3328,7 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
         buyer_wallet = EXCLUDED.buyer_wallet,
         route_id = EXCLUDED.route_id,
         route_version = EXCLUDED.route_version,
+        pending_recovery_action = COALESCE(idempotency_records.pending_recovery_action, EXCLUDED.pending_recovery_action),
         quoted_price = EXCLUDED.quoted_price,
         payout_split = EXCLUDED.payout_split,
         payment_payload = EXCLUDED.payment_payload,
@@ -3340,15 +3373,17 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
         `
         INSERT INTO idempotency_records (
           payment_id, normalized_request_hash, buyer_wallet, route_id, route_version,
-          quoted_price, payout_split, payment_payload, facilitator_response, response_kind,
+          pending_recovery_action, quoted_price, payout_split, payment_payload, facilitator_response, response_kind,
           response_status_code, response_body, response_headers, job_token, execution_status, request_id
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9::jsonb, 'job', 202, $10::jsonb, $11::jsonb, $12, 'completed', $13)
+        ) VALUES ($1, $2, $3, $4, $5, 'retry', $6, $7::jsonb, $8, $9::jsonb, 'job', 202, $10::jsonb, $11::jsonb, $12, 'completed', $13)
         ON CONFLICT (payment_id) DO UPDATE
         SET
           normalized_request_hash = EXCLUDED.normalized_request_hash,
           buyer_wallet = EXCLUDED.buyer_wallet,
           route_id = EXCLUDED.route_id,
           route_version = EXCLUDED.route_version,
+          pending_recovery_action =
+            COALESCE(idempotency_records.pending_recovery_action, EXCLUDED.pending_recovery_action),
           quoted_price = EXCLUDED.quoted_price,
           payout_split = EXCLUDED.payout_split,
           payment_payload = EXCLUDED.payment_payload,
@@ -3930,11 +3965,11 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
         `
         INSERT INTO idempotency_records (
           payment_id, normalized_request_hash, buyer_wallet, route_id, route_version,
-          quoted_price, payout_split, payment_payload, facilitator_response, response_kind,
+          pending_recovery_action, quoted_price, payout_split, payment_payload, facilitator_response, response_kind,
           response_status_code, response_body, response_headers, provider_payout_source_kind,
           execution_status, request_id, job_token
         ) VALUES (
-          $1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9::jsonb, 'sync',
+          $1, $2, $3, $4, $5, 'retry', $6, $7::jsonb, $8, $9::jsonb, 'sync',
           200, $10::jsonb, $11::jsonb, 'credit_topup', 'completed', $12, NULL
         )
         ON CONFLICT (payment_id) DO UPDATE
@@ -3943,6 +3978,8 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
           buyer_wallet = EXCLUDED.buyer_wallet,
           route_id = EXCLUDED.route_id,
           route_version = EXCLUDED.route_version,
+          pending_recovery_action =
+            COALESCE(idempotency_records.pending_recovery_action, EXCLUDED.pending_recovery_action),
           quoted_price = EXCLUDED.quoted_price,
           payout_split = EXCLUDED.payout_split,
           payment_payload = EXCLUDED.payment_payload,
@@ -5877,6 +5914,7 @@ function mapIdempotencyRow(row: Record<string, unknown>): IdempotencyRecord {
     buyerWallet: row.buyer_wallet as string,
     routeId: row.route_id as string,
     routeVersion: row.route_version as string,
+    pendingRecoveryAction: (row.pending_recovery_action as IdempotencyRecord["pendingRecoveryAction"]) ?? "retry",
     quotedPrice: row.quoted_price as string,
     payoutSplit: row.payout_split as IdempotencyRecord["payoutSplit"],
     paymentPayload: row.payment_payload as string,

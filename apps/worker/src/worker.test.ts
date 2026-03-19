@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { InMemoryMarketplaceStore, createDefaultProviderRegistry, marketplaceRoutes } from "@marketplace/shared";
+import {
+  InMemoryMarketplaceStore,
+  PAYMENT_EXECUTION_RECOVERY_MS,
+  createDefaultProviderRegistry,
+  marketplaceRoutes
+} from "@marketplace/shared";
 
 import { runMarketplaceWorkerCycle } from "./worker.js";
 
@@ -219,5 +224,65 @@ describe("marketplace worker", () => {
 
     expect(payouts).toEqual([{ wallet: providerWallet, amount: "500000" }]);
     expect(await store.listPendingProviderPayouts(10)).toHaveLength(0);
+  });
+
+  it("refunds stale pending payments using the stored recovery action", async () => {
+    const store = new InMemoryMarketplaceStore();
+    const buyerWallet = "fast1buyer00000000000000000000000000000000000000000000000000000000";
+
+    await store.claimPaymentExecution({
+      paymentId: "stale_payment_refund_1",
+      normalizedRequestHash: "refund-hash-1",
+      buyerWallet,
+      routeId: "mock.quick-insight.v1",
+      routeVersion: "v1",
+      pendingRecoveryAction: "refund",
+      quotedPrice: "125000",
+      payoutSplit: {
+        currency: "fastUSDC",
+        marketplaceWallet: "fast1marketplacetreasury000000000000000000000000000000000000",
+        marketplaceBps: 10_000,
+        marketplaceAmount: "125000",
+        providerAccountId: "mock",
+        providerWallet: null,
+        providerBps: 0,
+        providerAmount: "0"
+      },
+      paymentPayload: "payload-refund-1",
+      facilitatorResponse: { isValid: true },
+      responseKind: "sync",
+      requestId: "request-refund-1",
+      responseHeaders: {}
+    });
+
+    const idempotencyByPaymentId = (store as unknown as {
+      idempotencyByPaymentId: Map<string, {
+        updatedAt: string;
+      }>;
+    }).idempotencyByPaymentId;
+    const pending = idempotencyByPaymentId.get("stale_payment_refund_1");
+    if (!pending) {
+      throw new Error("Missing pending payment record.");
+    }
+
+    idempotencyByPaymentId.set("stale_payment_refund_1", {
+      ...pending,
+      updatedAt: new Date(Date.now() - PAYMENT_EXECUTION_RECOVERY_MS - 1_000).toISOString()
+    });
+
+    const refunds: Array<{ wallet: string; amount: string }> = [];
+
+    await runMarketplaceWorkerCycle({
+      store,
+      refundService: {
+        async issueRefund({ wallet, amount }) {
+          refunds.push({ wallet, amount });
+          return { txHash: "0xstale-refund" };
+        }
+      }
+    });
+
+    expect(refunds).toEqual([{ wallet: buyerWallet, amount: "125000" }]);
+    expect((await store.getRefundByPaymentId("stale_payment_refund_1"))?.txHash).toBe("0xstale-refund");
   });
 });

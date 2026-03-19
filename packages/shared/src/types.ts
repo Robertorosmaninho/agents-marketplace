@@ -480,6 +480,7 @@ export interface PayoutService {
 }
 
 export type ProviderPayoutSourceKind = "route_charge" | "credit_topup";
+export type PendingPaymentRecoveryAction = "retry" | "refund";
 
 export interface ProviderPayoutInput {
   sourceKind: ProviderPayoutSourceKind;
@@ -498,6 +499,7 @@ export interface IdempotencyRecord {
   buyerWallet: string;
   routeId: string;
   routeVersion: string;
+  pendingRecoveryAction: PendingPaymentRecoveryAction;
   quotedPrice: string;
   payoutSplit: PersistedPayoutSplit;
   paymentPayload: string;
@@ -686,6 +688,7 @@ export interface ClaimPaymentExecutionInput {
   buyerWallet: string;
   routeId: string;
   routeVersion: string;
+  pendingRecoveryAction: PendingPaymentRecoveryAction;
   quotedPrice: string;
   payoutSplit: PersistedPayoutSplit;
   paymentPayload: string;

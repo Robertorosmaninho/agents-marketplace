@@ -2,7 +2,6 @@ import {
   PAYMENT_EXECUTION_RECOVERY_MS,
   createDefaultProviderRegistry,
   type MarketplaceStore,
-  type MarketplaceRoute,
   type PayoutService,
   type ProviderRegistry,
   type RefundService
@@ -124,25 +123,16 @@ export async function runMarketplaceWorkerCycle(options: MarketplaceWorkerOption
   }
 }
 
-function isPendingExecutionRecoverySafe(route: Pick<MarketplaceRoute, "executorKind">) {
-  return route.executorKind === "mock" || route.executorKind === "tavily" || route.executorKind === "marketplace";
-}
-
 async function recoverStalePendingPayments(input: {
   store: MarketplaceStore;
   refundService: RefundService;
   limit: number;
 }) {
   const staleBefore = new Date(Date.now() - PAYMENT_EXECUTION_RECOVERY_MS).toISOString();
-  const [pendingPayments, publishedRoutes] = await Promise.all([
-    input.store.listStalePendingPaymentExecutions(staleBefore, input.limit),
-    input.store.listPublishedRoutes()
-  ]);
-  const routesById = new Map(publishedRoutes.map((route) => [route.routeId, route]));
+  const pendingPayments = await input.store.listStalePendingPaymentExecutions(staleBefore, input.limit);
 
   for (const payment of pendingPayments) {
-    const route = routesById.get(payment.routeId);
-    if (route && isPendingExecutionRecoverySafe(route)) {
+    if (payment.pendingRecoveryAction === "retry") {
       continue;
     }
 
