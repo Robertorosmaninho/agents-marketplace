@@ -14,7 +14,7 @@ export function SiteHeader({
   deploymentNetwork: MarketplaceDeploymentNetwork;
   networkLabel: string;
 }) {
-      return (
+  return (
     <header className="sticky top-0 z-30 border-b bg-background">
       <div className="mx-auto flex w-full max-w-7xl flex-col gap-4 px-6 py-4 md:px-10 lg:flex-row lg:items-center lg:justify-between">
         <Link href="/" aria-label="Fast Marketplace" className="flex items-center">
@@ -55,6 +55,12 @@ export function SiteHeader({
             className="rounded-md px-3 py-2 text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
           >
             Suggest
+          </Link>
+          <Link
+            href="/providers/onboard"
+            className="rounded-md px-3 py-2 text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
+          >
+            List your service
           </Link>
           <Link
             href="/skill.md"

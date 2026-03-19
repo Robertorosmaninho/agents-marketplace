@@ -3,11 +3,12 @@ import { Pool } from "pg";
 import {
   DEFAULT_JOB_POLL_INTERVAL_MS,
   PostgresMarketplaceStore,
+  createFastRefundService,
   normalizeMarketplaceDeploymentNetwork,
   resolveMarketplaceNetworkConfig
 } from "@marketplace/shared";
 
-import { createFastRefundService, runMarketplaceWorkerCycle } from "./worker.js";
+import { runMarketplaceWorkerCycle } from "./worker.js";
 
 const databaseUrl = process.env.DATABASE_URL;
 if (!databaseUrl) {

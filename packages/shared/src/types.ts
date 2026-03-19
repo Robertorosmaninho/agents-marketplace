@@ -1,13 +1,23 @@
-import type { ZodTypeAny } from "zod";
-
 import type { MarketplacePaymentNetwork, MarketplaceTokenSymbol } from "./network.js";
 
+export type JsonSchema = Record<string, unknown>;
 export type RouteMode = "sync" | "async";
 export type ResourceType = "job" | "site";
 export type JobStatus = "pending" | "completed" | "failed";
 export type RefundStatus = "not_required" | "pending" | "sent" | "failed";
 export type SuggestionType = "endpoint" | "source";
 export type SuggestionStatus = "submitted" | "reviewing" | "accepted" | "rejected" | "shipped";
+export type UpstreamAuthMode = "none" | "bearer" | "header";
+export type RouteExecutorKind = "mock" | "http";
+export type ProviderServiceStatus =
+  | "draft"
+  | "pending_review"
+  | "changes_requested"
+  | "published"
+  | "suspended"
+  | "archived";
+export type ProviderVerificationStatus = "pending" | "verified" | "failed";
+export type ProviderReviewStatus = "pending_review" | "changes_requested" | "published" | "suspended";
 
 export interface RoutePayoutConfig {
   providerAccountId: string;
@@ -26,10 +36,7 @@ export interface PersistedPayoutSplit {
   providerAmount: string;
 }
 
-export interface MarketplaceRoute<
-  TInput extends ZodTypeAny = ZodTypeAny,
-  TOutput extends ZodTypeAny = ZodTypeAny
-> {
+export interface MarketplaceRoute {
   routeId: string;
   provider: string;
   operation: string;
@@ -43,12 +50,21 @@ export interface MarketplaceRoute<
   requestExample: unknown;
   responseExample: unknown;
   usageNotes?: string;
-  inputSchema: TInput;
-  outputSchema: TOutput;
+  requestSchemaJson: JsonSchema;
+  responseSchemaJson: JsonSchema;
+  executorKind: RouteExecutorKind;
+  upstreamBaseUrl?: string | null;
+  upstreamPath?: string | null;
+  upstreamAuthMode?: UpstreamAuthMode | null;
+  upstreamAuthHeaderName?: string | null;
+  upstreamSecretRef?: string | null;
 }
 
 export interface ServiceDefinition {
+  serviceId: string;
+  providerAccountId: string;
   slug: string;
+  apiNamespace: string;
   name: string;
   ownerName: string;
   tagline: string;
@@ -58,6 +74,27 @@ export interface ServiceDefinition {
   featured: boolean;
   promptIntro: string;
   setupInstructions: string[];
+  websiteUrl: string | null;
+  contactEmail: string | null;
+  payoutWallet: string | null;
+  status: ProviderServiceStatus;
+}
+
+export interface PublishedServiceVersionRecord extends ServiceDefinition {
+  versionId: string;
+  submittedReviewId: string | null;
+  publishedAt: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface PublishedEndpointVersionRecord extends MarketplaceRoute {
+  endpointVersionId: string;
+  serviceId: string;
+  serviceVersionId: string;
+  endpointDraftId: string | null;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface ServiceAnalyticsPoint {
@@ -141,6 +178,175 @@ export interface CreateSuggestionInput {
 export interface UpdateSuggestionInput {
   status?: SuggestionStatus;
   internalNotes?: string | null;
+}
+
+export interface ProviderAccountRecord {
+  id: string;
+  ownerWallet: string;
+  displayName: string;
+  bio: string | null;
+  websiteUrl: string | null;
+  contactEmail: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ProviderSecretRecord {
+  id: string;
+  providerAccountId: string;
+  label: string;
+  secretCiphertext: string;
+  iv: string;
+  authTag: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ProviderServiceRecord {
+  id: string;
+  providerAccountId: string;
+  slug: string;
+  apiNamespace: string;
+  name: string;
+  tagline: string;
+  about: string;
+  categories: string[];
+  promptIntro: string;
+  setupInstructions: string[];
+  websiteUrl: string | null;
+  payoutWallet: string | null;
+  featured: boolean;
+  status: ProviderServiceStatus;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ProviderEndpointDraftRecord {
+  id: string;
+  serviceId: string;
+  routeId: string;
+  operation: string;
+  title: string;
+  description: string;
+  price: string;
+  mode: RouteMode;
+  requestSchemaJson: JsonSchema;
+  responseSchemaJson: JsonSchema;
+  requestExample: unknown;
+  responseExample: unknown;
+  usageNotes: string | null;
+  executorKind: RouteExecutorKind;
+  upstreamBaseUrl: string | null;
+  upstreamPath: string | null;
+  upstreamAuthMode: UpstreamAuthMode | null;
+  upstreamAuthHeaderName: string | null;
+  upstreamSecretRef: string | null;
+  hasUpstreamSecret: boolean;
+  payout: RoutePayoutConfig;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ProviderVerificationRecord {
+  id: string;
+  serviceId: string;
+  token: string;
+  status: ProviderVerificationStatus;
+  verifiedHost: string | null;
+  failureReason: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ProviderReviewRecord {
+  id: string;
+  serviceId: string;
+  submittedVersionId: string;
+  status: ProviderReviewStatus;
+  reviewNotes: string | null;
+  reviewerIdentity: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ProviderServiceDetailRecord {
+  service: ProviderServiceRecord;
+  account: ProviderAccountRecord;
+  endpoints: ProviderEndpointDraftRecord[];
+  verification: ProviderVerificationRecord | null;
+  latestReview: ProviderReviewRecord | null;
+  latestPublishedVersionId: string | null;
+}
+
+export interface UpsertProviderAccountInput {
+  displayName: string;
+  bio?: string | null;
+  websiteUrl?: string | null;
+  contactEmail?: string | null;
+}
+
+export interface CreateProviderServiceInput {
+  slug: string;
+  apiNamespace: string;
+  name: string;
+  tagline: string;
+  about: string;
+  categories: string[];
+  promptIntro: string;
+  setupInstructions: string[];
+  websiteUrl?: string | null;
+  payoutWallet: string;
+  featured?: boolean;
+}
+
+export interface UpdateProviderServiceInput {
+  slug?: string;
+  apiNamespace?: string;
+  name?: string;
+  tagline?: string;
+  about?: string;
+  categories?: string[];
+  promptIntro?: string;
+  setupInstructions?: string[];
+  websiteUrl?: string | null;
+  payoutWallet?: string | null;
+  featured?: boolean;
+}
+
+export interface CreateProviderEndpointDraftInput {
+  operation: string;
+  title: string;
+  description: string;
+  price: string;
+  mode: "sync";
+  requestSchemaJson: JsonSchema;
+  responseSchemaJson: JsonSchema;
+  requestExample: unknown;
+  responseExample: unknown;
+  usageNotes?: string | null;
+  upstreamBaseUrl: string;
+  upstreamPath: string;
+  upstreamAuthMode: UpstreamAuthMode;
+  upstreamAuthHeaderName?: string | null;
+  upstreamSecret?: string | null;
+}
+
+export interface UpdateProviderEndpointDraftInput {
+  operation?: string;
+  title?: string;
+  description?: string;
+  price?: string;
+  requestSchemaJson?: JsonSchema;
+  responseSchemaJson?: JsonSchema;
+  requestExample?: unknown;
+  responseExample?: unknown;
+  usageNotes?: string | null;
+  upstreamBaseUrl?: string;
+  upstreamPath?: string;
+  upstreamAuthMode?: UpstreamAuthMode;
+  upstreamAuthHeaderName?: string | null;
+  upstreamSecret?: string | null;
+  clearUpstreamSecret?: boolean;
 }
 
 export interface SyncExecuteResult {
@@ -247,6 +453,7 @@ export interface JobRecord {
   payoutSplit: PersistedPayoutSplit;
   providerJobId: string;
   requestBody: unknown;
+  routeSnapshot: MarketplaceRoute;
   providerState: Record<string, unknown> | null;
   status: JobStatus;
   resultBody: unknown;
@@ -280,7 +487,7 @@ export interface AccessGrantRecord {
 
 export interface RefundRecord {
   id: string;
-  jobToken: string;
+  jobToken: string | null;
   paymentId: string;
   wallet: string;
   amount: string;
@@ -350,7 +557,7 @@ export interface MarketplaceStore {
     errorMessage?: string;
   }): Promise<ProviderAttemptRecord>;
   createRefund(input: {
-    jobToken: string;
+    jobToken?: string | null;
     paymentId: string;
     wallet: string;
     amount: string;
@@ -359,6 +566,64 @@ export interface MarketplaceStore {
   markRefundFailed(refundId: string, errorMessage: string): Promise<RefundRecord>;
   getRefundByJobToken(jobToken: string): Promise<RefundRecord | null>;
   getServiceAnalytics(routeIds: string[]): Promise<ServiceAnalytics>;
+  listPublishedServices(): Promise<PublishedServiceVersionRecord[]>;
+  getPublishedServiceBySlug(slug: string): Promise<{
+    service: PublishedServiceVersionRecord;
+    endpoints: PublishedEndpointVersionRecord[];
+  } | null>;
+  listPublishedRoutes(): Promise<PublishedEndpointVersionRecord[]>;
+  findPublishedRoute(
+    provider: string,
+    operation: string,
+    network: MarketplacePaymentNetwork
+  ): Promise<PublishedEndpointVersionRecord | null>;
+  getProviderAccountByWallet(wallet: string): Promise<ProviderAccountRecord | null>;
+  upsertProviderAccount(wallet: string, input: UpsertProviderAccountInput): Promise<ProviderAccountRecord>;
+  listProviderServices(wallet: string): Promise<ProviderServiceDetailRecord[]>;
+  createProviderService(wallet: string, input: CreateProviderServiceInput): Promise<ProviderServiceDetailRecord>;
+  getProviderServiceForOwner(serviceId: string, wallet: string): Promise<ProviderServiceDetailRecord | null>;
+  updateProviderServiceForOwner(
+    serviceId: string,
+    wallet: string,
+    input: UpdateProviderServiceInput
+  ): Promise<ProviderServiceRecord | null>;
+  createProviderEndpointDraft(
+    serviceId: string,
+    wallet: string,
+    input: CreateProviderEndpointDraftInput,
+    secretMaterial?: { label: string; ciphertext: string; iv: string; authTag: string } | null
+  ): Promise<ProviderEndpointDraftRecord>;
+  updateProviderEndpointDraft(
+    serviceId: string,
+    endpointId: string,
+    wallet: string,
+    input: UpdateProviderEndpointDraftInput,
+    secretMaterial?: { label: string; ciphertext: string; iv: string; authTag: string } | null
+  ): Promise<ProviderEndpointDraftRecord | null>;
+  deleteProviderEndpointDraft(serviceId: string, endpointId: string, wallet: string): Promise<boolean>;
+  createProviderVerificationChallenge(serviceId: string, wallet: string): Promise<ProviderVerificationRecord | null>;
+  getLatestProviderVerification(serviceId: string): Promise<ProviderVerificationRecord | null>;
+  markProviderVerificationResult(
+    serviceId: string,
+    status: ProviderVerificationStatus,
+    input?: { verifiedHost?: string | null; failureReason?: string | null }
+  ): Promise<ProviderVerificationRecord | null>;
+  submitProviderService(serviceId: string, wallet: string): Promise<ProviderServiceDetailRecord | null>;
+  listAdminProviderServices(status?: ProviderServiceStatus): Promise<ProviderServiceDetailRecord[]>;
+  getAdminProviderService(serviceId: string): Promise<ProviderServiceDetailRecord | null>;
+  requestProviderServiceChanges(
+    serviceId: string,
+    input: { reviewNotes: string; reviewerIdentity?: string | null }
+  ): Promise<ProviderServiceDetailRecord | null>;
+  publishProviderService(
+    serviceId: string,
+    input?: { reviewerIdentity?: string | null }
+  ): Promise<ProviderServiceDetailRecord | null>;
+  suspendProviderService(
+    serviceId: string,
+    input?: { reviewNotes?: string | null; reviewerIdentity?: string | null }
+  ): Promise<ProviderServiceDetailRecord | null>;
+  getProviderSecret(secretId: string): Promise<ProviderSecretRecord | null>;
   createSuggestion(input: CreateSuggestionInput): Promise<SuggestionRecord>;
   listSuggestions(filter?: { status?: SuggestionStatus }): Promise<SuggestionRecord[]>;
   updateSuggestion(id: string, input: UpdateSuggestionInput): Promise<SuggestionRecord | null>;

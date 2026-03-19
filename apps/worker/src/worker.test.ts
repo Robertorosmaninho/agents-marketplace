@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { InMemoryMarketplaceStore, createDefaultProviderRegistry } from "@marketplace/shared";
+import { InMemoryMarketplaceStore, createDefaultProviderRegistry, marketplaceRoutes } from "@marketplace/shared";
 
 import { runMarketplaceWorkerCycle } from "./worker.js";
 
@@ -15,26 +15,7 @@ describe("marketplace worker", () => {
       paymentId: "worker_payment_1",
       normalizedRequestHash: "hash",
       buyerWallet,
-      route: {
-        routeId: "mock.async-report.v1",
-        provider: "mock",
-        operation: "async-report",
-        version: "v1",
-        mode: "async",
-        network: "fast-mainnet",
-        price: "$0.15",
-        title: "Async Report",
-        description: "desc",
-        requestExample: { topic: "failing report" },
-        responseExample: { report: "failed" },
-        payout: {
-          providerAccountId: "mock",
-          providerWallet: null,
-          providerBps: 0
-        },
-        inputSchema: null as never,
-        outputSchema: null as never
-      },
+      route: marketplaceRoutes[1]!,
       quotedPrice: "150000",
       payoutSplit: {
         currency: "fastUSDC",

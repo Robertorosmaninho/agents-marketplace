@@ -1,0 +1,59 @@
+// @vitest-environment jsdom
+
+import React from "react";
+import { render, screen, waitFor } from "@testing-library/react";
+import type { ReactNode } from "react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+import { ProviderSessionGate } from "./provider-session-gate";
+
+vi.mock("next/link", () => ({
+  default: ({ href, children, ...props }: { href: string; children: ReactNode }) => (
+    <a href={href} {...props}>
+      {children}
+    </a>
+  )
+}));
+
+describe("ProviderSessionGate", () => {
+  afterEach(() => {
+    window.localStorage.clear();
+  });
+
+  it("shows the wallet-required state when there is no session", async () => {
+    render(
+      <ProviderSessionGate deploymentNetwork="mainnet" title="Provider access">
+        {() => <div>secret dashboard</div>}
+      </ProviderSessionGate>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Provider access")).toBeTruthy();
+    });
+
+    expect(screen.getByText(/connect the extension wallet first/i)).toBeTruthy();
+    expect(screen.getByRole("link", { name: /back to marketplace/i }).getAttribute("href")).toBe("/");
+  });
+
+  it("renders children when a matching wallet session exists", async () => {
+    window.localStorage.setItem(
+      "fast-marketplace-wallet-session",
+      JSON.stringify({
+        accessToken: "token_123",
+        wallet: "fast1provider000000000000000000000000000000000000000000000000000000",
+        deploymentNetwork: "testnet",
+        resourceId: "https://fast.8o.vc"
+      })
+    );
+
+    render(
+      <ProviderSessionGate deploymentNetwork="testnet" title="Provider access">
+        {(session) => <div>{session.wallet}</div>}
+      </ProviderSessionGate>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText(/fast1provider/i)).toBeTruthy();
+    });
+  });
+});

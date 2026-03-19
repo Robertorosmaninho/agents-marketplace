@@ -1,0 +1,166 @@
+"use client";
+
+import React from "react";
+import type { MarketplaceDeploymentNetwork } from "@marketplace/shared";
+
+import { ProviderSessionGate } from "@/components/provider-session-gate";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { fetchProviderService, submitProviderService } from "@/lib/api";
+
+export function ProviderServiceReview({
+  apiBaseUrl,
+  deploymentNetwork,
+  serviceId
+}: {
+  apiBaseUrl: string;
+  deploymentNetwork: MarketplaceDeploymentNetwork;
+  serviceId: string;
+}) {
+  return (
+    <ProviderSessionGate
+      deploymentNetwork={deploymentNetwork}
+      title="Review service draft"
+      description="Confirm verification, endpoint coverage, and submit the draft for marketplace review."
+    >
+      {(session) => (
+        <ProviderServiceReviewInner apiBaseUrl={apiBaseUrl} accessToken={session.accessToken} serviceId={serviceId} />
+      )}
+    </ProviderSessionGate>
+  );
+}
+
+function ProviderServiceReviewInner({
+  apiBaseUrl,
+  accessToken,
+  serviceId
+}: {
+  apiBaseUrl: string;
+  accessToken: string;
+  serviceId: string;
+}) {
+  const [detail, setDetail] = React.useState<Awaited<ReturnType<typeof fetchProviderService>> | undefined>(undefined);
+  const [pending, startTransition] = React.useTransition();
+  const [message, setMessage] = React.useState<string | null>(null);
+  const [error, setError] = React.useState<string | null>(null);
+
+  React.useEffect(() => {
+    startTransition(async () => {
+      try {
+        setError(null);
+        setDetail(await fetchProviderService(apiBaseUrl, accessToken, serviceId));
+      } catch (nextError) {
+        setError(nextError instanceof Error ? nextError.message : "Failed to load review state.");
+      }
+    });
+  }, [accessToken, apiBaseUrl, serviceId]);
+
+  if (detail === undefined) {
+    return (
+      <Card>
+        <CardContent className="p-6 text-sm text-muted-foreground">
+          {error ?? "Loading review state..."}
+        </CardContent>
+      </Card>
+    );
+  }
+
+  if (detail === null) {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle>Review draft unavailable</CardTitle>
+          <CardDescription>
+            This draft was deleted or is no longer accessible from the connected wallet session.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-wrap gap-3">
+          <Button type="button" variant="outline" onClick={() => window.location.assign("/providers/services")}>
+            Back to drafts
+          </Button>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  const checklist = [
+    { label: "Website URL is set", ok: Boolean(detail.service.websiteUrl) },
+    { label: "Payout wallet is set", ok: Boolean(detail.service.payoutWallet) },
+    { label: "At least one endpoint exists", ok: detail.endpoints.length > 0 },
+    { label: "Website verification succeeded", ok: detail.verification?.status === "verified" }
+  ];
+
+  function onSubmit() {
+    setError(null);
+    setMessage(null);
+
+    startTransition(async () => {
+      try {
+        const submitted = await submitProviderService(apiBaseUrl, accessToken, serviceId);
+        setDetail(submitted);
+        setMessage("Service submitted for review.");
+      } catch (nextError) {
+        setError(nextError instanceof Error ? nextError.message : "Submit failed.");
+      }
+    });
+  }
+
+  return (
+    <div className="grid gap-6 lg:grid-cols-[1fr_0.9fr]">
+      <Card>
+        <CardHeader>
+          <CardTitle>{detail.service.name}</CardTitle>
+          <CardDescription>{detail.service.status}</CardDescription>
+        </CardHeader>
+        <CardContent className="grid gap-4 text-sm">
+          <div className="rounded-md border p-4">
+            <div className="font-medium">Latest verification</div>
+            <div className="mt-2 text-muted-foreground">{detail.verification?.status ?? "not started"}</div>
+          </div>
+          <div className="rounded-md border p-4">
+            <div className="font-medium">Latest review</div>
+            <div className="mt-2 text-muted-foreground">{detail.latestReview?.status ?? "not submitted"}</div>
+            {detail.latestReview?.reviewNotes ? (
+              <div className="mt-2 whitespace-pre-wrap text-muted-foreground">{detail.latestReview.reviewNotes}</div>
+            ) : null}
+          </div>
+          <div className="rounded-md border p-4">
+            <div className="font-medium">Endpoints</div>
+            <div className="mt-2 text-muted-foreground">{detail.endpoints.length} draft endpoint(s)</div>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Submission checklist</CardTitle>
+          <CardDescription>The API enforces these requirements at submit time too.</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="grid gap-3">
+            {checklist.map((item) => (
+              <div key={item.label} className="flex items-center justify-between rounded-md border p-3 text-sm">
+                <span>{item.label}</span>
+                <span className={item.ok ? "text-foreground" : "text-muted-foreground"}>
+                  {item.ok ? "ready" : "missing"}
+                </span>
+              </div>
+            ))}
+          </div>
+
+          <div className="flex flex-wrap gap-3">
+            <Button type="button" onClick={onSubmit} disabled={pending}>
+              {pending ? "Submitting..." : "Submit for review"}
+            </Button>
+            <Button type="button" variant="outline" onClick={() => window.location.assign(`/providers/services/${serviceId}`)}>
+              Back to editor
+            </Button>
+          </div>
+
+          {message ? <p className="text-sm text-muted-foreground">{message}</p> : null}
+          {error ? <p className="text-sm text-destructive">{error}</p> : null}
+        </CardContent>
+      </Card>
+    </div>
+  );
+}

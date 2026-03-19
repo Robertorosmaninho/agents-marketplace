@@ -14,6 +14,12 @@ export function SiteFooter() {
 
         <nav className="flex flex-wrap items-center gap-3 text-sm">
           <Link
+            href="/providers/onboard"
+            className="rounded-md border px-4 py-2 font-medium transition-colors hover:bg-accent hover:text-accent-foreground"
+          >
+            List your service
+          </Link>
+          <Link
             href="/suggest?type=endpoint"
             className="rounded-md border px-4 py-2 font-medium transition-colors hover:bg-accent hover:text-accent-foreground"
           >

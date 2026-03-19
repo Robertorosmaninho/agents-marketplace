@@ -1,6 +1,4 @@
 import { quotedPriceRaw } from "./payment.js";
-import { findMarketplaceRouteById } from "./routes.js";
-import { findMarketplaceServiceBySlug } from "./services.js";
 import { rawToDecimalString } from "./amounts.js";
 import { getDefaultMarketplaceNetworkConfig } from "./network.js";
 import type {
@@ -51,17 +49,6 @@ export function buildPriceRange(routes: MarketplaceRoute[]): string {
   const maximum = formatPriceLabelFromRaw(sorted[sorted.length - 1] ?? "0", tokenSymbol);
 
   return minimum === maximum ? minimum : `${minimum} - ${maximum}`;
-}
-
-export function getRoutesForService(service: ServiceDefinition): MarketplaceRoute[] {
-  return service.routeIds.map((routeId) => {
-    const route = findMarketplaceRouteById(routeId);
-    if (!route) {
-      throw new Error(`Missing route registry entry for service ${service.slug}: ${routeId}`);
-    }
-
-    return route;
-  });
 }
 
 export function buildServiceEndpoint(route: MarketplaceRoute, apiBaseUrl: string): ServiceCatalogEndpoint {
@@ -125,19 +112,18 @@ export function buildUseThisServicePrompt(input: {
 
 export function buildServiceSummary(input: {
   service: ServiceDefinition;
+  endpoints: MarketplaceRoute[];
   analytics: ServiceAnalytics;
 }): ServiceSummary {
-  const routes = getRoutesForService(input.service);
-
   return {
     slug: input.service.slug,
     name: input.service.name,
     ownerName: input.service.ownerName,
     tagline: input.service.tagline,
     categories: input.service.categories,
-    priceRange: buildPriceRange(routes),
+    priceRange: buildPriceRange(input.endpoints),
     settlementToken: getDefaultMarketplaceNetworkConfig().tokenSymbol,
-    endpointCount: routes.length,
+    endpointCount: input.endpoints.length,
     totalCalls: input.analytics.totalCalls,
     revenue: formatRevenueLabel(input.analytics.revenueRaw),
     successRate30d: roundToSingleDecimal(input.analytics.successRate30d),
@@ -150,16 +136,18 @@ export function buildServiceSummary(input: {
 
 export function buildServiceDetail(input: {
   service: ServiceDefinition;
+  endpoints: MarketplaceRoute[];
   analytics: ServiceAnalytics;
   apiBaseUrl: string;
   webBaseUrl: string;
 }): ServiceDetail {
-  const endpoints = getRoutesForService(input.service).map((route) => buildServiceEndpoint(route, input.apiBaseUrl));
+  const endpoints = input.endpoints.map((route) => buildServiceEndpoint(route, input.apiBaseUrl));
   const skillUrl = joinUrl(input.webBaseUrl, "/skill.md");
 
   return {
     summary: buildServiceSummary({
       service: input.service,
+      endpoints: input.endpoints,
       analytics: input.analytics
     }),
     about: input.service.about,
@@ -171,8 +159,4 @@ export function buildServiceDetail(input: {
     skillUrl,
     endpoints
   };
-}
-
-export function getServiceDefinition(slug: string): ServiceDefinition | undefined {
-  return findMarketplaceServiceBySlug(slug);
 }

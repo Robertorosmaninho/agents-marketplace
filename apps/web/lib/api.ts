@@ -1,9 +1,16 @@
 import type {
+  CreateProviderEndpointDraftInput,
+  CreateProviderServiceInput,
+  ProviderAccountRecord,
+  ProviderEndpointDraftRecord,
+  ProviderServiceDetailRecord,
   ServiceDetail,
   ServiceSummary,
   SuggestionRecord,
   SuggestionStatus,
-  SuggestionType
+  SuggestionType,
+  UpdateProviderEndpointDraftInput,
+  UpdateProviderServiceInput
 } from "@marketplace/shared";
 
 function getApiBaseUrl(): string {
@@ -19,11 +26,24 @@ function getAdminToken(): string {
   return token;
 }
 
-async function fetchMarketplace<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${getApiBaseUrl()}${path}`, {
+async function fetchMarketplace<T>(input: {
+  path: string;
+  apiBaseUrl?: string;
+  accessToken?: string;
+  init?: RequestInit;
+}): Promise<T> {
+  const response = await fetch(`${(input.apiBaseUrl ?? getApiBaseUrl()).replace(/\/$/, "")}${input.path}`, {
     cache: "no-store",
-    ...init
+    ...input.init,
+    headers: {
+      ...(input.accessToken ? { Authorization: `Bearer ${input.accessToken}` } : {}),
+      ...(input.init?.headers ?? {})
+    }
   });
+
+  if (response.status === 204) {
+    return undefined as T;
+  }
 
   if (!response.ok) {
     const message = await response.text();
@@ -34,7 +54,9 @@ async function fetchMarketplace<T>(path: string, init?: RequestInit): Promise<T>
 }
 
 export async function fetchServices(): Promise<ServiceSummary[]> {
-  const data = await fetchMarketplace<{ services: ServiceSummary[] }>("/catalog/services");
+  const data = await fetchMarketplace<{ services: ServiceSummary[] }>({
+    path: "/catalog/services"
+  });
   return data.services;
 }
 
@@ -63,20 +85,26 @@ export async function createSuggestion(input: {
   requesterName?: string;
   requesterEmail?: string;
 }): Promise<SuggestionRecord> {
-  return fetchMarketplace<SuggestionRecord>("/catalog/suggestions", {
-    method: "POST",
-    headers: {
-      "content-type": "application/json"
-    },
-    body: JSON.stringify(input)
+  return fetchMarketplace<SuggestionRecord>({
+    path: "/catalog/suggestions",
+    init: {
+      method: "POST",
+      headers: {
+        "content-type": "application/json"
+      },
+      body: JSON.stringify(input)
+    }
   });
 }
 
 export async function fetchAdminSuggestions(status?: SuggestionStatus): Promise<SuggestionRecord[]> {
   const query = status ? `?status=${status}` : "";
-  const data = await fetchMarketplace<{ suggestions: SuggestionRecord[] }>(`/internal/suggestions${query}`, {
-    headers: {
-      Authorization: `Bearer ${getAdminToken()}`
+  const data = await fetchMarketplace<{ suggestions: SuggestionRecord[] }>({
+    path: `/internal/suggestions${query}`,
+    init: {
+      headers: {
+        Authorization: `Bearer ${getAdminToken()}`
+      }
     }
   });
 
@@ -87,12 +115,238 @@ export async function patchAdminSuggestion(
   id: string,
   input: { status?: SuggestionStatus; internalNotes?: string | null }
 ): Promise<SuggestionRecord> {
-  return fetchMarketplace<SuggestionRecord>(`/internal/suggestions/${id}`, {
-    method: "PATCH",
+  return fetchMarketplace<SuggestionRecord>({
+    path: `/internal/suggestions/${id}`,
+    init: {
+      method: "PATCH",
+      headers: {
+        Authorization: `Bearer ${getAdminToken()}`,
+        "content-type": "application/json"
+      },
+      body: JSON.stringify(input)
+    }
+  });
+}
+
+export async function fetchProviderAccount(
+  apiBaseUrl: string,
+  accessToken: string
+): Promise<ProviderAccountRecord | null> {
+  const response = await fetch(`${apiBaseUrl.replace(/\/$/, "")}/provider/me`, {
+    cache: "no-store",
     headers: {
-      Authorization: `Bearer ${getAdminToken()}`,
-      "content-type": "application/json"
-    },
-    body: JSON.stringify(input)
+      Authorization: `Bearer ${accessToken}`
+    }
+  });
+
+  if (response.status === 404) {
+    return null;
+  }
+
+  if (!response.ok) {
+    throw new Error(await response.text());
+  }
+
+  return response.json() as Promise<ProviderAccountRecord>;
+}
+
+export async function upsertProviderAccount(
+  apiBaseUrl: string,
+  accessToken: string,
+  input: {
+    displayName: string;
+    bio?: string | null;
+    websiteUrl?: string | null;
+    contactEmail?: string | null;
+  }
+): Promise<ProviderAccountRecord> {
+  return fetchMarketplace<ProviderAccountRecord>({
+    apiBaseUrl,
+    accessToken,
+    path: "/provider/me",
+    init: {
+      method: "POST",
+      headers: {
+        "content-type": "application/json"
+      },
+      body: JSON.stringify(input)
+    }
+  });
+}
+
+export async function fetchProviderServices(
+  apiBaseUrl: string,
+  accessToken: string
+): Promise<ProviderServiceDetailRecord[]> {
+  const data = await fetchMarketplace<{ services: ProviderServiceDetailRecord[] }>({
+    apiBaseUrl,
+    accessToken,
+    path: "/provider/services"
+  });
+
+  return data.services;
+}
+
+export async function fetchProviderService(
+  apiBaseUrl: string,
+  accessToken: string,
+  serviceId: string
+): Promise<ProviderServiceDetailRecord | null> {
+  const response = await fetch(`${apiBaseUrl.replace(/\/$/, "")}/provider/services/${serviceId}`, {
+    cache: "no-store",
+    headers: {
+      Authorization: `Bearer ${accessToken}`
+    }
+  });
+
+  if (response.status === 404) {
+    return null;
+  }
+
+  if (!response.ok) {
+    throw new Error(await response.text());
+  }
+
+  return response.json() as Promise<ProviderServiceDetailRecord>;
+}
+
+export async function createProviderService(
+  apiBaseUrl: string,
+  accessToken: string,
+  input: CreateProviderServiceInput
+): Promise<ProviderServiceDetailRecord> {
+  return fetchMarketplace<ProviderServiceDetailRecord>({
+    apiBaseUrl,
+    accessToken,
+    path: "/provider/services",
+    init: {
+      method: "POST",
+      headers: {
+        "content-type": "application/json"
+      },
+      body: JSON.stringify(input)
+    }
+  });
+}
+
+export async function updateProviderService(
+  apiBaseUrl: string,
+  accessToken: string,
+  serviceId: string,
+  input: UpdateProviderServiceInput
+): Promise<void> {
+  await fetchMarketplace({
+    apiBaseUrl,
+    accessToken,
+    path: `/provider/services/${serviceId}`,
+    init: {
+      method: "PATCH",
+      headers: {
+        "content-type": "application/json"
+      },
+      body: JSON.stringify(input)
+    }
+  });
+}
+
+export async function createProviderEndpoint(
+  apiBaseUrl: string,
+  accessToken: string,
+  serviceId: string,
+  input: CreateProviderEndpointDraftInput
+): Promise<ProviderEndpointDraftRecord> {
+  return fetchMarketplace<ProviderEndpointDraftRecord>({
+    apiBaseUrl,
+    accessToken,
+    path: `/provider/services/${serviceId}/endpoints`,
+    init: {
+      method: "POST",
+      headers: {
+        "content-type": "application/json"
+      },
+      body: JSON.stringify(input)
+    }
+  });
+}
+
+export async function updateProviderEndpoint(
+  apiBaseUrl: string,
+  accessToken: string,
+  serviceId: string,
+  endpointId: string,
+  input: UpdateProviderEndpointDraftInput
+): Promise<ProviderEndpointDraftRecord> {
+  return fetchMarketplace<ProviderEndpointDraftRecord>({
+    apiBaseUrl,
+    accessToken,
+    path: `/provider/services/${serviceId}/endpoints/${endpointId}`,
+    init: {
+      method: "PATCH",
+      headers: {
+        "content-type": "application/json"
+      },
+      body: JSON.stringify(input)
+    }
+  });
+}
+
+export async function deleteProviderEndpoint(
+  apiBaseUrl: string,
+  accessToken: string,
+  serviceId: string,
+  endpointId: string
+): Promise<void> {
+  await fetchMarketplace<void>({
+    apiBaseUrl,
+    accessToken,
+    path: `/provider/services/${serviceId}/endpoints/${endpointId}`,
+    init: {
+      method: "DELETE"
+    }
+  });
+}
+
+export async function createProviderVerificationChallenge(
+  apiBaseUrl: string,
+  accessToken: string,
+  serviceId: string
+): Promise<{ verificationId: string; token: string; expectedUrl: string }> {
+  return fetchMarketplace({
+    apiBaseUrl,
+    accessToken,
+    path: `/provider/services/${serviceId}/verification-challenge`,
+    init: {
+      method: "POST"
+    }
+  });
+}
+
+export async function verifyProviderService(
+  apiBaseUrl: string,
+  accessToken: string,
+  serviceId: string
+) {
+  return fetchMarketplace({
+    apiBaseUrl,
+    accessToken,
+    path: `/provider/services/${serviceId}/verify`,
+    init: {
+      method: "POST"
+    }
+  });
+}
+
+export async function submitProviderService(
+  apiBaseUrl: string,
+  accessToken: string,
+  serviceId: string
+): Promise<ProviderServiceDetailRecord> {
+  return fetchMarketplace<ProviderServiceDetailRecord>({
+    apiBaseUrl,
+    accessToken,
+    path: `/provider/services/${serviceId}/submit`,
+    init: {
+      method: "POST"
+    }
   });
 }

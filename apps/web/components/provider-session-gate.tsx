@@ -1,0 +1,51 @@
+"use client";
+
+import React from "react";
+import Link from "next/link";
+import type { MarketplaceDeploymentNetwork } from "@marketplace/shared";
+
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { readStoredWalletSession, type StoredWalletSession } from "@/lib/wallet-session";
+
+export function ProviderSessionGate({
+  deploymentNetwork,
+  title,
+  description,
+  children
+}: {
+  deploymentNetwork: MarketplaceDeploymentNetwork;
+  title: string;
+  description?: string;
+  children: (session: StoredWalletSession) => React.ReactNode;
+}) {
+  const [session, setSession] = React.useState<StoredWalletSession | null>(null);
+  const [ready, setReady] = React.useState(false);
+
+  React.useEffect(() => {
+    setSession(readStoredWalletSession(deploymentNetwork));
+    setReady(true);
+  }, [deploymentNetwork]);
+
+  if (!ready) {
+    return null;
+  }
+
+  if (!session) {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle>{title}</CardTitle>
+          <CardDescription>{description ?? "Connect a Fast wallet in the header to access provider features."}</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3 text-sm text-muted-foreground">
+          <p>Provider pages use the existing website wallet session. Connect the extension wallet first, then reload this page.</p>
+          <Link href="/" className="font-medium text-foreground hover:underline">
+            Back to marketplace
+          </Link>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  return <>{children(session)}</>;
+}

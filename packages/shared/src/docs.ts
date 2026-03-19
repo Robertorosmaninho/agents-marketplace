@@ -1,6 +1,4 @@
-import { zodToJsonSchema } from "zod-to-json-schema";
-
-import { buildServiceSummary, getRoutesForService } from "./catalog.js";
+import { buildServiceSummary } from "./catalog.js";
 import {
   MARKETPLACE_NAME,
   MARKETPLACE_VERSION,
@@ -9,90 +7,41 @@ import {
   PAYMENT_RESPONSE_HEADER,
   PAYMENT_SIGNATURE_HEADER
 } from "./constants.js";
-import { listServiceDefinitions } from "./services.js";
-import { marketplaceRoutes } from "./routes.js";
 import { getDefaultMarketplaceNetworkConfig } from "./network.js";
+import type { MarketplaceRoute, ServiceDefinition } from "./types.js";
 
-export function buildOpenApiDocument(baseUrl = "http://localhost:3000") {
+export function buildOpenApiDocument(input: {
+  baseUrl?: string;
+  services: ServiceDefinition[];
+  routes: MarketplaceRoute[];
+}) {
   const network = getDefaultMarketplaceNetworkConfig();
+  const baseUrl = input.baseUrl ?? "http://localhost:3000";
+
   const paths: Record<string, unknown> = {
     "/auth/wallet/challenge": {
       post: {
-        summary: "Create a wallet-signin challenge for the marketplace website.",
-        requestBody: {
-          required: true,
-          content: {
-            "application/json": {
-              schema: {
-                type: "object",
-                required: ["wallet"],
-                properties: {
-                  wallet: { type: "string" }
-                }
-              }
-            }
-          }
-        },
-        responses: {
-          "200": { description: "Wallet challenge created." }
-        }
+        summary: "Create a wallet-signin challenge for the marketplace website."
       }
     },
     "/auth/wallet/session": {
       post: {
-        summary: "Exchange a signed wallet challenge for a short-lived website session token.",
-        responses: {
-          "200": { description: "Wallet session created." }
-        }
+        summary: "Exchange a signed wallet challenge for a short-lived website session token."
       }
     },
     "/auth/challenge": {
       post: {
-        summary: "Create a wallet challenge for a previously paid resource.",
-        requestBody: {
-          required: true,
-          content: {
-            "application/json": {
-              schema: {
-                type: "object",
-                required: ["wallet", "resourceType", "resourceId"],
-                properties: {
-                  wallet: { type: "string" },
-                  resourceType: { type: "string", enum: ["job"] },
-                  resourceId: { type: "string" }
-                }
-              }
-            }
-          }
-        },
-        responses: {
-          "200": { description: "Challenge created." }
-        }
+        summary: "Create a wallet challenge for a previously paid resource."
       }
     },
     "/auth/session": {
       post: {
-        summary: "Exchange a wallet challenge signature for a short-lived access token.",
-        responses: {
-          "200": { description: "Session created." }
-        }
+        summary: "Exchange a wallet challenge signature for a short-lived access token."
       }
     },
     "/api/jobs/{jobToken}": {
       get: {
-        summary: "Retrieve a previously paid async job using a wallet-bound session.",
-        parameters: [
-          {
-            in: "path",
-            name: "jobToken",
-            required: true,
-            schema: { type: "string" }
-          }
-        ],
-        responses: {
-          "200": { description: "Job status or result." },
-          "401": { description: "Missing or invalid session token." }
-        }
+        summary: "Retrieve a previously paid async job using a wallet-bound session."
       }
     },
     "/catalog/services": {
@@ -102,20 +51,64 @@ export function buildOpenApiDocument(baseUrl = "http://localhost:3000") {
     },
     "/catalog/services/{slug}": {
       get: {
-        summary: "Get one marketplace service with endpoint docs and generated usage instructions.",
-        parameters: [
-          {
-            in: "path",
-            name: "slug",
-            required: true,
-            schema: { type: "string" }
-          }
-        ]
+        summary: "Get one marketplace service with endpoint docs and generated usage instructions."
       }
     },
     "/catalog/suggestions": {
       post: {
         summary: "Submit a new endpoint or source suggestion for the marketplace."
+      }
+    },
+    "/provider/me": {
+      get: {
+        summary: "Get the provider account for the current website wallet session."
+      },
+      post: {
+        summary: "Create or update the provider account for the current website wallet session."
+      }
+    },
+    "/provider/services": {
+      get: {
+        summary: "List provider-owned service drafts."
+      },
+      post: {
+        summary: "Create a provider-owned service draft."
+      }
+    },
+    "/provider/services/{id}": {
+      get: {
+        summary: "Get one provider-owned service draft."
+      },
+      patch: {
+        summary: "Update service draft metadata."
+      }
+    },
+    "/provider/services/{id}/endpoints": {
+      post: {
+        summary: "Create a provider endpoint draft."
+      }
+    },
+    "/provider/services/{id}/endpoints/{endpointId}": {
+      patch: {
+        summary: "Update a provider endpoint draft."
+      },
+      delete: {
+        summary: "Delete a provider endpoint draft."
+      }
+    },
+    "/provider/services/{id}/verification-challenge": {
+      post: {
+        summary: "Create a website ownership verification challenge for a provider service."
+      }
+    },
+    "/provider/services/{id}/verify": {
+      post: {
+        summary: "Verify website ownership for a provider service."
+      }
+    },
+    "/provider/services/{id}/submit": {
+      post: {
+        summary: "Submit the current provider service draft for review."
       }
     },
     "/internal/suggestions": {
@@ -125,15 +118,32 @@ export function buildOpenApiDocument(baseUrl = "http://localhost:3000") {
     },
     "/internal/suggestions/{id}": {
       patch: {
-        summary: "Update a suggestion status or internal notes.",
-        parameters: [
-          {
-            in: "path",
-            name: "id",
-            required: true,
-            schema: { type: "string" }
-          }
-        ]
+        summary: "Update a suggestion status or internal notes."
+      }
+    },
+    "/internal/provider-services": {
+      get: {
+        summary: "List provider service drafts for marketplace review."
+      }
+    },
+    "/internal/provider-services/{id}": {
+      get: {
+        summary: "Get one provider service draft for marketplace review."
+      }
+    },
+    "/internal/provider-services/{id}/request-changes": {
+      post: {
+        summary: "Request provider changes before publish."
+      }
+    },
+    "/internal/provider-services/{id}/publish": {
+      post: {
+        summary: "Publish the latest submitted provider service snapshot."
+      }
+    },
+    "/internal/provider-services/{id}/suspend": {
+      post: {
+        summary: "Suspend a provider service from the public marketplace."
       }
     },
     "/openapi.json": {
@@ -153,7 +163,7 @@ export function buildOpenApiDocument(baseUrl = "http://localhost:3000") {
     }
   };
 
-  for (const route of marketplaceRoutes) {
+  for (const route of input.routes) {
     paths[`/api/${route.provider}/${route.operation}`] = {
       post: {
         summary: route.title,
@@ -162,7 +172,7 @@ export function buildOpenApiDocument(baseUrl = "http://localhost:3000") {
           required: true,
           content: {
             "application/json": {
-              schema: zodToJsonSchema(route.inputSchema, `${route.routeId}.input`)
+              schema: route.requestSchemaJson
             }
           }
         },
@@ -171,7 +181,7 @@ export function buildOpenApiDocument(baseUrl = "http://localhost:3000") {
             description: "Paid sync response.",
             content: {
               "application/json": {
-                schema: zodToJsonSchema(route.outputSchema, `${route.routeId}.output`)
+                schema: route.responseSchemaJson
               }
             }
           },
@@ -223,8 +233,13 @@ export function buildOpenApiDocument(baseUrl = "http://localhost:3000") {
   };
 }
 
-export function buildLlmsTxt(baseUrl = "http://localhost:3000"): string {
+export function buildLlmsTxt(input: {
+  baseUrl?: string;
+  services: ServiceDefinition[];
+  routes: MarketplaceRoute[];
+}): string {
   const network = getDefaultMarketplaceNetworkConfig();
+  const baseUrl = input.baseUrl ?? "http://localhost:3000";
   const lines = [
     `# ${MARKETPLACE_NAME}`,
     "",
@@ -242,10 +257,11 @@ export function buildLlmsTxt(baseUrl = "http://localhost:3000"): string {
     "## Services"
   ];
 
-  for (const service of listServiceDefinitions()) {
-    const routes = getRoutesForService(service);
+  for (const service of input.services) {
+    const routes = input.routes.filter((route) => service.routeIds.includes(route.routeId));
     const summary = buildServiceSummary({
       service,
+      endpoints: routes,
       analytics: {
         totalCalls: 0,
         revenueRaw: "0",
@@ -266,7 +282,7 @@ export function buildLlmsTxt(baseUrl = "http://localhost:3000"): string {
 
   lines.push("", "## Routes");
 
-  for (const route of marketplaceRoutes) {
+  for (const route of input.routes) {
     lines.push(
       `- POST /api/${route.provider}/${route.operation}`,
       `  routeId: ${route.routeId}`,
@@ -282,8 +298,14 @@ export function buildLlmsTxt(baseUrl = "http://localhost:3000"): string {
   return lines.join("\n");
 }
 
-export function buildMarketplaceCatalog(baseUrl = "http://localhost:3000") {
+export function buildMarketplaceCatalog(input: {
+  baseUrl?: string;
+  services: ServiceDefinition[];
+  routes: MarketplaceRoute[];
+}) {
   const network = getDefaultMarketplaceNetworkConfig();
+  const baseUrl = input.baseUrl ?? "http://localhost:3000";
+
   return {
     name: MARKETPLACE_NAME,
     version: MARKETPLACE_VERSION,
@@ -310,14 +332,14 @@ export function buildMarketplaceCatalog(baseUrl = "http://localhost:3000") {
       walletChallengeEndpoint: "/auth/wallet/challenge",
       walletSessionEndpoint: "/auth/wallet/session"
     },
-    services: listServiceDefinitions().map((service) => ({
+    services: input.services.map((service) => ({
       slug: service.slug,
       name: service.name,
       ownerName: service.ownerName,
       categories: service.categories,
       routeIds: service.routeIds
     })),
-    routes: marketplaceRoutes.map((route) => ({
+    routes: input.routes.map((route) => ({
       routeId: route.routeId,
       provider: route.provider,
       operation: route.operation,
