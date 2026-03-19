@@ -12,9 +12,9 @@ export function ModeToggle() {
   return (
     <Button
       type="button"
-      variant="outline"
+      variant="ghost"
       size="icon"
-      className="relative shrink-0"
+      className="relative shrink-0 border border-border bg-background/65 backdrop-blur-sm"
       aria-label="Toggle color theme"
       title="Toggle color theme"
       onClick={() => setTheme(resolvedTheme === "dark" ? "light" : "dark")}

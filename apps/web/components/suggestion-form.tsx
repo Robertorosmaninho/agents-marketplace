@@ -25,17 +25,16 @@ export function SuggestionForm({
   defaultType: "endpoint" | "source";
 }) {
   const [state, action, pending] = useActionState(submitSuggestionAction, initialState);
-  const selectClassName =
-    "h-9 rounded-md border border-input bg-transparent px-3 text-sm outline-none transition-colors focus-visible:ring-1 focus-visible:ring-ring";
+  const selectClassName = "fast-select min-h-12";
 
   return (
-    <Card>
+    <Card variant="frosted">
       <CardHeader>
         <CardDescription>Suggest new supply</CardDescription>
-        <CardTitle>Tell providers what to build next</CardTitle>
+        <CardTitle className="text-3xl">Tell providers what to build next</CardTitle>
       </CardHeader>
       <CardContent>
-        <form action={action} className="grid gap-4">
+        <form action={action} className="grid gap-5">
           <div className="grid gap-4 md:grid-cols-2">
             <label className="grid gap-2 text-sm font-medium">
               Suggestion type
@@ -97,10 +96,10 @@ export function SuggestionForm({
 
           {state.message ? (
             <div
-              className={`rounded-md border px-4 py-3 text-sm ${
+              className={`rounded-card border px-5 py-4 text-sm leading-6 ${
                 state.ok
-                  ? "border bg-muted text-foreground"
-                  : "border-destructive/30 bg-destructive/10 text-destructive"
+                  ? "border-border bg-background/70 text-foreground dark:bg-background/20"
+                  : "border-border bg-muted text-foreground"
               }`}
             >
               {state.message}

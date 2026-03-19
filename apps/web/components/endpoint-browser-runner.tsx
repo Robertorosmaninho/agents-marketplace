@@ -206,17 +206,17 @@ export function EndpointBrowserRunner({
   }
 
   return (
-    <div className="space-y-4 rounded-md border p-4 lg:col-span-2">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <div className="text-xs font-medium text-muted-foreground">Browser execution</div>
-          <div className="mt-1 text-base font-semibold text-foreground">
+    <div className="terminal-shell lg:col-span-2">
+      <div className="terminal-topbar">
+        <div className="flex items-center gap-4">
+          <div className="terminal-lights" aria-hidden="true">
+            <span className="terminal-light-red" />
+            <span className="terminal-light-amber" />
+            <span className="terminal-light-green" />
+          </div>
+          <div className="terminal-title">
             {isPaid ? "Pay and run this endpoint with the Fast extension" : "Run this endpoint in the browser"}
           </div>
-          <p className="mt-2 max-w-3xl text-sm leading-7 text-muted-foreground">
-            This sends the unpaid request first, signs a Fast payment only if the route returns `402`, and then retries
-            with the x402 proof directly from the browser wallet.
-          </p>
         </div>
         <Badge variant="outline" className="gap-2">
           <Wallet className="h-3.5 w-3.5" />
@@ -224,111 +224,118 @@ export function EndpointBrowserRunner({
         </Badge>
       </div>
 
-      <div className="space-y-3">
-        <div className="flex items-center justify-between gap-3">
-          <div className="text-xs font-medium text-muted-foreground">Request body</div>
-          <CopyButton value={requestBody} />
-        </div>
-        <Textarea value={requestBody} onChange={(event) => setRequestBody(event.target.value)} />
-      </div>
+      <div className="terminal-body space-y-5">
+        <p className="max-w-3xl text-sm leading-7 text-white/70">
+          This sends the unpaid request first, signs a Fast payment only if the route returns `402`, and then retries
+          with the x402 proof directly from the browser wallet.
+        </p>
 
-      <div className="flex flex-wrap gap-3">
-        <Button type="button" onClick={runEndpoint} disabled={pending}>
-          {pending ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Wallet className="h-4 w-4" />}
-          {isPaid ? "Pay and run in browser" : "Run in browser"}
-        </Button>
-        {job ? (
-          <Button type="button" variant="secondary" onClick={refreshJob} disabled={pending}>
-            {pending ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <RefreshCcw className="h-4 w-4" />}
-            Refresh job
+        <div className="space-y-3">
+          <div className="flex items-center justify-between gap-3">
+            <div className="terminal-kicker">Request body</div>
+            <CopyButton value={requestBody} className="terminal-copy" />
+          </div>
+          <Textarea value={requestBody} onChange={(event) => setRequestBody(event.target.value)} className="terminal-textarea" />
+        </div>
+
+        <div className="flex flex-wrap gap-3">
+          <Button type="button" onClick={runEndpoint} disabled={pending}>
+            {pending ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Wallet className="h-4 w-4" />}
+            {isPaid ? "Pay and run in browser" : "Run in browser"}
           </Button>
+          {job ? (
+            <Button type="button" variant="secondary" onClick={refreshJob} disabled={pending}>
+              {pending ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <RefreshCcw className="h-4 w-4" />}
+              Refresh job
+            </Button>
+          ) : null}
+        </div>
+
+        {error ? (
+          <div className="terminal-panel flex items-center gap-2 px-4 py-3 text-sm text-silicon">
+            <TriangleAlert className="h-4 w-4 shrink-0" />
+            <span>{error}</span>
+          </div>
+        ) : null}
+
+        {result ? (
+          <div className="space-y-4 terminal-panel p-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <div className="terminal-kicker">Latest response</div>
+                <div className="mt-1 text-sm font-medium text-white">HTTP {result.statusCode}</div>
+              </div>
+              <CopyButton value={formatResponseBody(result.body)} className="terminal-copy" />
+            </div>
+
+            {result.payment ? (
+              <div className="grid gap-3 rounded-card border border-white/10 bg-white/5 p-4 sm:grid-cols-3">
+                <Detail label="Amount" value={`${formatRawAmount(result.payment.amountRaw)} ${endpoint.tokenSymbol}`} />
+                <Detail label="Recipient" value={shorten(result.payment.recipient)} />
+                <Detail label="Transaction" value={result.payment.txHash} />
+              </div>
+            ) : null}
+
+            {result.payment?.explorerUrl ? (
+              <a
+                href={result.payment.explorerUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="terminal-meta inline-flex w-fit"
+              >
+                Open transaction in explorer
+              </a>
+            ) : null}
+
+            <pre className="terminal-command overflow-x-auto whitespace-pre-wrap text-sm">
+              {formatResponseBody(result.body)}
+            </pre>
+          </div>
+        ) : null}
+
+        {job ? (
+          <div className="space-y-3 terminal-panel p-4">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <div className="terminal-kicker">Async job</div>
+                <div className="mt-1 text-sm font-medium text-white">{job.jobToken}</div>
+              </div>
+              <div className="rounded-pill border border-white/10 px-3 py-1 text-xs font-medium uppercase tracking-eyebrow text-silicon">
+                {job.status}
+              </div>
+            </div>
+            <p className="text-sm text-white/70">
+              Async retrieval uses the same paying wallet to sign a job-specific challenge before polling the result.
+            </p>
+            {job.updatedAt ? <div className="terminal-kicker">Updated: {job.updatedAt}</div> : null}
+            {job.result !== undefined ? (
+              <div className="space-y-2">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="terminal-kicker">Job result</div>
+                  <CopyButton value={formatResponseBody(job.result)} className="terminal-copy" />
+                </div>
+                <pre className="terminal-command overflow-x-auto whitespace-pre-wrap text-sm">
+                  {formatResponseBody(job.result)}
+                </pre>
+              </div>
+            ) : null}
+            {job.error ? (
+              <div className="space-y-2">
+                <div className="terminal-kicker">Job error</div>
+                <pre className="terminal-command overflow-x-auto whitespace-pre-wrap text-sm text-silicon">{job.error}</pre>
+              </div>
+            ) : null}
+            {job.refund !== undefined ? (
+              <div className="space-y-2">
+                <div className="terminal-kicker">Refund</div>
+                <pre className="terminal-command overflow-x-auto whitespace-pre-wrap text-sm">
+                  {formatResponseBody(job.refund)}
+                </pre>
+              </div>
+            ) : null}
+          </div>
         ) : null}
       </div>
-
-      {error ? (
-        <div className="flex items-center gap-2 rounded-md border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
-          <TriangleAlert className="h-4 w-4 shrink-0" />
-          <span>{error}</span>
-        </div>
-      ) : null}
-
-      {result ? (
-        <div className="space-y-4 rounded-md border bg-muted/30 p-4">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <div className="text-xs font-medium text-muted-foreground">Latest response</div>
-              <div className="mt-1 text-sm font-medium text-foreground">HTTP {result.statusCode}</div>
-            </div>
-            <CopyButton value={formatResponseBody(result.body)} />
-          </div>
-
-          {result.payment ? (
-            <div className="grid gap-3 rounded-md border bg-background p-4 sm:grid-cols-3">
-              <Detail label="Amount" value={`${formatRawAmount(result.payment.amountRaw)} ${endpoint.tokenSymbol}`} />
-              <Detail label="Recipient" value={shorten(result.payment.recipient)} />
-              <Detail label="Transaction" value={result.payment.txHash} />
-            </div>
-          ) : null}
-
-          {result.payment?.explorerUrl ? (
-            <a
-              href={result.payment.explorerUrl}
-              target="_blank"
-              rel="noreferrer"
-              className="inline-flex text-sm font-medium hover:underline"
-            >
-              Open transaction in explorer
-            </a>
-          ) : null}
-
-          <pre className="overflow-x-auto whitespace-pre-wrap text-sm leading-7">
-            {formatResponseBody(result.body)}
-          </pre>
-        </div>
-      ) : null}
-
-      {job ? (
-        <div className="space-y-3 rounded-md border bg-muted/30 p-4">
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <div className="text-xs font-medium text-muted-foreground">Async job</div>
-              <div className="mt-1 text-sm font-medium text-foreground">{job.jobToken}</div>
-            </div>
-            <div className="rounded-md border px-3 py-1 text-xs font-medium">
-              {job.status}
-            </div>
-          </div>
-          <p className="text-sm text-muted-foreground">
-            Async retrieval uses the same paying wallet to sign a job-specific challenge before polling the result.
-          </p>
-          {job.updatedAt ? <div className="text-xs text-muted-foreground">Updated: {job.updatedAt}</div> : null}
-          {job.result !== undefined ? (
-            <div className="space-y-2">
-              <div className="flex items-center justify-between gap-3">
-                <div className="text-xs font-medium text-muted-foreground">Job result</div>
-                <CopyButton value={formatResponseBody(job.result)} />
-              </div>
-              <pre className="overflow-x-auto whitespace-pre-wrap text-sm leading-7">
-                {formatResponseBody(job.result)}
-              </pre>
-            </div>
-          ) : null}
-          {job.error ? (
-            <div className="space-y-2">
-              <div className="text-xs font-medium text-muted-foreground">Job error</div>
-              <pre className="overflow-x-auto whitespace-pre-wrap text-sm leading-7 text-destructive">{job.error}</pre>
-            </div>
-          ) : null}
-          {job.refund !== undefined ? (
-            <div className="space-y-2">
-              <div className="text-xs font-medium text-muted-foreground">Refund</div>
-              <pre className="overflow-x-auto whitespace-pre-wrap text-sm leading-7">
-                {formatResponseBody(job.refund)}
-              </pre>
-            </div>
-          ) : null}
-        </div>
-      ) : null}
     </div>
   );
 }
@@ -336,8 +343,8 @@ export function EndpointBrowserRunner({
 function Detail({ label, value }: { label: string; value: string }) {
   return (
     <div>
-      <div className="text-xs font-medium text-muted-foreground">{label}</div>
-      <div className="mt-2 break-all text-sm font-medium text-foreground">{value}</div>
+      <div className="terminal-kicker">{label}</div>
+      <div className="mt-2 break-all text-sm font-medium text-white">{value}</div>
     </div>
   );
 }

@@ -54,22 +54,23 @@ export async function adminLoginAction(
 ): Promise<AdminLoginState> {
   const token = getString(formData, "token");
 
-  try {
-    if (!isValidAdminToken(token)) {
-      return {
-        ok: false,
-        message: "Invalid admin token."
-      };
-    }
+  if (!isValidAdminToken(token)) {
+    return {
+      ok: false,
+      message: "Invalid admin token."
+    };
+  }
 
+  try {
     await setAdminSession();
-    redirect("/admin/suggestions");
   } catch (error) {
     return {
       ok: false,
       message: error instanceof Error ? error.message : "Admin login failed."
     };
   }
+
+  redirect("/admin/suggestions");
 }
 
 export async function adminLogoutAction(): Promise<void> {

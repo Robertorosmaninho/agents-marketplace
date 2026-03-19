@@ -8,8 +8,12 @@ export default function ProviderServicesPage() {
   const deploymentNetwork = resolveWebDeploymentNetwork(process.env.MARKETPLACE_FAST_NETWORK).deploymentNetwork;
 
   return (
-    <main className="mx-auto flex min-h-screen w-full max-w-7xl flex-col gap-6 px-6 py-8 md:px-10 md:py-12">
-      <ProviderServicesDashboard apiBaseUrl={apiBaseUrl} deploymentNetwork={deploymentNetwork} />
+    <main className="page-shell">
+      <section className="section-sep">
+        <div className="section-container section-stack">
+          <ProviderServicesDashboard apiBaseUrl={apiBaseUrl} deploymentNetwork={deploymentNetwork} />
+        </div>
+      </section>
     </main>
   );
 }

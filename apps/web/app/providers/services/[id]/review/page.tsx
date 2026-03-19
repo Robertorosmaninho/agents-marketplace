@@ -13,12 +13,16 @@ export default async function ProviderServiceReviewPage({
   const { id } = await params;
 
   return (
-    <main className="mx-auto flex min-h-screen w-full max-w-6xl flex-col gap-6 px-6 py-8 md:px-10 md:py-12">
-      <ProviderServiceReview
-        apiBaseUrl={apiBaseUrl}
-        deploymentNetwork={deploymentNetwork}
-        serviceId={id}
-      />
+    <main className="page-shell">
+      <section className="section-sep">
+        <div className="section-container section-stack">
+          <ProviderServiceReview
+            apiBaseUrl={apiBaseUrl}
+            deploymentNetwork={deploymentNetwork}
+            serviceId={id}
+          />
+        </div>
+      </section>
     </main>
   );
 }

@@ -2,7 +2,7 @@ import { expect, test } from "@playwright/test";
 
 test("marketplace browsing, suggestion submit, admin review, and skill markdown", async ({ page }) => {
   await page.goto("/");
-  await expect(page.getByRole("heading", { name: "Paid APIs for agents, presented like a real marketplace." })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Payments for agents" })).toBeVisible();
   await expect(page.getByText("Mock Research Signals")).toBeVisible();
 
   await page.getByRole("link", { name: /Mock Research Signals/i }).click();
@@ -30,5 +30,5 @@ test("marketplace browsing, suggestion submit, admin review, and skill markdown"
   await expect(page.getByText("Add a ranked signal watchlist endpoint")).toBeVisible();
 
   await page.goto("/skill.md");
-  await expect(page.locator("body")).toContainText("# Fast Marketplace Skill");
+  await expect(page.locator("body")).toContainText("# Fast Marketplace");
 });

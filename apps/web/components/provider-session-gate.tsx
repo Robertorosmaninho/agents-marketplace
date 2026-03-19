@@ -32,14 +32,14 @@ export function ProviderSessionGate({
 
   if (!session) {
     return (
-      <Card>
+      <Card variant="frosted">
         <CardHeader>
           <CardTitle>{title}</CardTitle>
           <CardDescription>{description ?? "Connect a Fast wallet in the header to access provider features."}</CardDescription>
         </CardHeader>
         <CardContent className="space-y-3 text-sm text-muted-foreground">
           <p>Provider pages use the existing website wallet session. Connect the extension wallet first, then reload this page.</p>
-          <Link href="/" className="font-medium text-foreground hover:underline">
+          <Link href="/" className="fast-link">
             Back to marketplace
           </Link>
         </CardContent>

@@ -10,7 +10,7 @@ export function AccordionItem({
   className,
   ...props
 }: React.ComponentPropsWithoutRef<typeof AccordionPrimitive.Item>) {
-  return <AccordionPrimitive.Item className={cn("border-b", className)} {...props} />;
+  return <AccordionPrimitive.Item className={cn("border-b border-border", className)} {...props} />;
 }
 
 export function AccordionTrigger({
@@ -22,7 +22,7 @@ export function AccordionTrigger({
     <AccordionPrimitive.Header className="flex">
       <AccordionPrimitive.Trigger
         className={cn(
-          "group flex flex-1 items-center justify-between py-4 text-left text-sm font-medium transition-all hover:underline",
+          "group flex flex-1 items-center justify-between py-6 text-left text-sm font-medium tracking-headline transition-opacity hover:opacity-70",
           className
         )}
         {...props}

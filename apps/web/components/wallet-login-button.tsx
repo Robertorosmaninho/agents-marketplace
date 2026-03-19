@@ -168,12 +168,12 @@ export function WalletLoginButton({
   return (
     <div className="flex flex-col items-end gap-2">
       <div className="flex flex-wrap items-center justify-end gap-2">
-        <Badge variant="outline">
+        <Badge variant="outline" className="rounded-pill">
           {networkLabel}
         </Badge>
         {session ? (
           <>
-            <div className="inline-flex items-center gap-2 rounded-md border bg-muted px-3 py-2 text-sm font-medium">
+            <div className="inline-flex items-center gap-2 rounded-pill border border-border bg-muted px-4 py-3 text-sm font-medium tracking-headline">
               <Wallet className="h-4 w-4" />
               {shortenWalletAddress(session.wallet)}
             </div>
@@ -190,10 +190,12 @@ export function WalletLoginButton({
         )}
       </div>
       {session ? (
-        <div className="text-xs text-muted-foreground">Site session active for website-auth flows.</div>
+        <div className="text-[11px] uppercase tracking-eyebrow text-muted-foreground">
+          Site session active for website-auth flows.
+        </div>
       ) : null}
       {error ? (
-        <div className="flex items-center gap-2 text-right text-xs text-destructive">
+        <div className="flex max-w-xs items-center gap-2 text-right text-xs text-muted-foreground">
           <AlertCircle className="h-3.5 w-3.5 shrink-0" />
           <span>{error}</span>
         </div>

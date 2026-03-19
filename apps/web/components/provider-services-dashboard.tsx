@@ -105,7 +105,7 @@ function ProviderServicesDashboardInner({
 
   if (hasAccount === false) {
     return (
-      <Card>
+      <Card variant="frosted">
         <CardHeader>
           <CardTitle>Create a provider profile first</CardTitle>
           <CardDescription>Service drafts are attached to the provider account for this wallet session.</CardDescription>
@@ -119,9 +119,9 @@ function ProviderServicesDashboardInner({
 
   return (
     <div className="grid gap-6 lg:grid-cols-[1fr_1.1fr]">
-      <Card>
+      <Card variant="frosted">
         <CardHeader>
-          <CardTitle>Your service drafts</CardTitle>
+          <CardTitle className="text-3xl">Your service drafts</CardTitle>
           <CardDescription>Published services stay live while you keep editing the next draft version.</CardDescription>
         </CardHeader>
         <CardContent className="grid gap-4">
@@ -129,11 +129,11 @@ function ProviderServicesDashboardInner({
             <p className="text-sm text-muted-foreground">No service drafts yet.</p>
           ) : null}
           {services.map((service) => (
-            <div key={service.service.id} className="rounded-md border p-4">
+            <div key={service.service.id} className="rounded-card border border-border bg-background/70 p-5 dark:bg-background/20">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
-                  <div className="text-sm font-semibold">{service.service.name}</div>
-                  <div className="text-sm text-muted-foreground">
+                  <div className="text-lg font-medium tracking-headline">{service.service.name}</div>
+                  <div className="text-sm leading-6 text-muted-foreground">
                     {service.service.apiNamespace} / {service.service.status}
                   </div>
                 </div>
@@ -154,9 +154,9 @@ function ProviderServicesDashboardInner({
         </CardContent>
       </Card>
 
-      <Card>
+      <Card variant="frosted">
         <CardHeader>
-          <CardTitle>New service draft</CardTitle>
+          <CardTitle className="text-3xl">New service draft</CardTitle>
           <CardDescription>Create the public service metadata first, then add endpoints and verification.</CardDescription>
         </CardHeader>
         <CardContent>
@@ -217,7 +217,7 @@ function ProviderServicesDashboardInner({
             <Button type="submit" disabled={pending}>
               {pending ? "Creating..." : "Create draft"}
             </Button>
-            {error ? <p className="text-sm text-destructive">{error}</p> : null}
+            {error ? <p className="text-sm text-muted-foreground">{error}</p> : null}
           </form>
         </CardContent>
       </Card>

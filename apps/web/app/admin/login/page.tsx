@@ -2,17 +2,23 @@ import { AdminLoginForm } from "@/components/admin-login-form";
 
 export default function AdminLoginPage() {
   return (
-    <main className="mx-auto flex min-h-screen w-full max-w-5xl flex-col justify-center px-6 py-10 md:px-10">
-      <div className="grid gap-6">
-        <div className="space-y-3">
-          <div className="text-sm text-muted-foreground">Internal workspace</div>
-          <h1 className="text-4xl font-semibold tracking-tight md:text-5xl">Review the supply queue</h1>
-          <p className="max-w-2xl text-base leading-7 text-muted-foreground">
-            Use the shared admin token to review endpoint and source requests before providers pick them up.
-          </p>
+    <main className="page-shell">
+      <section className="section-sep">
+        <div className="section-container section-stack">
+          <div className="grid gap-8">
+            <div className="page-intro">
+              <div className="eyebrow">Internal workspace</div>
+              <div className="space-y-4">
+                <h1 className="section-title">Review the supply queue</h1>
+                <p className="body-copy">
+                  Use the shared admin token to review endpoint and source requests before providers pick them up.
+                </p>
+              </div>
+            </div>
+            <AdminLoginForm />
+          </div>
         </div>
-        <AdminLoginForm />
-      </div>
+      </section>
     </main>
   );
 }

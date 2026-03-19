@@ -7,18 +7,22 @@ export default async function StatsPage() {
   const services = await fetchServices();
 
   return (
-    <main className="mx-auto flex min-h-screen w-full max-w-7xl flex-col gap-8 px-6 py-8 md:px-10 md:py-12">
-      <section className="space-y-4">
-        <p className="text-sm font-medium text-muted-foreground">Stats</p>
-        <div className="space-y-3">
-          <h1 className="text-4xl font-semibold tracking-tight">Marketplace totals</h1>
-          <p className="max-w-2xl text-base leading-7 text-muted-foreground">
-            A live snapshot of catalog coverage and paid request volume across the public marketplace.
-          </p>
+    <main className="page-shell">
+      <section className="section-sep">
+        <div className="section-container section-stack">
+          <div className="page-intro">
+            <p className="eyebrow">Stats</p>
+            <div className="space-y-4">
+              <h1 className="section-title">Marketplace totals</h1>
+              <p className="body-copy">
+                A live snapshot of catalog coverage and paid request volume across the public marketplace.
+              </p>
+            </div>
+          </div>
+
+          <CatalogSnapshotCard services={services} />
         </div>
       </section>
-
-      <CatalogSnapshotCard services={services} />
     </main>
   );
 }

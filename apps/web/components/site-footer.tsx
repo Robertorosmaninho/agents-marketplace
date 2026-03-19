@@ -2,36 +2,62 @@ import React from "react";
 import Link from "next/link";
 
 export function SiteFooter() {
+  const columns = [
+    {
+      title: "Developers",
+      links: [
+        { href: "/skill.md", label: "SKILL.md" },
+        { href: "/providers/onboard", label: "List your service" }
+      ]
+    },
+    {
+      title: "Resources",
+      links: [
+        { href: "/", label: "Marketplace" },
+        { href: "/stats", label: "Stats" },
+        { href: "/suggest?type=endpoint", label: "Suggest an endpoint" }
+      ]
+    },
+    {
+      title: "Company",
+      links: [{ href: "/suggest?type=source", label: "Suggest a source" }]
+    }
+  ];
+
   return (
-    <footer className="border-t bg-background">
-      <div className="mx-auto flex w-full max-w-7xl flex-col gap-4 px-6 py-6 md:flex-row md:items-center md:justify-between md:px-10">
-        <div className="space-y-1">
-          <div className="text-sm font-medium">Fast Marketplace</div>
-          <p className="text-sm text-muted-foreground">
-            Discovery, docs, and request intake for Fast-native agent APIs.
-          </p>
+    <footer className="section-sep bg-background">
+      <div className="footer-shell">
+        <div className="grid gap-12 lg:grid-cols-[1.1fr_1.4fr]">
+          <div className="space-y-4">
+            <p className="eyebrow">FAST Marketplace</p>
+            <div className="max-w-md space-y-3">
+              <h2 className="text-2xl font-medium tracking-m">Payment infrastructure for the agentic economy.</h2>
+              <p className="text-sm leading-7 text-muted-foreground">
+                Discovery, request intake, provider tooling, and public service docs for Fast-native APIs.
+              </p>
+            </div>
+          </div>
+
+          <div className="grid gap-8 sm:grid-cols-3">
+            {columns.map((column) => (
+              <div key={column.title} className="space-y-4">
+                <div className="footer-label">{column.title}</div>
+                <nav className="flex flex-col gap-3">
+                  {column.links.map((link) => (
+                    <Link key={link.href} href={link.href} className="footer-link">
+                      {link.label}
+                    </Link>
+                  ))}
+                </nav>
+              </div>
+            ))}
+          </div>
         </div>
 
-        <nav className="flex flex-wrap items-center gap-3 text-sm">
-          <Link
-            href="/providers/onboard"
-            className="rounded-md border px-4 py-2 font-medium transition-colors hover:bg-accent hover:text-accent-foreground"
-          >
-            List your service
-          </Link>
-          <Link
-            href="/suggest?type=endpoint"
-            className="rounded-md border px-4 py-2 font-medium transition-colors hover:bg-accent hover:text-accent-foreground"
-          >
-            Suggest an endpoint
-          </Link>
-          <Link
-            href="/suggest?type=source"
-            className="rounded-md border px-4 py-2 font-medium transition-colors hover:bg-accent hover:text-accent-foreground"
-          >
-            Suggest a source
-          </Link>
-        </nav>
+        <div className="mt-12 flex flex-col gap-3 border-t border-border pt-6 text-sm md:flex-row md:items-center md:justify-between">
+          <div className="text-steel">Built for Fast-native agent payments.</div>
+          <div className="text-steel/60">© 2026 FAST Marketplace</div>
+        </div>
       </div>
     </footer>
   );

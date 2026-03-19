@@ -15,16 +15,19 @@ export function SiteHeader({
   networkLabel: string;
 }) {
   return (
-    <header className="sticky top-0 z-30 border-b bg-background">
-      <div className="mx-auto flex w-full max-w-7xl flex-col gap-4 px-6 py-4 md:px-10 lg:flex-row lg:items-center lg:justify-between">
-        <Link href="/" aria-label="Fast Marketplace" className="flex items-center">
+    <header
+      className="sticky top-0 z-[100] border-b border-border bg-background/85"
+      style={{ backdropFilter: "blur(16px)" }}
+    >
+      <div className="nav-shell">
+        <Link href="/" aria-label="Fast Marketplace" className="flex shrink-0 items-center">
           <img
             src="/brand/fast-logo-dark.svg"
             alt=""
             aria-hidden="true"
             width={146}
             height={52}
-            className="block h-9 w-auto dark:hidden"
+            className="block h-5 w-auto dark:hidden"
           />
           <img
             src="/brand/fast-logo-light.svg"
@@ -32,45 +35,30 @@ export function SiteHeader({
             aria-hidden="true"
             width={146}
             height={52}
-            className="hidden h-9 w-auto dark:block"
+            className="hidden h-5 w-auto dark:block"
           />
           <span className="sr-only">Fast Marketplace</span>
         </Link>
 
-        <nav className="flex flex-wrap items-center gap-2 text-sm">
-          <Link
-            href="/"
-            className="rounded-md px-3 py-2 text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
-          >
+        <nav className="flex flex-1 flex-wrap items-center justify-center gap-6 max-lg:order-3 max-lg:w-full max-lg:justify-start">
+          <Link href="/" className="fast-nav-link">
             Marketplace
           </Link>
-          <Link
-            href="/stats"
-            className="rounded-md px-3 py-2 text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
-          >
+          <Link href="/stats" className="fast-nav-link">
             Stats
           </Link>
-          <Link
-            href="/suggest"
-            className="rounded-md px-3 py-2 text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
-          >
+          <Link href="/suggest" className="fast-nav-link">
             Suggest
           </Link>
-          <Link
-            href="/providers/onboard"
-            className="rounded-md px-3 py-2 text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
-          >
+          <Link href="/providers/onboard" className="fast-nav-link">
             List your service
           </Link>
-          <Link
-            href="/skill.md"
-            className="rounded-md px-3 py-2 text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
-          >
+          <Link href="/skill.md" className="fast-nav-link">
             SKILL.md
           </Link>
         </nav>
 
-        <div className="flex self-stretch items-start justify-end gap-2 lg:self-auto">
+        <div className="flex shrink-0 items-start justify-end gap-2">
           <ModeToggle />
           <WalletLoginButton
             apiBaseUrl={apiBaseUrl}

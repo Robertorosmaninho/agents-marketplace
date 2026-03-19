@@ -19,12 +19,12 @@ export function CatalogSnapshotCard({ services }: { services: ServiceSummary[] }
   const totals = buildMarketplaceTotals(services);
 
   return (
-    <Card>
+    <Card variant="frosted">
       <CardHeader>
         <CardDescription>Marketplace totals</CardDescription>
-        <CardTitle>Catalog snapshot</CardTitle>
+        <CardTitle className="text-3xl">Catalog snapshot</CardTitle>
       </CardHeader>
-      <CardContent className="grid gap-4 sm:grid-cols-2">
+      <CardContent className="grid gap-6 sm:grid-cols-2 xl:grid-cols-4">
         <Metric label="Services" value={String(services.length)} />
         <Metric label="Endpoints" value={String(totals.endpoints)} />
         <Metric label="Call volume" value={String(totals.calls)} />
@@ -36,9 +36,9 @@ export function CatalogSnapshotCard({ services }: { services: ServiceSummary[] }
 
 function Metric({ label, value }: { label: string; value: string }) {
   return (
-    <div>
-      <div className="text-xs uppercase tracking-wide text-muted-foreground">{label}</div>
-      <div className="mt-2 text-2xl font-semibold">{value}</div>
+    <div className="space-y-2 rounded-card border border-border bg-background/70 px-5 py-6 dark:bg-background/20">
+      <div className="metric-label">{label}</div>
+      <div className="text-3xl font-medium tracking-m">{value}</div>
     </div>
   );
 }

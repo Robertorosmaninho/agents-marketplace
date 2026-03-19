@@ -25,16 +25,18 @@ export function VolumeChart({
 
   return (
     <div className={cn("space-y-3", className)}>
-      <div className="flex h-48 items-end gap-2 overflow-hidden rounded-md border bg-muted/30 p-4">
+      <div className="glass-panel flex h-56 items-end overflow-hidden p-5" style={{ gap: "3px" }}>
         {points.map((point) => {
           const value = Number(point.amount);
           const height = maximum > 0 ? Math.max(12, (value / maximum) * 100) : 12;
+          const isPeak = maximum > 0 && value / maximum > 0.6;
 
           return (
-            <div key={point.date} className="relative flex flex-1 flex-col items-center justify-end gap-2">
+            <div key={point.date} className="relative flex flex-1 flex-col items-center justify-end">
               <div
                 className={cn(
-                  "w-full rounded-sm bg-primary",
+                  "w-full bg-brand/60 transition-opacity duration-200 hover:opacity-85",
+                  isPeak ? "rounded-pill" : "rounded-sm",
                   value === 0 && "opacity-25"
                 )}
                 style={{ height: `${height}%` }}
@@ -44,7 +46,7 @@ export function VolumeChart({
           );
         })}
       </div>
-      <div className="flex flex-wrap gap-3 text-xs text-muted-foreground">
+      <div className="flex flex-wrap gap-3 text-sm tracking-headline text-muted-foreground">
         {points
           .filter((_, index) => index % 4 === 0 || index === points.length - 1)
           .map((point) => (

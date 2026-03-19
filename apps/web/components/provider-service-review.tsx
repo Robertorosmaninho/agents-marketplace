@@ -57,7 +57,7 @@ function ProviderServiceReviewInner({
 
   if (detail === undefined) {
     return (
-      <Card>
+      <Card variant="frosted">
         <CardContent className="p-6 text-sm text-muted-foreground">
           {error ?? "Loading review state..."}
         </CardContent>
@@ -67,7 +67,7 @@ function ProviderServiceReviewInner({
 
   if (detail === null) {
     return (
-      <Card>
+      <Card variant="frosted">
         <CardHeader>
           <CardTitle>Review draft unavailable</CardTitle>
           <CardDescription>
@@ -107,39 +107,39 @@ function ProviderServiceReviewInner({
 
   return (
     <div className="grid gap-6 lg:grid-cols-[1fr_0.9fr]">
-      <Card>
+      <Card variant="frosted">
         <CardHeader>
-          <CardTitle>{detail.service.name}</CardTitle>
+          <CardTitle className="text-3xl">{detail.service.name}</CardTitle>
           <CardDescription>{detail.service.status}</CardDescription>
         </CardHeader>
         <CardContent className="grid gap-4 text-sm">
-          <div className="rounded-md border p-4">
+          <div className="rounded-card border border-border bg-background/70 p-5 dark:bg-background/20">
             <div className="font-medium">Latest verification</div>
             <div className="mt-2 text-muted-foreground">{detail.verification?.status ?? "not started"}</div>
           </div>
-          <div className="rounded-md border p-4">
+          <div className="rounded-card border border-border bg-background/70 p-5 dark:bg-background/20">
             <div className="font-medium">Latest review</div>
             <div className="mt-2 text-muted-foreground">{detail.latestReview?.status ?? "not submitted"}</div>
             {detail.latestReview?.reviewNotes ? (
               <div className="mt-2 whitespace-pre-wrap text-muted-foreground">{detail.latestReview.reviewNotes}</div>
             ) : null}
           </div>
-          <div className="rounded-md border p-4">
+          <div className="rounded-card border border-border bg-background/70 p-5 dark:bg-background/20">
             <div className="font-medium">Endpoints</div>
             <div className="mt-2 text-muted-foreground">{detail.endpoints.length} draft endpoint(s)</div>
           </div>
         </CardContent>
       </Card>
 
-      <Card>
+      <Card variant="frosted">
         <CardHeader>
-          <CardTitle>Submission checklist</CardTitle>
+          <CardTitle className="text-3xl">Submission checklist</CardTitle>
           <CardDescription>The API enforces these requirements at submit time too.</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="grid gap-3">
             {checklist.map((item) => (
-              <div key={item.label} className="flex items-center justify-between rounded-md border p-3 text-sm">
+              <div key={item.label} className="flex items-center justify-between rounded-card border border-border bg-background/70 px-4 py-3 text-sm dark:bg-background/20">
                 <span>{item.label}</span>
                 <span className={item.ok ? "text-foreground" : "text-muted-foreground"}>
                   {item.ok ? "ready" : "missing"}
@@ -158,7 +158,7 @@ function ProviderServiceReviewInner({
           </div>
 
           {message ? <p className="text-sm text-muted-foreground">{message}</p> : null}
-          {error ? <p className="text-sm text-destructive">{error}</p> : null}
+          {error ? <p className="text-sm text-muted-foreground">{error}</p> : null}
         </CardContent>
       </Card>
     </div>

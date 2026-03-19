@@ -5,6 +5,7 @@ import { defineConfig } from "@playwright/test";
 const apiPort = 4100;
 const webPort = 3100;
 const systemChromePath = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
+const useSystemChrome = process.env.PLAYWRIGHT_USE_SYSTEM_CHROME === "1";
 
 export default defineConfig({
   testDir: "./tests",
@@ -12,7 +13,7 @@ export default defineConfig({
   use: {
     baseURL: `http://127.0.0.1:${webPort}`,
     headless: true,
-    launchOptions: existsSync(systemChromePath)
+    launchOptions: useSystemChrome && existsSync(systemChromePath)
       ? {
           executablePath: systemChromePath
         }

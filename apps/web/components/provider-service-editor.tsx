@@ -80,7 +80,7 @@ function ProviderServiceEditorInner({
 
   if (detail === undefined) {
     return (
-      <Card>
+      <Card variant="frosted">
         <CardContent className="p-6 text-sm text-muted-foreground">
           {error ?? "Loading service draft..."}
         </CardContent>
@@ -90,7 +90,7 @@ function ProviderServiceEditorInner({
 
   if (detail === null) {
     return (
-      <Card>
+      <Card variant="frosted">
         <CardHeader>
           <CardTitle>Service draft unavailable</CardTitle>
           <CardDescription>
@@ -204,9 +204,9 @@ function ProviderServiceEditorInner({
 
   return (
     <div className="grid gap-6">
-      <Card>
+      <Card variant="frosted">
         <CardHeader>
-          <CardTitle>{detail.service.name}</CardTitle>
+          <CardTitle className="text-3xl">{detail.service.name}</CardTitle>
           <CardDescription>{detail.service.apiNamespace} · {detail.service.status}</CardDescription>
         </CardHeader>
         <CardContent>
@@ -257,9 +257,9 @@ function ProviderServiceEditorInner({
         </CardContent>
       </Card>
 
-      <Card>
+      <Card variant="frosted">
         <CardHeader>
-          <CardTitle>Website verification</CardTitle>
+          <CardTitle className="text-3xl">Website verification</CardTitle>
           <CardDescription>Host the issued token on your site before submitting this service for review.</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -278,7 +278,7 @@ function ProviderServiceEditorInner({
             </Button>
           </div>
           {challenge ? (
-            <div className="grid gap-4 rounded-md border p-4">
+            <div className="grid gap-4 rounded-card border border-border bg-background/70 p-5 dark:bg-background/20">
               <div className="flex items-center justify-between gap-3">
                 <div>
                   <div className="text-xs text-muted-foreground">Expected URL</div>
@@ -298,9 +298,9 @@ function ProviderServiceEditorInner({
         </CardContent>
       </Card>
 
-      <Card>
+      <Card variant="frosted">
         <CardHeader>
-          <CardTitle>Endpoint drafts</CardTitle>
+          <CardTitle className="text-3xl">Endpoint drafts</CardTitle>
           <CardDescription>Provider-authored endpoints are POST JSON and sync-only in v1.</CardDescription>
         </CardHeader>
         <CardContent className="grid gap-6">
@@ -323,8 +323,8 @@ function ProviderServiceEditorInner({
             />
           ))}
 
-          <form className="grid gap-4 rounded-md border p-4" onSubmit={onCreateEndpoint}>
-            <div className="text-sm font-medium">New endpoint</div>
+          <form className="grid gap-4 rounded-card border border-border bg-background/70 p-5 dark:bg-background/20" onSubmit={onCreateEndpoint}>
+            <div className="metric-label">New endpoint</div>
             <EndpointDraftFields state={newEndpoint} onChange={setNewEndpoint} />
             <Button type="submit" disabled={pending}>
               {pending ? "Creating..." : "Create endpoint"}
@@ -334,7 +334,7 @@ function ProviderServiceEditorInner({
       </Card>
 
       {message ? <p className="text-sm text-muted-foreground">{message}</p> : null}
-      {error ? <p className="text-sm text-destructive">{error}</p> : null}
+      {error ? <p className="text-sm text-muted-foreground">{error}</p> : null}
     </div>
   );
 }
@@ -385,10 +385,10 @@ function EndpointDraftCard({
   }
 
   return (
-    <form className="grid gap-4 rounded-md border p-4" onSubmit={onSubmit}>
+    <form className="grid gap-4 rounded-card border border-border bg-background/70 p-5 dark:bg-background/20" onSubmit={onSubmit}>
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <div className="text-sm font-medium">{endpoint.title}</div>
+          <div className="text-lg font-medium tracking-headline">{endpoint.title}</div>
           <div className="text-xs text-muted-foreground">{endpoint.operation}</div>
         </div>
         <div className="flex gap-2">
@@ -414,7 +414,7 @@ function EndpointDraftCard({
         </div>
       </div>
       <EndpointDraftFields state={state} onChange={setState} />
-      {error ? <p className="text-sm text-destructive">{error}</p> : null}
+      {error ? <p className="text-sm text-muted-foreground">{error}</p> : null}
     </form>
   );
 }

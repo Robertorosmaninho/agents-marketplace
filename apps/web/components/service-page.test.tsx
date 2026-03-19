@@ -63,7 +63,7 @@ describe("ServicePage", () => {
 
     expect(screen.getByRole("heading", { name: "Mock Research Signals" })).toBeTruthy();
     expect(screen.getByText("A mock service for wallet and x402 smoke tests.")).toBeTruthy();
-    expect(screen.getByText("Available Endpoints (1)")).toBeTruthy();
+    expect(screen.getByText(/available endpoints \(1\)/i)).toBeTruthy();
     expect(screen.getByText("Open canonical SKILL.md")).toBeTruthy();
     await user.click(screen.getByRole("button", { name: /quick insight/i }));
     expect(screen.getByText("Pay and run this endpoint with the Fast extension")).toBeTruthy();

@@ -20,27 +20,30 @@ export default async function SuggestPage({
   const defaultType = getSingleParam(params.type) === "source" ? "source" : "endpoint";
 
   return (
-    <main className="mx-auto flex min-h-screen w-full max-w-5xl flex-col gap-8 px-6 py-8 md:px-10 md:py-12">
-      <section className="space-y-4">
-        <div className="space-y-4">
-          <Link href="/" className="text-sm font-medium text-muted-foreground hover:underline">
-            Back to marketplace
-          </Link>
-          <div className="space-y-3">
-            <h1 className="text-4xl font-semibold tracking-tight md:text-5xl">Suggest a new endpoint or source</h1>
-            <p className="max-w-3xl text-base leading-7 text-muted-foreground">
-              Use this queue to tell providers what to build next. Suggestions stay private and are reviewed in the
-              internal marketplace triage board.
-            </p>
+    <main className="page-shell">
+      <section className="section-sep">
+        <div className="section-container section-stack">
+          <div className="page-intro">
+            <Link href="/" className="fast-link">
+              Back to marketplace
+            </Link>
+            <div className="space-y-4">
+              <p className="eyebrow">Private intake</p>
+              <h1 className="section-title">Suggest a new endpoint or source</h1>
+              <p className="body-copy">
+                Use this queue to tell providers what to build next. Suggestions stay private and are reviewed in the
+                internal marketplace triage board.
+              </p>
+            </div>
+
+            <SuggestionForm
+              services={services}
+              defaultServiceSlug={defaultServiceSlug}
+              defaultType={defaultType}
+            />
           </div>
         </div>
       </section>
-
-      <SuggestionForm
-        services={services}
-        defaultServiceSlug={defaultServiceSlug}
-        defaultType={defaultType}
-      />
     </main>
   );
 }

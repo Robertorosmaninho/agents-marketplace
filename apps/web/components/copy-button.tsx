@@ -6,7 +6,7 @@ import { Copy, CopyCheck } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 
-export function CopyButton({ value }: { value: string }) {
+export function CopyButton({ value, className }: { value: string; className?: string }) {
   const [copied, setCopied] = useState(false);
   const [, startTransition] = useTransition();
 
@@ -15,6 +15,7 @@ export function CopyButton({ value }: { value: string }) {
       type="button"
       variant="ghost"
       size="sm"
+      className={className}
       onClick={() => {
         startTransition(async () => {
           await navigator.clipboard.writeText(value);
