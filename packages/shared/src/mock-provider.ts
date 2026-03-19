@@ -12,10 +12,25 @@ function isoNow(): string {
 }
 
 export class MockProviderAdapter implements ProviderAdapter {
+  private readonly syncResponses = new Map<string, { statusCode: number; body: unknown }>();
+  private readonly asyncResponses = new Map<
+    string,
+    { providerJobId: string; pollAfterMs: number; state: Record<string, unknown> }
+  >();
+
   async execute(context: ProviderExecuteContext) {
     if (context.route.operation === "quick-insight") {
+      const existing = this.syncResponses.get(context.requestId);
+      if (existing) {
+        return {
+          kind: "sync" as const,
+          statusCode: existing.statusCode,
+          body: existing.body
+        };
+      }
+
       const input = context.input as { query: string };
-      return {
+      const response = {
         kind: "sync" as const,
         statusCode: 200,
         body: {
@@ -26,11 +41,26 @@ export class MockProviderAdapter implements ProviderAdapter {
           generatedAt: isoNow()
         }
       };
+      this.syncResponses.set(context.requestId, {
+        statusCode: response.statusCode,
+        body: response.body
+      });
+      return response;
     }
 
     if (context.route.operation === "async-report") {
+      const existing = this.asyncResponses.get(context.requestId);
+      if (existing) {
+        return {
+          kind: "async" as const,
+          providerJobId: existing.providerJobId,
+          pollAfterMs: existing.pollAfterMs,
+          state: existing.state
+        };
+      }
+
       const input = context.input as { topic: string; delayMs?: number; shouldFail?: boolean };
-      return {
+      const response = {
         kind: "async" as const,
         providerJobId: createOpaqueToken("provider"),
         pollAfterMs: input.delayMs ?? 5_000,
@@ -40,6 +70,12 @@ export class MockProviderAdapter implements ProviderAdapter {
           readyAt: Date.now() + (input.delayMs ?? 5_000)
         }
       };
+      this.asyncResponses.set(context.requestId, {
+        providerJobId: response.providerJobId,
+        pollAfterMs: response.pollAfterMs ?? 5_000,
+        state: response.state ?? {}
+      });
+      return response;
     }
 
     throw new Error(`Unsupported mock operation: ${context.route.operation}`);

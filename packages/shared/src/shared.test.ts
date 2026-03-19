@@ -305,6 +305,14 @@ describe("shared marketplace helpers", () => {
       responseHeaders: {}
     });
 
+    expect(
+      await store.getAccessGrant(
+        "job",
+        "job_catalog_1",
+        "fast1buyer00000000000000000000000000000000000000000000000000000000"
+      )
+    ).not.toBeNull();
+
     await store.completeJob("job_catalog_1", { report: "done" });
 
     await store.saveSyncIdempotency({
@@ -396,6 +404,125 @@ describe("shared marketplace helpers", () => {
     expect(second.jobToken).toBeNull();
   });
 
+  it("tracks prepaid credit balances across topup, reserve, capture, release, and expiry", async () => {
+    const store = new InMemoryMarketplaceStore();
+    const serviceId = "service_credit_1";
+    const buyerWallet = "fast1buyer00000000000000000000000000000000000000000000000000000000";
+
+    const topup = await store.createCreditTopup({
+      serviceId,
+      buyerWallet,
+      currency: "fastUSDC",
+      amount: "1000000",
+      paymentId: "payment_credit_1"
+    });
+    expect(topup.account.availableAmount).toBe("1000000");
+    expect(topup.account.reservedAmount).toBe("0");
+
+    const reserved = await store.reserveCredit({
+      serviceId,
+      buyerWallet,
+      currency: "fastUSDC",
+      amount: "600000",
+      idempotencyKey: "reserve_1",
+      providerReference: "amazon-order-1",
+      expiresAt: new Date(Date.now() + 60_000).toISOString()
+    });
+    expect(reserved.account.availableAmount).toBe("400000");
+    expect(reserved.account.reservedAmount).toBe("600000");
+
+    const repeatedReserve = await store.reserveCredit({
+      serviceId,
+      buyerWallet,
+      currency: "fastUSDC",
+      amount: "600000",
+      idempotencyKey: "reserve_1",
+      providerReference: "amazon-order-1",
+      expiresAt: new Date(Date.now() + 60_000).toISOString()
+    });
+    expect(repeatedReserve.reservation.id).toBe(reserved.reservation.id);
+    expect(repeatedReserve.account.availableAmount).toBe("400000");
+
+    const captured = await store.captureCreditReservation({
+      reservationId: reserved.reservation.id,
+      amount: "400000"
+    });
+    expect(captured.account.availableAmount).toBe("600000");
+    expect(captured.account.reservedAmount).toBe("0");
+    expect(captured.reservation.status).toBe("captured");
+    expect(captured.captureEntry.amount).toBe("400000");
+    expect(captured.releaseEntry?.amount).toBe("200000");
+
+    const releasable = await store.reserveCredit({
+      serviceId,
+      buyerWallet,
+      currency: "fastUSDC",
+      amount: "100000",
+      idempotencyKey: "reserve_2",
+      expiresAt: new Date(Date.now() + 60_000).toISOString()
+    });
+    const released = await store.releaseCreditReservation({
+      reservationId: releasable.reservation.id
+    });
+    expect(released.reservation.status).toBe("released");
+    expect(released.account.availableAmount).toBe("600000");
+
+    const expirable = await store.reserveCredit({
+      serviceId,
+      buyerWallet,
+      currency: "fastUSDC",
+      amount: "50000",
+      idempotencyKey: "reserve_3",
+      expiresAt: new Date(Date.now() - 1_000).toISOString()
+    });
+    const expired = await store.expireCreditReservation(expirable.reservation.id);
+    expect(expired.reservation.status).toBe("expired");
+    expect(expired.account.availableAmount).toBe("600000");
+
+    await expect(
+      store.reserveCredit({
+        serviceId,
+        buyerWallet,
+        currency: "fastUSDC",
+        amount: "700000",
+        idempotencyKey: "reserve_4",
+        expiresAt: new Date(Date.now() + 60_000).toISOString()
+      })
+    ).rejects.toThrow("Insufficient prepaid credit");
+  });
+
+  it("deduplicates top-up credit by payment id", async () => {
+    const store = new InMemoryMarketplaceStore();
+    const serviceId = "service_credit_dedupe_1";
+    const buyerWallet = "fast1buyer00000000000000000000000000000000000000000000000000000000";
+
+    const first = await store.createCreditTopup({
+      serviceId,
+      buyerWallet,
+      currency: "fastUSDC",
+      amount: "250000",
+      paymentId: "payment_credit_dedupe_1",
+      metadata: {
+        routeId: "orders.topup.v1"
+      }
+    });
+
+    const second = await store.createCreditTopup({
+      serviceId,
+      buyerWallet,
+      currency: "fastUSDC",
+      amount: "999999",
+      paymentId: "payment_credit_dedupe_1",
+      metadata: {
+        routeId: "orders.topup.v1"
+      }
+    });
+
+    expect(second.entry.id).toBe(first.entry.id);
+    expect(second.entry.amount).toBe("250000");
+    expect(second.account.availableAmount).toBe("250000");
+  });
+
   it("publishes provider snapshots and resolves them by api namespace and operation", async () => {
     const store = new InMemoryMarketplaceStore();
     const wallet = "fast1provider000000000000000000000000000000000000000000000000000000";
@@ -422,6 +549,7 @@ describe("shared marketplace helpers", () => {
       operation: "quote",
       title: "Quote",
       description: "Return a single quote snapshot.",
+      billingType: "fixed_x402",
       price: "$0.25",
       mode: "sync",
       requestSchemaJson: {

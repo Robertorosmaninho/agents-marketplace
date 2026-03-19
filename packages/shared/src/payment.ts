@@ -3,11 +3,11 @@ import {
   createPaymentRequirement,
   encodePaymentResponse,
   encodePayload,
-  parsePrice,
   type PaymentRequirement,
   type PaymentResponse
 } from "@fastxyz/x402-server";
 
+import { quotedPriceString } from "./billing.js";
 import {
   LEGACY_PAYMENT_HEADER,
   LEGACY_PAYMENT_IDENTIFIER_HEADER,
@@ -44,11 +44,11 @@ export function normalizePaymentHeaders(headers: Record<string, string | string[
   };
 }
 
-export function buildPaymentRequirementForRoute(route: MarketplaceRoute, payTo: string): PaymentRequirement {
+export function buildPaymentRequirementForRoute(route: MarketplaceRoute, payTo: string, requestBody?: unknown): PaymentRequirement {
   return createPaymentRequirement(
     payTo,
     {
-      price: route.price,
+      price: quotedPriceString(route, requestBody),
       network: route.network,
       config: {
         description: route.description,
@@ -59,11 +59,11 @@ export function buildPaymentRequirementForRoute(route: MarketplaceRoute, payTo: 
   );
 }
 
-export function buildPaymentRequiredResponse(route: MarketplaceRoute, payTo: string) {
+export function buildPaymentRequiredResponse(route: MarketplaceRoute, payTo: string, requestBody?: unknown) {
   return createPaymentRequired(
     payTo,
     {
-      price: route.price,
+      price: quotedPriceString(route, requestBody),
       network: route.network,
       config: {
         description: route.description,
@@ -74,8 +74,8 @@ export function buildPaymentRequiredResponse(route: MarketplaceRoute, payTo: str
   );
 }
 
-export function buildPaymentRequiredHeaders(route: MarketplaceRoute, payTo: string): Record<string, string> {
-  const body = buildPaymentRequiredResponse(route, payTo);
+export function buildPaymentRequiredHeaders(route: MarketplaceRoute, payTo: string, requestBody?: unknown): Record<string, string> {
+  const body = buildPaymentRequiredResponse(route, payTo, requestBody);
   return {
     [PAYMENT_REQUIRED_HEADER]: encodePayload(body)
   };
@@ -87,8 +87,4 @@ export function buildPaymentResponseHeaders(response: PaymentResponse): Record<s
     [PAYMENT_RESPONSE_HEADER]: encoded,
     [LEGACY_PAYMENT_RESPONSE_HEADER]: encoded
   };
-}
-
-export function quotedPriceRaw(route: MarketplaceRoute): string {
-  return parsePrice(route.price, 6);
 }

@@ -248,6 +248,10 @@ function buildQuickInsightRoute(config: MarketplaceNetworkConfig): MarketplaceRo
     mode: "sync",
     network: config.paymentNetwork,
     price: "$0.05",
+    billing: {
+      type: "fixed_x402",
+      price: "$0.05"
+    },
     title: "Quick Insight",
     description: "Return a paid single-shot mock insight response.",
     requestExample: {
@@ -308,6 +312,10 @@ function buildAsyncReportRoute(config: MarketplaceNetworkConfig): MarketplaceRou
     mode: "async",
     network: config.paymentNetwork,
     price: "$0.15",
+    billing: {
+      type: "fixed_x402",
+      price: "$0.15"
+    },
     title: "Async Report",
     description: "Create a paid async mock report job and return a job token.",
     requestExample: {
@@ -378,6 +386,10 @@ function buildTavilySearchRoute(config: MarketplaceNetworkConfig): MarketplaceRo
     mode: "sync",
     network: config.paymentNetwork,
     price: "$0.05",
+    billing: {
+      type: "fixed_x402",
+      price: "$0.05"
+    },
     title: "Search",
     description: "Run a paid Tavily web search and return Tavily-formatted results.",
     requestExample: {
@@ -651,6 +663,7 @@ function buildProviderEndpointDraft(serviceId: string, route: MarketplaceRoute):
     title: route.title,
     description: route.description,
     price: route.price,
+    billing: structuredClone(route.billing),
     mode: route.mode,
     requestSchemaJson: structuredClone(route.requestSchemaJson),
     responseSchemaJson: structuredClone(route.responseSchemaJson),
@@ -768,6 +781,7 @@ export function buildSeededPublishedEndpointVersions(
         mode: draft.mode,
         network: config.paymentNetwork,
         price: draft.price,
+        billing: structuredClone(draft.billing),
         title: draft.title,
         description: draft.description,
         payout: {

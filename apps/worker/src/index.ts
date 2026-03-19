@@ -3,6 +3,7 @@ import { Pool } from "pg";
 import {
   DEFAULT_JOB_POLL_INTERVAL_MS,
   PostgresMarketplaceStore,
+  createFastPayoutService,
   createFastRefundService,
   normalizeMarketplaceDeploymentNetwork,
   resolveMarketplaceNetworkConfig
@@ -29,19 +30,26 @@ const refundService = createFastRefundService({
   privateKey: process.env.MARKETPLACE_TREASURY_PRIVATE_KEY,
   keyfilePath: process.env.MARKETPLACE_TREASURY_KEYFILE
 });
+const payoutService = createFastPayoutService({
+  deploymentNetwork: network.deploymentNetwork,
+  rpcUrl: network.rpcUrl,
+  privateKey: process.env.MARKETPLACE_TREASURY_PRIVATE_KEY,
+  keyfilePath: process.env.MARKETPLACE_TREASURY_KEYFILE
+});
 
 const intervalMs = Number(process.env.WORKER_POLL_INTERVAL_MS ?? DEFAULT_JOB_POLL_INTERVAL_MS);
 
 const timer = setInterval(() => {
   void runMarketplaceWorkerCycle({
     store,
-    refundService
+    refundService,
+    payoutService
   }).catch((error) => {
     console.error("Worker cycle failed:", error);
   });
 }, intervalMs);
 
-void runMarketplaceWorkerCycle({ store, refundService }).catch((error) => {
+void runMarketplaceWorkerCycle({ store, refundService, payoutService }).catch((error) => {
   console.error("Initial worker cycle failed:", error);
 });
 

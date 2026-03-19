@@ -1,5 +1,5 @@
-import { quotedPriceRaw } from "./payment.js";
 import { rawToDecimalString } from "./amounts.js";
+import { isFixedX402Billing, isPrepaidCreditBilling, isTopupX402Billing, quotedPriceRaw, routePriceLabel } from "./billing.js";
 import { getDefaultMarketplaceNetworkConfig } from "./network.js";
 import type {
   MarketplaceRoute,
@@ -28,7 +28,8 @@ export function formatRevenueLabel(rawAmount: string): string {
 
 export function buildPriceRange(routes: MarketplaceRoute[]): string {
   const tokenSymbol = getDefaultMarketplaceNetworkConfig().tokenSymbol;
-  const sorted = routes
+  const fixedRoutes = routes
+    .filter(isFixedX402Billing)
     .map((route) => quotedPriceRaw(route))
     .sort((left, right) => {
       const leftAmount = BigInt(left);
@@ -45,10 +46,20 @@ export function buildPriceRange(routes: MarketplaceRoute[]): string {
       return 0;
     });
 
-  const minimum = formatPriceLabelFromRaw(sorted[0] ?? "0", tokenSymbol);
-  const maximum = formatPriceLabelFromRaw(sorted[sorted.length - 1] ?? "0", tokenSymbol);
+  const labels: string[] = [];
+  if (fixedRoutes.length > 0) {
+    const minimum = formatPriceLabelFromRaw(fixedRoutes[0] ?? "0", tokenSymbol);
+    const maximum = formatPriceLabelFromRaw(fixedRoutes[fixedRoutes.length - 1] ?? "0", tokenSymbol);
+    labels.push(minimum === maximum ? minimum : `${minimum} - ${maximum}`);
+  }
+  if (routes.some(isTopupX402Billing)) {
+    labels.push("Variable top-up");
+  }
+  if (routes.some(isPrepaidCreditBilling)) {
+    labels.push("Prepaid credit");
+  }
 
-  return minimum === maximum ? minimum : `${minimum} - ${maximum}`;
+  return labels.join(" + ") || `$0 ${tokenSymbol}`;
 }
 
 export function buildServiceEndpoint(route: MarketplaceRoute, apiBaseUrl: string): ServiceCatalogEndpoint {
@@ -59,7 +70,8 @@ export function buildServiceEndpoint(route: MarketplaceRoute, apiBaseUrl: string
     routeId: route.routeId,
     title: route.title,
     description: route.description,
-    price: route.price,
+    price: routePriceLabel(route),
+    billingType: route.billing.type,
     tokenSymbol,
     mode: route.mode,
     method: "POST",
@@ -89,7 +101,7 @@ export function buildUseThisServicePrompt(input: {
   for (const endpoint of input.endpoints) {
     lines.push(
       "",
-      `### ${endpoint.title} (${endpoint.price} ${endpoint.tokenSymbol})`,
+      `### ${endpoint.title} (${endpoint.price}${endpoint.billingType === "prepaid_credit" ? "" : ` ${endpoint.tokenSymbol}`})`,
       `curl -X ${endpoint.method} "${endpoint.proxyUrl}" \\`,
       '  -H "Content-Type: application/json" \\',
       `  -d '${JSON.stringify(endpoint.requestExample, null, 2)}'`
@@ -100,10 +112,17 @@ export function buildUseThisServicePrompt(input: {
     }
   }
 
-  if (input.endpoints.some((endpoint) => endpoint.price !== "$0")) {
+  if (input.endpoints.some((endpoint) => endpoint.billingType === "fixed_x402" || endpoint.billingType === "topup_x402_variable")) {
     lines.push(
       "",
       "For paid endpoints: the first call returns 402. Authorize payment with your Fast wallet and retry with the payment signature header."
+    );
+  }
+
+  if (input.endpoints.some((endpoint) => endpoint.billingType === "prepaid_credit")) {
+    lines.push(
+      "",
+      "For prepaid-credit endpoints: buy credit first, then invoke the route with a wallet session bearer token so the marketplace can debit your stored balance."
     );
   }
 

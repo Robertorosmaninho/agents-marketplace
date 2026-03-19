@@ -1,4 +1,5 @@
 import { buildServiceSummary } from "./catalog.js";
+import { routePriceLabel } from "./billing.js";
 import {
   MARKETPLACE_NAME,
   MARKETPLACE_VERSION,
@@ -199,7 +200,7 @@ export function buildOpenApiDocument(input: {
             description: "Paid async job accepted."
           },
           "402": {
-            description: "Payment required.",
+            description: route.billing.type === "prepaid_credit" ? "Wallet session required." : "Payment required.",
             headers: {
               [PAYMENT_REQUIRED_HEADER]: {
                 schema: { type: "string" }
@@ -211,7 +212,7 @@ export function buildOpenApiDocument(input: {
           {
             in: "header",
             name: PAYMENT_IDENTIFIER_HEADER,
-            required: false,
+            required: route.billing.type !== "prepaid_credit",
             schema: { type: "string" }
           },
           {
@@ -298,7 +299,8 @@ export function buildLlmsTxt(input: {
       `  routeId: ${route.routeId}`,
       `  mode: ${route.mode}`,
       `  network: ${route.network}`,
-      `  price: ${route.price}`,
+      `  billing: ${route.billing.type}`,
+      `  price: ${routePriceLabel(route)}`,
       `  description: ${route.description}`
     );
   }
@@ -357,7 +359,8 @@ export function buildMarketplaceCatalog(input: {
       path: `/api/${route.provider}/${route.operation}`,
       mode: route.mode,
       network: route.network,
-      price: route.price,
+      billingType: route.billing.type,
+      price: routePriceLabel(route),
       description: route.description
     }))
   };

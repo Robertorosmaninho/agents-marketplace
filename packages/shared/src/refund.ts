@@ -3,14 +3,16 @@ import { FastProvider, FastWallet } from "@fastxyz/sdk";
 import { rawToDecimalString } from "./amounts.js";
 import { resolveMarketplaceNetworkConfig } from "./network.js";
 import type { MarketplaceDeploymentNetwork } from "./network.js";
-import type { RefundService } from "./types.js";
+import type { PayoutService, RefundService } from "./types.js";
 
-export function createFastRefundService(input: {
+interface FastTreasuryServiceInput {
   deploymentNetwork?: MarketplaceDeploymentNetwork;
   rpcUrl?: string;
   privateKey?: string;
   keyfilePath?: string;
-}): RefundService {
+}
+
+function createFastTreasurySender(input: FastTreasuryServiceInput) {
   const network = resolveMarketplaceNetworkConfig({
     deploymentNetwork: input.deploymentNetwork,
     rpcUrl: input.rpcUrl
@@ -47,17 +49,37 @@ export function createFastRefundService(input: {
   };
 
   return {
-    async issueRefund({ wallet, amount }) {
+    async send(input: { wallet: string; amount: string }) {
       const treasuryWallet = await getWallet();
       const result = await treasuryWallet.send({
-        to: wallet,
-        amount: rawToDecimalString(amount, 6),
+        to: input.wallet,
+        amount: rawToDecimalString(input.amount, 6),
         token: network.tokenSymbol
       });
 
       return {
         txHash: result.txHash
       };
+    }
+  };
+}
+
+export function createFastRefundService(input: FastTreasuryServiceInput): RefundService {
+  const treasury = createFastTreasurySender(input);
+
+  return {
+    async issueRefund({ wallet, amount }) {
+      return treasury.send({ wallet, amount });
+    }
+  };
+}
+
+export function createFastPayoutService(input: FastTreasuryServiceInput): PayoutService {
+  const treasury = createFastTreasurySender(input);
+
+  return {
+    async issuePayout({ wallet, amount }) {
+      return treasury.send({ wallet, amount });
     }
   };
 }

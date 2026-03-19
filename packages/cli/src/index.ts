@@ -2,6 +2,7 @@
 import { Command } from "commander";
 
 import {
+  createApiSession,
   defaultCliDependencies,
   fetchJobResult,
   initializeWallet,
@@ -15,6 +16,31 @@ const program = new Command();
 const deps = defaultCliDependencies();
 
 program.name("fast-marketplace");
+
+const authProgram = program.command("auth");
+
+authProgram
+  .command("api-session")
+  .argument("<provider>")
+  .argument("<operation>")
+  .option("--api-url <url>", "Marketplace API URL", "http://localhost:3000")
+  .option("--network <network>", "Fast network (mainnet or testnet)", "mainnet")
+  .option("--keyfile <path>")
+  .option("--config <path>")
+  .action(async (provider, operation, options) => {
+    const result = await createApiSession(
+      {
+        apiUrl: options.apiUrl,
+        provider,
+        operation,
+        keyfilePath: options.keyfile,
+        configPath: options.config,
+        network: options.network
+      },
+      deps
+    );
+    deps.print(JSON.stringify(result, null, 2));
+  });
 
 const walletProgram = program.command("wallet");
 

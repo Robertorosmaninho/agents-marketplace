@@ -1,8 +1,8 @@
 import {
+  PAYMENT_EXECUTION_RECOVERY_MS,
   createDefaultProviderRegistry,
-  createFastRefundService,
   type MarketplaceStore,
-  type MarketplaceDeploymentNetwork,
+  type PayoutService,
   type ProviderRegistry,
   type RefundService
 } from "@marketplace/shared";
@@ -10,6 +10,7 @@ import {
 export interface MarketplaceWorkerOptions {
   store: MarketplaceStore;
   refundService: RefundService;
+  payoutService?: PayoutService;
   providers?: ProviderRegistry;
   limit?: number;
 }
@@ -99,6 +100,111 @@ export async function runMarketplaceWorkerCycle(options: MarketplaceWorkerOption
         errorMessage: message
       });
       await options.store.markRefundFailed(refund.id, message);
+    }
+  }
+
+  await recoverStalePendingPayments({
+    store: options.store,
+    refundService: options.refundService,
+    limit: options.limit ?? 10
+  });
+
+  await backfillProviderPayouts({
+    store: options.store,
+    limit: options.limit ?? 10
+  });
+
+  if (options.payoutService) {
+    await settleProviderPayouts({
+      store: options.store,
+      payoutService: options.payoutService,
+      limit: options.limit ?? 10
+    });
+  }
+}
+
+async function recoverStalePendingPayments(input: {
+  store: MarketplaceStore;
+  refundService: RefundService;
+  limit: number;
+}) {
+  const staleBefore = new Date(Date.now() - PAYMENT_EXECUTION_RECOVERY_MS).toISOString();
+  const pendingPayments = await input.store.listStalePendingPaymentExecutions(staleBefore, input.limit);
+
+  for (const payment of pendingPayments) {
+    if (payment.pendingRecoveryAction === "retry") {
+      continue;
+    }
+
+    const existingRefund = await input.store.getRefundByPaymentId(payment.paymentId);
+    if (existingRefund?.status === "sent") {
+      continue;
+    }
+
+    const refund = existingRefund ?? await input.store.createRefund({
+      paymentId: payment.paymentId,
+      wallet: payment.buyerWallet,
+      amount: payment.quotedPrice
+    });
+
+    try {
+      const receipt = await input.refundService.issueRefund({
+        wallet: payment.buyerWallet,
+        amount: payment.quotedPrice,
+        reason: `Automatic recovery refund for unresolved paid request ${payment.paymentId}.`
+      });
+      await input.store.markRefundSent(refund.id, receipt.txHash);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unknown refund failure.";
+      await input.store.markRefundFailed(refund.id, message);
+    }
+  }
+}
+
+async function backfillProviderPayouts(input: {
+  store: MarketplaceStore;
+  limit: number;
+}) {
+  const recoverable = await input.store.listRecoverableProviderPayouts(input.limit);
+
+  for (const payout of recoverable) {
+    try {
+      await input.store.createProviderPayout(payout);
+    } catch (error) {
+      console.error(`Failed to backfill provider payout for ${payout.sourceKind}:${payout.sourceId}`, error);
+    }
+  }
+}
+
+async function settleProviderPayouts(input: {
+  store: MarketplaceStore;
+  payoutService: PayoutService;
+  limit: number;
+}) {
+  const pending = await input.store.listPendingProviderPayouts(input.limit);
+  const groups = new Map<string, typeof pending>();
+
+  for (const payout of pending) {
+    const key = `${payout.providerWallet}:${payout.currency}`;
+    const current = groups.get(key) ?? [];
+    current.push(payout);
+    groups.set(key, current);
+  }
+
+  for (const payouts of groups.values()) {
+    const payoutIds = payouts.map((payout) => payout.id);
+    const amount = payouts.reduce((total, payout) => total + BigInt(payout.amount), 0n).toString();
+
+    try {
+      const receipt = await input.payoutService.issuePayout({
+        wallet: payouts[0]!.providerWallet,
+        amount,
+        reason: `Marketplace provider payout batch (${payoutIds.length} records).`
+      });
+      await input.store.markProviderPayoutsSent(payoutIds, receipt.txHash);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unknown payout failure.";
+      await input.store.markProviderPayoutSendFailure(payoutIds, message);
     }
   }
 }

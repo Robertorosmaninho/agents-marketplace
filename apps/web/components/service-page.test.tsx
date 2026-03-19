@@ -47,6 +47,7 @@ describe("ServicePage", () => {
               title: "Quick Insight",
               description: "Instant paid insight.",
               price: "$0.05",
+              billingType: "fixed_x402",
               tokenSymbol: "fastUSDC",
               mode: "sync",
               method: "POST",

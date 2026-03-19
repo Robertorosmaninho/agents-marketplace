@@ -2,7 +2,10 @@ import { randomUUID } from "node:crypto";
 
 import { Pool } from "pg";
 
+import { rawToDecimalString } from "./amounts.js";
+import { createDraftRouteBilling, normalizeRouteBilling } from "./billing.js";
 import { getDefaultMarketplaceNetworkConfig } from "./network.js";
+import { hashProviderRuntimeKey } from "./provider-runtime.js";
 import {
   MARKETPLACE_PROVIDER_SERVICE_SEEDS,
   MARKETPLACE_PROVIDER_ACCOUNT_SEED,
@@ -12,6 +15,12 @@ import {
 } from "./seed.js";
 import type {
   AccessGrantRecord,
+  ClaimPaymentExecutionInput,
+  ClaimPaymentExecutionResult,
+  CompleteCreditTopupChargeInput,
+  CreditAccountRecord,
+  CreditLedgerEntryRecord,
+  CreditReservationRecord,
   CreateProviderEndpointDraftInput,
   CreateProviderServiceInput,
   CreateSuggestionInput,
@@ -22,7 +31,10 @@ import type {
   ProviderAccountRecord,
   ProviderAttemptRecord,
   ProviderEndpointDraftRecord,
+  ProviderPayoutInput,
+  ProviderPayoutRecord,
   ProviderReviewRecord,
+  ProviderRuntimeKeyRecord,
   ProviderSecretRecord,
   ProviderServiceDetailRecord,
   ProviderServiceRecord,
@@ -110,7 +122,7 @@ function computeServiceAnalytics(input: {
 }): ServiceAnalytics {
   const routeIds = new Set(input.routeIds);
   const acceptedCalls = input.idempotencyRecords.filter((record) => {
-    if (!routeIds.has(record.routeId)) {
+    if (!routeIds.has(record.routeId) || record.executionStatus !== "completed") {
       return false;
     }
 
@@ -182,6 +194,68 @@ function computeServiceAnalytics(input: {
   };
 }
 
+function creditAccountKey(serviceId: string, buyerWallet: string, currency: string): string {
+  return `${serviceId}:${buyerWallet}:${currency}`;
+}
+
+function creditReservationKey(serviceId: string, idempotencyKey: string): string {
+  return `${serviceId}:${idempotencyKey}`;
+}
+
+function creditTopupKey(serviceId: string, paymentId: string): string {
+  return `${serviceId}:${paymentId}`;
+}
+
+function buildPendingPaymentExecutionRecord(input: ClaimPaymentExecutionInput, now: string): IdempotencyRecord {
+  return {
+    paymentId: input.paymentId,
+    normalizedRequestHash: input.normalizedRequestHash,
+    buyerWallet: input.buyerWallet,
+    routeId: input.routeId,
+    routeVersion: input.routeVersion,
+    pendingRecoveryAction: input.pendingRecoveryAction,
+    quotedPrice: input.quotedPrice,
+    payoutSplit: clone(input.payoutSplit),
+    paymentPayload: input.paymentPayload,
+    facilitatorResponse: clone(input.facilitatorResponse),
+    responseKind: input.responseKind,
+    responseStatusCode: 202,
+    responseBody: clone(input.responseBody ?? { status: "processing" }),
+    responseHeaders: clone(input.responseHeaders ?? {}),
+    providerPayoutSourceKind: null,
+    executionStatus: "pending",
+    requestId: input.requestId,
+    jobToken: input.jobToken,
+    createdAt: now,
+    updatedAt: now
+  };
+}
+
+function buildStoredTopupResponseBody(input: {
+  routeId: string;
+  serviceId: string;
+  buyerWallet: string;
+  quotedPrice: string;
+  account: CreditAccountRecord;
+  entry: CreditLedgerEntryRecord;
+}) {
+  return {
+    routeId: input.routeId,
+    serviceId: input.serviceId,
+    wallet: input.buyerWallet,
+    topupAmount: rawToDecimalString(input.quotedPrice, 6),
+    account: {
+      ...clone(input.account),
+      availableAmountDecimal: rawToDecimalString(input.account.availableAmount, 6),
+      reservedAmountDecimal: rawToDecimalString(input.account.reservedAmount, 6)
+    },
+    entry: {
+      ...clone(input.entry),
+      amountDecimal: rawToDecimalString(input.entry.amount, 6)
+    }
+  };
+}
+
 export class InMemoryMarketplaceStore implements MarketplaceStore {
   private readonly idempotencyByPaymentId = new Map<string, IdempotencyRecord>();
   private readonly jobsByToken = new Map<string, JobRecord>();
@@ -189,6 +263,14 @@ export class InMemoryMarketplaceStore implements MarketplaceStore {
   private readonly refundsById = new Map<string, RefundRecord>();
   private readonly refundsByJobToken = new Map<string, RefundRecord>();
   private readonly refundsByPaymentId = new Map<string, RefundRecord>();
+  private readonly providerPayoutsById = new Map<string, ProviderPayoutRecord>();
+  private readonly creditAccountsById = new Map<string, CreditAccountRecord>();
+  private readonly creditAccountIdByKey = new Map<string, string>();
+  private readonly creditEntriesById = new Map<string, CreditLedgerEntryRecord>();
+  private readonly creditTopupEntryIdByPaymentKey = new Map<string, string>();
+  private readonly creditReservationsById = new Map<string, CreditReservationRecord>();
+  private readonly creditReservationIdByIdempotencyKey = new Map<string, string>();
+  private readonly providerRuntimeKeysByServiceId = new Map<string, ProviderRuntimeKeyRecord>();
   private readonly suggestionsById = new Map<string, SuggestionRecord>();
   private readonly attempts: ProviderAttemptRecord[] = [];
 
@@ -252,14 +334,68 @@ export class InMemoryMarketplaceStore implements MarketplaceStore {
     return clone(this.idempotencyByPaymentId.get(paymentId) ?? null);
   }
 
+  async claimPaymentExecution(input: ClaimPaymentExecutionInput): Promise<ClaimPaymentExecutionResult> {
+    const existing = this.idempotencyByPaymentId.get(input.paymentId);
+    if (existing) {
+      return {
+        record: clone(existing),
+        created: false
+      };
+    }
+
+    const record = buildPendingPaymentExecutionRecord(input, timestamp());
+    this.idempotencyByPaymentId.set(record.paymentId, record);
+
+    return {
+      record: clone(record),
+      created: true
+    };
+  }
+
+  async touchPendingPaymentExecution(paymentId: string): Promise<IdempotencyRecord | null> {
+    const existing = this.idempotencyByPaymentId.get(paymentId);
+    if (!existing || existing.executionStatus !== "pending") {
+      return clone(existing ?? null);
+    }
+
+    const updated: IdempotencyRecord = {
+      ...existing,
+      updatedAt: timestamp()
+    };
+    this.idempotencyByPaymentId.set(paymentId, updated);
+    return clone(updated);
+  }
+
+  async listStalePendingPaymentExecutions(updatedBefore: string, limit: number): Promise<IdempotencyRecord[]> {
+    const cutoff = Date.parse(updatedBefore);
+    if (Number.isNaN(cutoff) || limit <= 0) {
+      return [];
+    }
+
+    return Array.from(this.idempotencyByPaymentId.values())
+      .filter((record) => {
+        if (record.executionStatus !== "pending") {
+          return false;
+        }
+
+        const updatedAt = Date.parse(record.updatedAt);
+        return !Number.isNaN(updatedAt) && updatedAt <= cutoff;
+      })
+      .sort((left, right) => left.updatedAt.localeCompare(right.updatedAt))
+      .slice(0, limit)
+      .map((record) => clone(record));
+  }
+
   async saveSyncIdempotency(input: SaveSyncIdempotencyInput): Promise<IdempotencyRecord> {
     const now = timestamp();
+    const existing = this.idempotencyByPaymentId.get(input.paymentId);
     const record: IdempotencyRecord = {
       paymentId: input.paymentId,
       normalizedRequestHash: input.normalizedRequestHash,
       buyerWallet: input.buyerWallet,
       routeId: input.routeId,
       routeVersion: input.routeVersion,
+      pendingRecoveryAction: existing?.pendingRecoveryAction ?? "retry",
       quotedPrice: input.quotedPrice,
       payoutSplit: clone(input.payoutSplit),
       paymentPayload: input.paymentPayload,
@@ -268,7 +404,11 @@ export class InMemoryMarketplaceStore implements MarketplaceStore {
       responseStatusCode: input.statusCode,
       responseBody: clone(input.body),
       responseHeaders: clone(input.headers ?? {}),
-      createdAt: now,
+      providerPayoutSourceKind: input.providerPayoutSourceKind ?? null,
+      executionStatus: "completed",
+      requestId: input.requestId ?? existing?.requestId ?? null,
+      jobToken: existing?.jobToken,
+      createdAt: existing?.createdAt ?? now,
       updatedAt: now
     };
 
@@ -278,12 +418,15 @@ export class InMemoryMarketplaceStore implements MarketplaceStore {
 
   async saveAsyncAcceptance(input: SaveAsyncAcceptanceInput): Promise<{ idempotency: IdempotencyRecord; job: JobRecord }> {
     const now = timestamp();
+    const existing = this.idempotencyByPaymentId.get(input.paymentId);
+
     const idempotency: IdempotencyRecord = {
       paymentId: input.paymentId,
       normalizedRequestHash: input.normalizedRequestHash,
       buyerWallet: input.buyerWallet,
       routeId: input.route.routeId,
       routeVersion: input.route.version,
+      pendingRecoveryAction: existing?.pendingRecoveryAction ?? "retry",
       quotedPrice: input.quotedPrice,
       payoutSplit: clone(input.payoutSplit),
       paymentPayload: input.paymentPayload,
@@ -292,13 +435,16 @@ export class InMemoryMarketplaceStore implements MarketplaceStore {
       responseStatusCode: 202,
       responseBody: clone(input.responseBody),
       responseHeaders: clone(input.responseHeaders ?? {}),
-      jobToken: input.jobToken,
-      createdAt: now,
+      providerPayoutSourceKind: null,
+      executionStatus: "completed",
+      requestId: input.requestId ?? existing?.requestId ?? null,
+      jobToken: existing?.jobToken ?? input.jobToken,
+      createdAt: existing?.createdAt ?? now,
       updatedAt: now
     };
 
     const job: JobRecord = {
-      jobToken: input.jobToken,
+      jobToken: idempotency.jobToken ?? input.jobToken,
       paymentId: input.paymentId,
       routeId: input.route.routeId,
       provider: input.route.provider,
@@ -321,6 +467,15 @@ export class InMemoryMarketplaceStore implements MarketplaceStore {
 
     this.idempotencyByPaymentId.set(idempotency.paymentId, idempotency);
     this.jobsByToken.set(job.jobToken, job);
+    await this.createAccessGrant({
+      resourceType: "job",
+      resourceId: job.jobToken,
+      wallet: input.buyerWallet,
+      paymentId: input.paymentId,
+      metadata: {
+        routeId: input.route.routeId
+      }
+    });
 
     return {
       idempotency: clone(idempotency),
@@ -561,6 +716,737 @@ export class InMemoryMarketplaceStore implements MarketplaceStore {
     return clone(this.refundsByJobToken.get(jobToken) ?? null);
   }
 
+  async getRefundByPaymentId(paymentId: string): Promise<RefundRecord | null> {
+    return clone(this.refundsByPaymentId.get(paymentId) ?? null);
+  }
+
+  async createProviderPayout(input: ProviderPayoutInput): Promise<ProviderPayoutRecord> {
+    const existing = Array.from(this.providerPayoutsById.values()).find(
+      (record) => record.sourceKind === input.sourceKind && record.sourceId === input.sourceId
+    );
+    if (existing) {
+      return clone(existing);
+    }
+
+    const record: ProviderPayoutRecord = {
+      id: randomUUID(),
+      sourceKind: input.sourceKind,
+      sourceId: input.sourceId,
+      providerAccountId: input.providerAccountId,
+      providerWallet: input.providerWallet,
+      currency: input.currency,
+      amount: input.amount,
+      status: "pending",
+      txHash: null,
+      sentAt: null,
+      attemptCount: 0,
+      lastError: null,
+      createdAt: timestamp(),
+      updatedAt: timestamp()
+    };
+    this.providerPayoutsById.set(record.id, record);
+    return clone(record);
+  }
+
+  async listRecoverableProviderPayouts(limit: number): Promise<ProviderPayoutInput[]> {
+    const recoverable: ProviderPayoutInput[] = [];
+    const existingKeys = new Set(
+      Array.from(this.providerPayoutsById.values()).map((record) => `${record.sourceKind}:${record.sourceId}`)
+    );
+    const syncRecords = Array.from(this.idempotencyByPaymentId.values()).sort((left, right) =>
+      left.createdAt.localeCompare(right.createdAt)
+    );
+
+    const addCandidate = (candidate: ProviderPayoutInput) => {
+      const key = `${candidate.sourceKind}:${candidate.sourceId}`;
+      if (existingKeys.has(key)) {
+        return;
+      }
+
+      existingKeys.add(key);
+      recoverable.push(clone(candidate));
+    };
+
+    for (const record of syncRecords) {
+      if (recoverable.length >= limit) {
+        return recoverable;
+      }
+
+      if (
+        record.executionStatus !== "completed"
+        || record.responseKind !== "sync"
+        || record.responseStatusCode < 200
+        || record.responseStatusCode >= 400
+        || !record.providerPayoutSourceKind
+        || !record.payoutSplit.providerWallet
+        || BigInt(record.payoutSplit.providerAmount) <= 0n
+      ) {
+        continue;
+      }
+
+      addCandidate({
+        sourceKind: record.providerPayoutSourceKind,
+        sourceId: record.paymentId,
+        providerAccountId: record.payoutSplit.providerAccountId,
+        providerWallet: record.payoutSplit.providerWallet,
+        currency: record.payoutSplit.currency,
+        amount: record.payoutSplit.providerAmount
+      });
+    }
+
+    const completedJobs = Array.from(this.jobsByToken.values()).sort((left, right) =>
+      left.createdAt.localeCompare(right.createdAt)
+    );
+    for (const job of completedJobs) {
+      if (recoverable.length >= limit) {
+        break;
+      }
+
+      if (
+        job.status !== "completed"
+        || !job.payoutSplit.providerWallet
+        || BigInt(job.payoutSplit.providerAmount) <= 0n
+      ) {
+        continue;
+      }
+
+      addCandidate({
+        sourceKind: "route_charge",
+        sourceId: job.jobToken,
+        providerAccountId: job.payoutSplit.providerAccountId,
+        providerWallet: job.payoutSplit.providerWallet,
+        currency: job.payoutSplit.currency,
+        amount: job.payoutSplit.providerAmount
+      });
+    }
+
+    return recoverable;
+  }
+
+  async listPendingProviderPayouts(limit: number): Promise<ProviderPayoutRecord[]> {
+    return Array.from(this.providerPayoutsById.values())
+      .filter((record) => record.status === "pending")
+      .sort((left, right) => left.createdAt.localeCompare(right.createdAt))
+      .slice(0, limit)
+      .map((record) => clone(record));
+  }
+
+  async markProviderPayoutSendFailure(payoutIds: string[], errorMessage: string): Promise<void> {
+    for (const payoutId of payoutIds) {
+      const existing = this.providerPayoutsById.get(payoutId);
+      if (!existing) {
+        continue;
+      }
+
+      this.providerPayoutsById.set(payoutId, {
+        ...existing,
+        attemptCount: existing.attemptCount + 1,
+        lastError: errorMessage,
+        updatedAt: timestamp()
+      });
+    }
+  }
+
+  async markProviderPayoutsSent(payoutIds: string[], txHash: string): Promise<ProviderPayoutRecord[]> {
+    const updated: ProviderPayoutRecord[] = [];
+    for (const payoutId of payoutIds) {
+      const existing = this.providerPayoutsById.get(payoutId);
+      if (!existing) {
+        continue;
+      }
+
+      const next: ProviderPayoutRecord = {
+        ...existing,
+        status: "sent",
+        txHash,
+        sentAt: timestamp(),
+        attemptCount: existing.attemptCount + 1,
+        lastError: null,
+        updatedAt: timestamp()
+      };
+      this.providerPayoutsById.set(payoutId, next);
+      updated.push(clone(next));
+    }
+    return updated;
+  }
+
+  async completeCreditTopupCharge(
+    input: CompleteCreditTopupChargeInput
+  ): Promise<{ idempotency: IdempotencyRecord; account: CreditAccountRecord; entry: CreditLedgerEntryRecord }> {
+    const now = timestamp();
+    const existingIdempotency = this.idempotencyByPaymentId.get(input.paymentId);
+    const topupLookupKey = creditTopupKey(input.serviceId, input.paymentId);
+    const existingEntryId = this.creditTopupEntryIdByPaymentKey.get(topupLookupKey);
+
+    let account: CreditAccountRecord;
+    let entry: CreditLedgerEntryRecord;
+
+    if (existingEntryId) {
+      const existingEntry = this.creditEntriesById.get(existingEntryId);
+      if (!existingEntry) {
+        throw new Error(`Credit top-up entry not found: ${topupLookupKey}`);
+      }
+      const existingAccount = this.creditAccountsById.get(existingEntry.accountId);
+      if (!existingAccount) {
+        throw new Error(`Credit account not found: ${existingEntry.accountId}`);
+      }
+      entry = clone(existingEntry);
+      account = clone(existingAccount);
+    } else {
+      const accountLookupKey = creditAccountKey(input.serviceId, input.buyerWallet, input.payoutSplit.currency);
+      const existingAccountId = this.creditAccountIdByKey.get(accountLookupKey);
+      const existingAccount = existingAccountId ? this.creditAccountsById.get(existingAccountId) ?? null : null;
+      account = existingAccount
+        ? {
+            ...clone(existingAccount),
+            availableAmount: (BigInt(existingAccount.availableAmount) + BigInt(input.quotedPrice)).toString(),
+            updatedAt: now
+          }
+        : {
+            id: randomUUID(),
+            serviceId: input.serviceId,
+            buyerWallet: input.buyerWallet,
+            currency: input.payoutSplit.currency,
+            availableAmount: input.quotedPrice,
+            reservedAmount: "0",
+            createdAt: now,
+            updatedAt: now
+          };
+      entry = {
+        id: randomUUID(),
+        accountId: account.id,
+        serviceId: input.serviceId,
+        buyerWallet: input.buyerWallet,
+        currency: input.payoutSplit.currency,
+        kind: "topup",
+        amount: input.quotedPrice,
+        reservationId: null,
+        paymentId: input.paymentId,
+        metadata: clone(input.metadata ?? {}),
+        createdAt: now
+      };
+    }
+
+    const responseBody = buildStoredTopupResponseBody({
+      routeId: input.routeId,
+      serviceId: input.serviceId,
+      buyerWallet: input.buyerWallet,
+      quotedPrice: input.quotedPrice,
+      account,
+      entry
+    });
+
+    const idempotency: IdempotencyRecord = {
+      paymentId: input.paymentId,
+      normalizedRequestHash: input.normalizedRequestHash,
+      buyerWallet: input.buyerWallet,
+      routeId: input.routeId,
+      routeVersion: input.routeVersion,
+      pendingRecoveryAction: existingIdempotency?.pendingRecoveryAction ?? "retry",
+      quotedPrice: input.quotedPrice,
+      payoutSplit: clone(input.payoutSplit),
+      paymentPayload: input.paymentPayload,
+      facilitatorResponse: clone(input.facilitatorResponse),
+      responseKind: "sync",
+      responseStatusCode: 200,
+      responseBody,
+      responseHeaders: clone(input.responseHeaders ?? {}),
+      providerPayoutSourceKind: "credit_topup",
+      executionStatus: "completed",
+      requestId: input.requestId ?? existingIdempotency?.requestId ?? null,
+      jobToken: existingIdempotency?.jobToken,
+      createdAt: existingIdempotency?.createdAt ?? now,
+      updatedAt: now
+    };
+
+    if (!existingEntryId) {
+      this.creditAccountsById.set(account.id, clone(account));
+      this.creditAccountIdByKey.set(
+        creditAccountKey(input.serviceId, input.buyerWallet, input.payoutSplit.currency),
+        account.id
+      );
+      this.creditEntriesById.set(entry.id, clone(entry));
+      this.creditTopupEntryIdByPaymentKey.set(topupLookupKey, entry.id);
+    }
+
+    if (BigInt(input.payoutSplit.providerAmount) > 0n && input.payoutSplit.providerWallet) {
+      const existingPayout = Array.from(this.providerPayoutsById.values()).find(
+        (record) => record.sourceKind === "credit_topup" && record.sourceId === input.paymentId
+      );
+      if (!existingPayout) {
+        const payout: ProviderPayoutRecord = {
+          id: randomUUID(),
+          sourceKind: "credit_topup",
+          sourceId: input.paymentId,
+          providerAccountId: input.payoutSplit.providerAccountId,
+          providerWallet: input.payoutSplit.providerWallet,
+          currency: input.payoutSplit.currency,
+          amount: input.payoutSplit.providerAmount,
+          status: "pending",
+          txHash: null,
+          sentAt: null,
+          attemptCount: 0,
+          lastError: null,
+          createdAt: now,
+          updatedAt: now
+        };
+        this.providerPayoutsById.set(payout.id, payout);
+      }
+    }
+
+    this.idempotencyByPaymentId.set(idempotency.paymentId, clone(idempotency));
+
+    return {
+      idempotency: clone(idempotency),
+      account: clone(account),
+      entry: clone(entry)
+    };
+  }
+
+  async createCreditTopup(input: {
+    serviceId: string;
+    buyerWallet: string;
+    currency: "fastUSDC" | "testUSDC";
+    amount: string;
+    paymentId: string;
+    metadata?: Record<string, unknown>;
+  }): Promise<{ account: CreditAccountRecord; entry: CreditLedgerEntryRecord }> {
+    const existingEntryId = this.creditTopupEntryIdByPaymentKey.get(creditTopupKey(input.serviceId, input.paymentId));
+    const existingEntry = existingEntryId ? this.creditEntriesById.get(existingEntryId) ?? null : null;
+    if (existingEntry) {
+      const existingAccount = this.creditAccountsById.get(existingEntry.accountId);
+      if (!existingAccount) {
+        throw new Error(`Credit account not found: ${existingEntry.accountId}`);
+      }
+      return {
+        account: clone(existingAccount),
+        entry: clone(existingEntry)
+      };
+    }
+
+    const key = creditAccountKey(input.serviceId, input.buyerWallet, input.currency);
+    const existingAccountId = this.creditAccountIdByKey.get(key);
+    const existingAccount = existingAccountId ? this.creditAccountsById.get(existingAccountId) ?? null : null;
+    const now = timestamp();
+    const account: CreditAccountRecord = existingAccount
+      ? {
+          ...existingAccount,
+          availableAmount: (BigInt(existingAccount.availableAmount) + BigInt(input.amount)).toString(),
+          updatedAt: now
+        }
+      : {
+          id: randomUUID(),
+          serviceId: input.serviceId,
+          buyerWallet: input.buyerWallet,
+          currency: input.currency,
+          availableAmount: input.amount,
+          reservedAmount: "0",
+          createdAt: now,
+          updatedAt: now
+        };
+
+    this.creditAccountsById.set(account.id, account);
+    this.creditAccountIdByKey.set(key, account.id);
+
+    const entry: CreditLedgerEntryRecord = {
+      id: randomUUID(),
+      accountId: account.id,
+      serviceId: input.serviceId,
+      buyerWallet: input.buyerWallet,
+      currency: input.currency,
+      kind: "topup",
+      amount: input.amount,
+      reservationId: null,
+      paymentId: input.paymentId,
+      metadata: clone(input.metadata ?? {}),
+      createdAt: now
+    };
+    this.creditEntriesById.set(entry.id, entry);
+    this.creditTopupEntryIdByPaymentKey.set(creditTopupKey(input.serviceId, input.paymentId), entry.id);
+
+    return {
+      account: clone(account),
+      entry: clone(entry)
+    };
+  }
+
+  async getCreditTopupByPaymentId(
+    serviceId: string,
+    paymentId: string
+  ): Promise<{ account: CreditAccountRecord; entry: CreditLedgerEntryRecord } | null> {
+    const entryId = this.creditTopupEntryIdByPaymentKey.get(creditTopupKey(serviceId, paymentId));
+    if (!entryId) {
+      return null;
+    }
+
+    const entry = this.creditEntriesById.get(entryId);
+    if (!entry) {
+      return null;
+    }
+
+    const account = this.creditAccountsById.get(entry.accountId);
+    if (!account) {
+      return null;
+    }
+
+    return {
+      account: clone(account),
+      entry: clone(entry)
+    };
+  }
+
+  async getCreditAccount(serviceId: string, buyerWallet: string, currency: "fastUSDC" | "testUSDC"): Promise<CreditAccountRecord | null> {
+    const accountId = this.creditAccountIdByKey.get(creditAccountKey(serviceId, buyerWallet, currency));
+    return clone(accountId ? this.creditAccountsById.get(accountId) ?? null : null);
+  }
+
+  async reserveCredit(input: {
+    serviceId: string;
+    buyerWallet: string;
+    currency: "fastUSDC" | "testUSDC";
+    amount: string;
+    idempotencyKey: string;
+    providerReference?: string | null;
+    expiresAt: string;
+    metadata?: Record<string, unknown>;
+  }): Promise<{ account: CreditAccountRecord; reservation: CreditReservationRecord; entry: CreditLedgerEntryRecord }> {
+    const existingReservationId = this.creditReservationIdByIdempotencyKey.get(
+      creditReservationKey(input.serviceId, input.idempotencyKey)
+    );
+    if (existingReservationId) {
+      const existingReservation = this.creditReservationsById.get(existingReservationId);
+      if (!existingReservation) {
+        throw new Error(`Credit reservation not found: ${existingReservationId}`);
+      }
+      if (existingReservation.status === "reserved" && Date.parse(existingReservation.expiresAt) <= Date.now()) {
+        await this.expireCreditReservation(existingReservation.id);
+      }
+      const reservation = this.creditReservationsById.get(existingReservationId);
+      if (!reservation) {
+        throw new Error(`Credit reservation not found: ${existingReservationId}`);
+      }
+      const account = this.creditAccountsById.get(reservation.accountId);
+      if (!account) {
+        throw new Error(`Credit account not found: ${reservation.accountId}`);
+      }
+      const entry = Array.from(this.creditEntriesById.values()).find(
+        (candidate) => candidate.reservationId === reservation.id && candidate.kind === "reserve"
+      );
+      if (!entry) {
+        throw new Error(`Credit reserve entry not found: ${reservation.id}`);
+      }
+      return {
+        account: clone(account),
+        reservation: clone(reservation),
+        entry: clone(entry)
+      };
+    }
+
+    const account = await this.getCreditAccount(input.serviceId, input.buyerWallet, input.currency);
+    if (!account) {
+      throw new Error("Credit account not found.");
+    }
+    if (BigInt(account.availableAmount) < BigInt(input.amount)) {
+      throw new Error("Insufficient prepaid credit.");
+    }
+
+    const updatedAccount: CreditAccountRecord = {
+      ...account,
+      availableAmount: (BigInt(account.availableAmount) - BigInt(input.amount)).toString(),
+      reservedAmount: (BigInt(account.reservedAmount) + BigInt(input.amount)).toString(),
+      updatedAt: timestamp()
+    };
+    this.creditAccountsById.set(updatedAccount.id, updatedAccount);
+
+    const reservation: CreditReservationRecord = {
+      id: randomUUID(),
+      accountId: updatedAccount.id,
+      serviceId: input.serviceId,
+      buyerWallet: input.buyerWallet,
+      currency: input.currency,
+      idempotencyKey: input.idempotencyKey,
+      providerReference: input.providerReference ?? null,
+      status: "reserved",
+      reservedAmount: input.amount,
+      capturedAmount: "0",
+      expiresAt: input.expiresAt,
+      createdAt: timestamp(),
+      updatedAt: timestamp()
+    };
+    this.creditReservationsById.set(reservation.id, reservation);
+    this.creditReservationIdByIdempotencyKey.set(creditReservationKey(input.serviceId, input.idempotencyKey), reservation.id);
+
+    const entry: CreditLedgerEntryRecord = {
+      id: randomUUID(),
+      accountId: updatedAccount.id,
+      serviceId: input.serviceId,
+      buyerWallet: input.buyerWallet,
+      currency: input.currency,
+      kind: "reserve",
+      amount: input.amount,
+      reservationId: reservation.id,
+      paymentId: null,
+      metadata: clone(input.metadata ?? {}),
+      createdAt: timestamp()
+    };
+    this.creditEntriesById.set(entry.id, entry);
+
+    return {
+      account: clone(updatedAccount),
+      reservation: clone(reservation),
+      entry: clone(entry)
+    };
+  }
+
+  async captureCreditReservation(input: {
+    reservationId: string;
+    amount: string;
+    metadata?: Record<string, unknown>;
+  }): Promise<{
+    account: CreditAccountRecord;
+    reservation: CreditReservationRecord;
+    captureEntry: CreditLedgerEntryRecord;
+    releaseEntry: CreditLedgerEntryRecord | null;
+  }> {
+    const existing = this.creditReservationsById.get(input.reservationId);
+    if (!existing) {
+      throw new Error(`Credit reservation not found: ${input.reservationId}`);
+    }
+    if (existing.status === "reserved" && Date.parse(existing.expiresAt) <= Date.now()) {
+      await this.expireCreditReservation(existing.id);
+    }
+    const reservation = this.creditReservationsById.get(input.reservationId);
+    if (!reservation) {
+      throw new Error(`Credit reservation not found: ${input.reservationId}`);
+    }
+    const account = this.creditAccountsById.get(reservation.accountId);
+    if (!account) {
+      throw new Error(`Credit account not found: ${reservation.accountId}`);
+    }
+    if (reservation.status === "captured") {
+      const captureEntry = Array.from(this.creditEntriesById.values()).find(
+        (entry) => entry.reservationId === reservation.id && entry.kind === "capture"
+      );
+      if (!captureEntry) {
+        throw new Error(`Capture entry not found for ${reservation.id}`);
+      }
+      const releaseEntry = Array.from(this.creditEntriesById.values()).find(
+        (entry) => entry.reservationId === reservation.id && entry.kind === "release"
+      ) ?? null;
+      return {
+        account: clone(account),
+        reservation: clone(reservation),
+        captureEntry: clone(captureEntry),
+        releaseEntry: clone(releaseEntry)
+      };
+    }
+    if (reservation.status !== "reserved") {
+      throw new Error(`Credit reservation cannot be captured from status ${reservation.status}.`);
+    }
+    if (BigInt(input.amount) > BigInt(reservation.reservedAmount)) {
+      throw new Error("Captured amount cannot exceed reserved amount.");
+    }
+
+    const remainder = (BigInt(reservation.reservedAmount) - BigInt(input.amount)).toString();
+    const updatedAccount: CreditAccountRecord = {
+      ...account,
+      availableAmount: (BigInt(account.availableAmount) + BigInt(remainder)).toString(),
+      reservedAmount: (BigInt(account.reservedAmount) - BigInt(reservation.reservedAmount)).toString(),
+      updatedAt: timestamp()
+    };
+    this.creditAccountsById.set(updatedAccount.id, updatedAccount);
+
+    const updatedReservation: CreditReservationRecord = {
+      ...reservation,
+      status: "captured",
+      capturedAmount: input.amount,
+      updatedAt: timestamp()
+    };
+    this.creditReservationsById.set(updatedReservation.id, updatedReservation);
+
+    const captureEntry: CreditLedgerEntryRecord = {
+      id: randomUUID(),
+      accountId: updatedAccount.id,
+      serviceId: updatedReservation.serviceId,
+      buyerWallet: updatedReservation.buyerWallet,
+      currency: updatedReservation.currency,
+      kind: "capture",
+      amount: input.amount,
+      reservationId: updatedReservation.id,
+      paymentId: null,
+      metadata: clone(input.metadata ?? {}),
+      createdAt: timestamp()
+    };
+    this.creditEntriesById.set(captureEntry.id, captureEntry);
+
+    let releaseEntry: CreditLedgerEntryRecord | null = null;
+    if (BigInt(remainder) > 0n) {
+      releaseEntry = {
+        id: randomUUID(),
+        accountId: updatedAccount.id,
+        serviceId: updatedReservation.serviceId,
+        buyerWallet: updatedReservation.buyerWallet,
+        currency: updatedReservation.currency,
+        kind: "release",
+        amount: remainder,
+        reservationId: updatedReservation.id,
+        paymentId: null,
+        metadata: clone(input.metadata ?? {}),
+        createdAt: timestamp()
+      };
+      this.creditEntriesById.set(releaseEntry.id, releaseEntry);
+    }
+
+    return {
+      account: clone(updatedAccount),
+      reservation: clone(updatedReservation),
+      captureEntry: clone(captureEntry),
+      releaseEntry: clone(releaseEntry)
+    };
+  }
+
+  async releaseCreditReservation(input: {
+    reservationId: string;
+    metadata?: Record<string, unknown>;
+  }): Promise<{ account: CreditAccountRecord; reservation: CreditReservationRecord; entry: CreditLedgerEntryRecord | null }> {
+    const existing = this.creditReservationsById.get(input.reservationId);
+    if (!existing) {
+      throw new Error(`Credit reservation not found: ${input.reservationId}`);
+    }
+    const account = this.creditAccountsById.get(existing.accountId);
+    if (!account) {
+      throw new Error(`Credit account not found: ${existing.accountId}`);
+    }
+    if (existing.status !== "reserved") {
+      return {
+        account: clone(account),
+        reservation: clone(existing),
+        entry: null
+      };
+    }
+
+    const updatedAccount: CreditAccountRecord = {
+      ...account,
+      availableAmount: (BigInt(account.availableAmount) + BigInt(existing.reservedAmount)).toString(),
+      reservedAmount: (BigInt(account.reservedAmount) - BigInt(existing.reservedAmount)).toString(),
+      updatedAt: timestamp()
+    };
+    this.creditAccountsById.set(updatedAccount.id, updatedAccount);
+
+    const updatedReservation: CreditReservationRecord = {
+      ...existing,
+      status: "released",
+      updatedAt: timestamp()
+    };
+    this.creditReservationsById.set(updatedReservation.id, updatedReservation);
+
+    const entry: CreditLedgerEntryRecord = {
+      id: randomUUID(),
+      accountId: updatedAccount.id,
+      serviceId: updatedReservation.serviceId,
+      buyerWallet: updatedReservation.buyerWallet,
+      currency: updatedReservation.currency,
+      kind: "release",
+      amount: existing.reservedAmount,
+      reservationId: updatedReservation.id,
+      paymentId: null,
+      metadata: clone(input.metadata ?? {}),
+      createdAt: timestamp()
+    };
+    this.creditEntriesById.set(entry.id, entry);
+
+    return {
+      account: clone(updatedAccount),
+      reservation: clone(updatedReservation),
+      entry: clone(entry)
+    };
+  }
+
+  async expireCreditReservation(reservationId: string): Promise<{
+    account: CreditAccountRecord;
+    reservation: CreditReservationRecord;
+    entry: CreditLedgerEntryRecord | null;
+  }> {
+    const existing = this.creditReservationsById.get(reservationId);
+    if (!existing) {
+      throw new Error(`Credit reservation not found: ${reservationId}`);
+    }
+    if (existing.status !== "reserved") {
+      const account = this.creditAccountsById.get(existing.accountId);
+      if (!account) {
+        throw new Error(`Credit account not found: ${existing.accountId}`);
+      }
+      return {
+        account: clone(account),
+        reservation: clone(existing),
+        entry: null
+      };
+    }
+
+    const released = await this.releaseCreditReservation({
+      reservationId,
+      metadata: {
+        reason: "expired"
+      }
+    });
+    const expiredReservation: CreditReservationRecord = {
+      ...released.reservation,
+      status: "expired",
+      updatedAt: timestamp()
+    };
+    this.creditReservationsById.set(expiredReservation.id, expiredReservation);
+    return {
+      account: clone(released.account),
+      reservation: clone(expiredReservation),
+      entry: clone(released.entry)
+    };
+  }
+
+  async getCreditReservationById(reservationId: string): Promise<CreditReservationRecord | null> {
+    return clone(this.creditReservationsById.get(reservationId) ?? null);
+  }
+
+  async rotateProviderRuntimeKey(serviceId: string, wallet: string, secretMaterial: {
+    keyHash: string;
+    keyPrefix: string;
+    ciphertext: string;
+    iv: string;
+    authTag: string;
+  }): Promise<ProviderRuntimeKeyRecord> {
+    const detail = await this.getProviderServiceForOwner(serviceId, wallet);
+    if (!detail) {
+      throw new Error("Provider service not found.");
+    }
+
+    const record: ProviderRuntimeKeyRecord = {
+      id: randomUUID(),
+      serviceId,
+      keyPrefix: secretMaterial.keyPrefix,
+      keyHash: secretMaterial.keyHash,
+      secretCiphertext: secretMaterial.ciphertext,
+      iv: secretMaterial.iv,
+      authTag: secretMaterial.authTag,
+      createdAt: timestamp(),
+      updatedAt: timestamp()
+    };
+    this.providerRuntimeKeysByServiceId.set(serviceId, record);
+    return clone(record);
+  }
+
+  async getProviderRuntimeKeyForOwner(serviceId: string, wallet: string): Promise<ProviderRuntimeKeyRecord | null> {
+    const detail = await this.getProviderServiceForOwner(serviceId, wallet);
+    if (!detail) {
+      return null;
+    }
+    return clone(this.providerRuntimeKeysByServiceId.get(serviceId) ?? null);
+  }
+
+  async getProviderRuntimeKeyByPlaintext(plaintextKey: string): Promise<ProviderRuntimeKeyRecord | null> {
+    const keyHash = hashProviderRuntimeKey(plaintextKey);
+    const match = Array.from(this.providerRuntimeKeysByServiceId.values()).find((record) => record.keyHash === keyHash);
+    return clone(match ?? null);
+  }
+
   async getServiceAnalytics(routeIds: string[]): Promise<ServiceAnalytics> {
     return computeServiceAnalytics({
       routeIds,
@@ -786,6 +1672,7 @@ export class InMemoryMarketplaceStore implements MarketplaceStore {
     const secretRef = secretMaterial
       ? this.createProviderSecretRecord(detail.account.id, secretMaterial).id
       : null;
+    const billing = createDraftRouteBilling(input);
 
     const record: ProviderEndpointDraftRecord = {
       id: randomUUID(),
@@ -794,20 +1681,21 @@ export class InMemoryMarketplaceStore implements MarketplaceStore {
       operation: input.operation,
       title: input.title,
       description: input.description,
-      price: input.price,
+      price: billing.price,
+      billing: billing.billing,
       mode: input.mode,
       requestSchemaJson: clone(input.requestSchemaJson),
       responseSchemaJson: clone(input.responseSchemaJson),
       requestExample: clone(input.requestExample),
       responseExample: clone(input.responseExample),
       usageNotes: input.usageNotes ?? null,
-      executorKind: "http",
-      upstreamBaseUrl: input.upstreamBaseUrl,
-      upstreamPath: input.upstreamPath,
-      upstreamAuthMode: input.upstreamAuthMode,
+      executorKind: billing.billing.type === "topup_x402_variable" ? "marketplace" : "http",
+      upstreamBaseUrl: input.upstreamBaseUrl ?? null,
+      upstreamPath: input.upstreamPath ?? null,
+      upstreamAuthMode: input.upstreamAuthMode ?? null,
       upstreamAuthHeaderName: input.upstreamAuthHeaderName ?? null,
-      upstreamSecretRef: secretRef,
-      hasUpstreamSecret: Boolean(secretRef),
+      upstreamSecretRef: billing.billing.type === "topup_x402_variable" ? null : secretRef,
+      hasUpstreamSecret: billing.billing.type === "topup_x402_variable" ? false : Boolean(secretRef),
       payout: {
         providerAccountId: detail.account.id,
         providerWallet: detail.service.payoutWallet,
@@ -853,6 +1741,12 @@ export class InMemoryMarketplaceStore implements MarketplaceStore {
     if (secretMaterial) {
       secretRef = this.createProviderSecretRecord(detail.account.id, secretMaterial).id;
     }
+    const billing = createDraftRouteBilling({
+      billingType: input.billingType ?? existing.billing.type,
+      price: input.price ?? existing.price,
+      minAmount: input.minAmount ?? (existing.billing.type === "topup_x402_variable" ? existing.billing.minAmount : null),
+      maxAmount: input.maxAmount ?? (existing.billing.type === "topup_x402_variable" ? existing.billing.maxAmount : null)
+    });
 
     const updated: ProviderEndpointDraftRecord = {
       ...existing,
@@ -860,21 +1754,25 @@ export class InMemoryMarketplaceStore implements MarketplaceStore {
       operation: nextOperation,
       title: input.title ?? existing.title,
       description: input.description ?? existing.description,
-      price: input.price ?? existing.price,
+      price: billing.price,
+      billing: billing.billing,
       requestSchemaJson: input.requestSchemaJson ? clone(input.requestSchemaJson) : existing.requestSchemaJson,
       responseSchemaJson: input.responseSchemaJson ? clone(input.responseSchemaJson) : existing.responseSchemaJson,
       requestExample: input.requestExample === undefined ? existing.requestExample : clone(input.requestExample),
       responseExample: input.responseExample === undefined ? existing.responseExample : clone(input.responseExample),
       usageNotes: input.usageNotes === undefined ? existing.usageNotes : input.usageNotes,
-      upstreamBaseUrl: input.upstreamBaseUrl ?? existing.upstreamBaseUrl,
-      upstreamPath: input.upstreamPath ?? existing.upstreamPath,
-      upstreamAuthMode: input.upstreamAuthMode ?? existing.upstreamAuthMode,
+      executorKind: billing.billing.type === "topup_x402_variable" ? "marketplace" : "http",
+      upstreamBaseUrl: billing.billing.type === "topup_x402_variable" ? null : input.upstreamBaseUrl ?? existing.upstreamBaseUrl,
+      upstreamPath: billing.billing.type === "topup_x402_variable" ? null : input.upstreamPath ?? existing.upstreamPath,
+      upstreamAuthMode: billing.billing.type === "topup_x402_variable" ? null : input.upstreamAuthMode ?? existing.upstreamAuthMode,
       upstreamAuthHeaderName:
-        input.upstreamAuthHeaderName === undefined
+        billing.billing.type === "topup_x402_variable"
+          ? null
+          : input.upstreamAuthHeaderName === undefined
           ? existing.upstreamAuthHeaderName
           : input.upstreamAuthHeaderName,
-      upstreamSecretRef: secretRef,
-      hasUpstreamSecret: Boolean(secretRef),
+      upstreamSecretRef: billing.billing.type === "topup_x402_variable" ? null : secretRef,
+      hasUpstreamSecret: billing.billing.type === "topup_x402_variable" ? false : Boolean(secretRef),
       payout: {
         providerAccountId: detail.account.id,
         providerWallet: detail.service.payoutWallet,
@@ -1003,6 +1901,7 @@ export class InMemoryMarketplaceStore implements MarketplaceStore {
       mode: endpoint.mode,
       network: network.paymentNetwork,
       price: endpoint.price,
+      billing: clone(endpoint.billing),
       title: endpoint.title,
       description: endpoint.description,
       payout: clone(endpoint.payout),
@@ -1387,6 +2286,7 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
         buyer_wallet TEXT NOT NULL,
         route_id TEXT NOT NULL,
         route_version TEXT NOT NULL,
+        pending_recovery_action TEXT NOT NULL DEFAULT 'retry',
         quoted_price TEXT NOT NULL,
         payout_split JSONB NOT NULL DEFAULT '{}'::jsonb,
         payment_payload TEXT NOT NULL,
@@ -1395,10 +2295,23 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
         response_status_code INTEGER NOT NULL,
         response_body JSONB NOT NULL,
         response_headers JSONB NOT NULL DEFAULT '{}'::jsonb,
+        provider_payout_source_kind TEXT,
         job_token TEXT,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
+
+      ALTER TABLE idempotency_records
+      ADD COLUMN IF NOT EXISTS provider_payout_source_kind TEXT;
+
+      ALTER TABLE idempotency_records
+      ADD COLUMN IF NOT EXISTS execution_status TEXT NOT NULL DEFAULT 'completed';
+
+      ALTER TABLE idempotency_records
+      ADD COLUMN IF NOT EXISTS request_id TEXT;
+
+      ALTER TABLE idempotency_records
+      ADD COLUMN IF NOT EXISTS pending_recovery_action TEXT;
 
       CREATE TABLE IF NOT EXISTS jobs (
         job_token TEXT PRIMARY KEY,
@@ -1527,6 +2440,7 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
         title TEXT NOT NULL,
         description TEXT NOT NULL,
         price TEXT NOT NULL,
+        billing JSONB NOT NULL DEFAULT '{}'::jsonb,
         mode TEXT NOT NULL,
         request_schema_json JSONB NOT NULL,
         response_schema_json JSONB NOT NULL,
@@ -1593,6 +2507,7 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
         mode TEXT NOT NULL,
         network TEXT NOT NULL,
         price TEXT NOT NULL,
+        billing JSONB NOT NULL DEFAULT '{}'::jsonb,
         title TEXT NOT NULL,
         description TEXT NOT NULL,
         payout JSONB NOT NULL,
@@ -1622,6 +2537,156 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
 
+      CREATE TABLE IF NOT EXISTS provider_payouts (
+        id TEXT PRIMARY KEY,
+        source_kind TEXT NOT NULL,
+        source_id TEXT NOT NULL,
+        provider_account_id TEXT NOT NULL REFERENCES provider_accounts(id),
+        provider_wallet TEXT NOT NULL,
+        currency TEXT NOT NULL,
+        amount TEXT NOT NULL,
+        status TEXT NOT NULL,
+        tx_hash TEXT,
+        sent_at TIMESTAMPTZ,
+        attempt_count INTEGER NOT NULL DEFAULT 0,
+        last_error TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE(source_kind, source_id)
+      );
+
+      CREATE TABLE IF NOT EXISTS credit_accounts (
+        id TEXT PRIMARY KEY,
+        service_id TEXT NOT NULL REFERENCES provider_services(id) ON DELETE CASCADE,
+        buyer_wallet TEXT NOT NULL,
+        currency TEXT NOT NULL,
+        available_amount TEXT NOT NULL,
+        reserved_amount TEXT NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE(service_id, buyer_wallet, currency)
+      );
+
+      CREATE TABLE IF NOT EXISTS credit_reservations (
+        id TEXT PRIMARY KEY,
+        account_id TEXT NOT NULL REFERENCES credit_accounts(id) ON DELETE CASCADE,
+        service_id TEXT NOT NULL REFERENCES provider_services(id) ON DELETE CASCADE,
+        buyer_wallet TEXT NOT NULL,
+        currency TEXT NOT NULL,
+        idempotency_key TEXT NOT NULL,
+        provider_reference TEXT,
+        status TEXT NOT NULL,
+        reserved_amount TEXT NOT NULL,
+        captured_amount TEXT NOT NULL,
+        expires_at TIMESTAMPTZ NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE(service_id, idempotency_key)
+      );
+
+      CREATE TABLE IF NOT EXISTS credit_ledger_entries (
+        id TEXT PRIMARY KEY,
+        account_id TEXT NOT NULL REFERENCES credit_accounts(id) ON DELETE CASCADE,
+        service_id TEXT NOT NULL REFERENCES provider_services(id) ON DELETE CASCADE,
+        buyer_wallet TEXT NOT NULL,
+        currency TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        amount TEXT NOT NULL,
+        reservation_id TEXT REFERENCES credit_reservations(id) ON DELETE SET NULL,
+        payment_id TEXT,
+        metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+
+      WITH ranked_credit_topups AS (
+        SELECT
+          ctid,
+          account_id,
+          ROW_NUMBER() OVER (
+            PARTITION BY service_id, payment_id
+            ORDER BY created_at ASC, id ASC
+          ) AS row_num
+        FROM credit_ledger_entries
+        WHERE kind = 'topup'
+          AND payment_id IS NOT NULL
+      ),
+      duplicate_credit_topups AS (
+        SELECT ctid, account_id
+        FROM ranked_credit_topups
+        WHERE row_num > 1
+      ),
+      deleted_credit_topups AS (
+        DELETE FROM credit_ledger_entries
+        WHERE ctid IN (
+          SELECT ctid
+          FROM duplicate_credit_topups
+        )
+        RETURNING account_id
+      ),
+      affected_credit_accounts AS (
+        SELECT DISTINCT account_id
+        FROM duplicate_credit_topups
+        UNION
+        SELECT DISTINCT account_id
+        FROM deleted_credit_topups
+      ),
+      recomputed_credit_accounts AS (
+        SELECT
+          accounts.id AS account_id,
+          COALESCE(
+            SUM(
+              CASE
+                WHEN entries.kind = 'topup' THEN entries.amount::numeric
+                WHEN entries.kind = 'reserve' THEN -entries.amount::numeric
+                WHEN entries.kind = 'release' THEN entries.amount::numeric
+                ELSE 0::numeric
+              END
+            ),
+            0::numeric
+          )::text AS available_amount,
+          COALESCE(
+            SUM(
+              CASE
+                WHEN entries.kind = 'reserve' THEN entries.amount::numeric
+                WHEN entries.kind IN ('capture', 'release') THEN -entries.amount::numeric
+                ELSE 0::numeric
+              END
+            ),
+            0::numeric
+          )::text AS reserved_amount
+        FROM credit_accounts accounts
+        LEFT JOIN credit_ledger_entries entries
+          ON entries.account_id = accounts.id
+        WHERE accounts.id IN (
+          SELECT account_id
+          FROM affected_credit_accounts
+        )
+        GROUP BY accounts.id
+      )
+      UPDATE credit_accounts
+      SET
+        available_amount = recomputed_credit_accounts.available_amount,
+        reserved_amount = recomputed_credit_accounts.reserved_amount,
+        updated_at = NOW()
+      FROM recomputed_credit_accounts
+      WHERE credit_accounts.id = recomputed_credit_accounts.account_id;
+
+      CREATE UNIQUE INDEX IF NOT EXISTS credit_topup_entries_service_payment_idx
+      ON credit_ledger_entries(service_id, payment_id)
+      WHERE kind = 'topup' AND payment_id IS NOT NULL;
+
+      CREATE TABLE IF NOT EXISTS provider_runtime_keys (
+        id TEXT PRIMARY KEY,
+        service_id TEXT NOT NULL UNIQUE REFERENCES provider_services(id) ON DELETE CASCADE,
+        key_prefix TEXT NOT NULL,
+        key_hash TEXT NOT NULL,
+        secret_ciphertext TEXT NOT NULL,
+        iv TEXT NOT NULL,
+        auth_tag TEXT NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+
       ALTER TABLE jobs
       ADD COLUMN IF NOT EXISTS route_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb;
 
@@ -1633,6 +2698,43 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
 
       ALTER TABLE service_suggestions
       ADD COLUMN IF NOT EXISTS claimed_at TIMESTAMPTZ;
+
+      ALTER TABLE provider_endpoint_drafts
+      ADD COLUMN IF NOT EXISTS billing JSONB NOT NULL DEFAULT '{}'::jsonb;
+
+      ALTER TABLE published_endpoint_versions
+      ADD COLUMN IF NOT EXISTS billing JSONB NOT NULL DEFAULT '{}'::jsonb;
+
+      UPDATE idempotency_records records
+      SET pending_recovery_action = CASE
+        WHEN published.executor_kind IN ('mock', 'tavily', 'marketplace') THEN 'retry'
+        ELSE 'refund'
+      END
+      FROM (
+        SELECT DISTINCT ON (route_id) route_id, executor_kind
+        FROM published_endpoint_versions
+        ORDER BY route_id, updated_at DESC, created_at DESC
+      ) AS published
+      WHERE records.pending_recovery_action IS NULL
+        AND records.route_id = published.route_id;
+
+      UPDATE idempotency_records
+      SET pending_recovery_action = 'refund'
+      WHERE pending_recovery_action IS NULL;
+
+      ALTER TABLE idempotency_records
+      ALTER COLUMN pending_recovery_action SET DEFAULT 'retry';
+
+      ALTER TABLE idempotency_records
+      ALTER COLUMN pending_recovery_action SET NOT NULL;
+
+      UPDATE provider_endpoint_drafts
+      SET billing = jsonb_build_object('type', 'fixed_x402', 'price', price)
+      WHERE billing = '{}'::jsonb;
+
+      UPDATE published_endpoint_versions
+      SET billing = jsonb_build_object('type', 'fixed_x402', 'price', price)
+      WHERE billing = '{}'::jsonb;
 
       ALTER TABLE refunds
       ALTER COLUMN job_token DROP NOT NULL;
@@ -1921,12 +3023,12 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
         await client.query(
           `
           INSERT INTO provider_endpoint_drafts (
-            id, service_id, route_id, operation, title, description, price, mode, request_schema_json, response_schema_json,
+            id, service_id, route_id, operation, title, description, price, billing, mode, request_schema_json, response_schema_json,
             request_example, response_example, usage_notes, executor_kind, upstream_base_url, upstream_path,
             upstream_auth_mode, upstream_auth_header_name, upstream_secret_ref, payout, created_at, updated_at
           ) VALUES (
-            $1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb, $11::jsonb, $12::jsonb, $13, $14, $15, $16,
-            $17, $18, $19, $20::jsonb, $21, $22
+            $1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10::jsonb, $11::jsonb, $12::jsonb, $13::jsonb, $14, $15, $16, $17,
+            $18, $19, $20, $21::jsonb, $22, $23
           )
           ON CONFLICT (id) DO UPDATE SET
             route_id = EXCLUDED.route_id,
@@ -1934,6 +3036,7 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
             title = EXCLUDED.title,
             description = EXCLUDED.description,
             price = EXCLUDED.price,
+            billing = EXCLUDED.billing,
             mode = EXCLUDED.mode,
             request_schema_json = EXCLUDED.request_schema_json,
             response_schema_json = EXCLUDED.response_schema_json,
@@ -1957,6 +3060,7 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
             endpoint.title,
             endpoint.description,
             endpoint.price,
+            JSON.stringify(endpoint.billing),
             endpoint.mode,
             JSON.stringify(endpoint.requestSchemaJson),
             JSON.stringify(endpoint.responseSchemaJson),
@@ -2034,12 +3138,12 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
           `
           INSERT INTO published_endpoint_versions (
             endpoint_version_id, service_id, service_version_id, endpoint_draft_id, route_id, provider, operation,
-            version, mode, network, price, title, description, payout, request_example, response_example, usage_notes,
+            version, mode, network, price, billing, title, description, payout, request_example, response_example, usage_notes,
             request_schema_json, response_schema_json, executor_kind, upstream_base_url, upstream_path, upstream_auth_mode,
             upstream_auth_header_name, upstream_secret_ref, created_at, updated_at
           ) VALUES (
-            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14::jsonb, $15::jsonb, $16::jsonb, $17,
-            $18::jsonb, $19::jsonb, $20, $21, $22, $23, $24, $25, $26, $27
+            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb, $13, $14, $15::jsonb, $16::jsonb, $17::jsonb, $18,
+            $19::jsonb, $20::jsonb, $21, $22, $23, $24, $25, $26, $27, $28
           )
           ON CONFLICT (endpoint_version_id) DO UPDATE SET
             route_id = EXCLUDED.route_id,
@@ -2049,6 +3153,7 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
             mode = EXCLUDED.mode,
             network = EXCLUDED.network,
             price = EXCLUDED.price,
+            billing = EXCLUDED.billing,
             title = EXCLUDED.title,
             description = EXCLUDED.description,
             payout = EXCLUDED.payout,
@@ -2077,6 +3182,7 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
             endpoint.mode,
             endpoint.network,
             endpoint.price,
+            JSON.stringify(endpoint.billing),
             endpoint.title,
             endpoint.description,
             JSON.stringify(endpoint.payout),
@@ -2111,14 +3217,130 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
     return result.rowCount ? mapIdempotencyRow(result.rows[0]) : null;
   }
 
+  async claimPaymentExecution(input: ClaimPaymentExecutionInput): Promise<ClaimPaymentExecutionResult> {
+    try {
+      const result = await this.pool.query(
+        `
+        INSERT INTO idempotency_records (
+          payment_id, normalized_request_hash, buyer_wallet, route_id, route_version,
+          pending_recovery_action, quoted_price, payout_split, payment_payload, facilitator_response, response_kind,
+          response_status_code, response_body, response_headers, provider_payout_source_kind,
+          execution_status, request_id, job_token
+        ) VALUES (
+          $1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10::jsonb, $11,
+          202, $12::jsonb, $13::jsonb, NULL, 'pending', $14, $15
+        )
+        RETURNING *
+        `,
+        [
+          input.paymentId,
+          input.normalizedRequestHash,
+          input.buyerWallet,
+          input.routeId,
+          input.routeVersion,
+          input.pendingRecoveryAction,
+          input.quotedPrice,
+          JSON.stringify(input.payoutSplit),
+          input.paymentPayload,
+          JSON.stringify(input.facilitatorResponse),
+          input.responseKind,
+          JSON.stringify(input.responseBody ?? { status: "processing" }),
+          JSON.stringify(input.responseHeaders ?? {}),
+          input.requestId,
+          input.jobToken ?? null
+        ]
+      );
+
+      return {
+        record: mapIdempotencyRow(result.rows[0]),
+        created: true
+      };
+    } catch (error) {
+      const pgError = error as { code?: string };
+      if (pgError.code !== "23505") {
+        throw error;
+      }
+
+      const existing = await this.getIdempotencyByPaymentId(input.paymentId);
+      if (!existing) {
+        throw error;
+      }
+
+      return {
+        record: existing,
+        created: false
+      };
+    }
+  }
+
+  async touchPendingPaymentExecution(paymentId: string): Promise<IdempotencyRecord | null> {
+    const result = await this.pool.query(
+      `
+      UPDATE idempotency_records
+      SET updated_at = NOW()
+      WHERE payment_id = $1
+        AND execution_status = 'pending'
+      RETURNING *
+      `,
+      [paymentId]
+    );
+    if (result.rowCount) {
+      return mapIdempotencyRow(result.rows[0]);
+    }
+
+    return this.getIdempotencyByPaymentId(paymentId);
+  }
+
+  async listStalePendingPaymentExecutions(updatedBefore: string, limit: number): Promise<IdempotencyRecord[]> {
+    if (limit <= 0) {
+      return [];
+    }
+
+    const result = await this.pool.query(
+      `
+      SELECT *
+      FROM idempotency_records
+      WHERE execution_status = 'pending'
+        AND updated_at <= $1
+      ORDER BY updated_at ASC
+      LIMIT $2
+      `,
+      [updatedBefore, limit]
+    );
+    return result.rows.map(mapIdempotencyRow);
+  }
+
   async saveSyncIdempotency(input: SaveSyncIdempotencyInput): Promise<IdempotencyRecord> {
     const result = await this.pool.query(
       `
       INSERT INTO idempotency_records (
         payment_id, normalized_request_hash, buyer_wallet, route_id, route_version,
-        quoted_price, payout_split, payment_payload, facilitator_response, response_kind,
-        response_status_code, response_body, response_headers
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9::jsonb, 'sync', $10, $11::jsonb, $12::jsonb)
+        pending_recovery_action, quoted_price, payout_split, payment_payload, facilitator_response, response_kind,
+        response_status_code, response_body, response_headers, provider_payout_source_kind,
+        execution_status, request_id, job_token
+      ) VALUES (
+        $1, $2, $3, $4, $5, 'retry', $6, $7::jsonb, $8, $9::jsonb, 'sync', $10, $11::jsonb, $12::jsonb, $13,
+        'completed', $14, NULL
+      )
+      ON CONFLICT (payment_id) DO UPDATE
+      SET
+        normalized_request_hash = EXCLUDED.normalized_request_hash,
+        buyer_wallet = EXCLUDED.buyer_wallet,
+        route_id = EXCLUDED.route_id,
+        route_version = EXCLUDED.route_version,
+        pending_recovery_action = COALESCE(idempotency_records.pending_recovery_action, EXCLUDED.pending_recovery_action),
+        quoted_price = EXCLUDED.quoted_price,
+        payout_split = EXCLUDED.payout_split,
+        payment_payload = EXCLUDED.payment_payload,
+        facilitator_response = EXCLUDED.facilitator_response,
+        response_kind = 'sync',
+        response_status_code = EXCLUDED.response_status_code,
+        response_body = EXCLUDED.response_body,
+        response_headers = EXCLUDED.response_headers,
+        provider_payout_source_kind = EXCLUDED.provider_payout_source_kind,
+        execution_status = 'completed',
+        request_id = COALESCE(idempotency_records.request_id, EXCLUDED.request_id),
+        updated_at = NOW()
       RETURNING *
       `,
       [
@@ -2133,7 +3355,9 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
         JSON.stringify(input.facilitatorResponse),
         input.statusCode,
         JSON.stringify(input.body),
-        JSON.stringify(input.headers ?? {})
+        JSON.stringify(input.headers ?? {}),
+        input.providerPayoutSourceKind ?? null,
+        input.requestId ?? null
       ]
     );
 
@@ -2149,9 +3373,29 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
         `
         INSERT INTO idempotency_records (
           payment_id, normalized_request_hash, buyer_wallet, route_id, route_version,
-          quoted_price, payout_split, payment_payload, facilitator_response, response_kind,
-          response_status_code, response_body, response_headers, job_token
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9::jsonb, 'job', 202, $10::jsonb, $11::jsonb, $12)
+          pending_recovery_action, quoted_price, payout_split, payment_payload, facilitator_response, response_kind,
+          response_status_code, response_body, response_headers, job_token, execution_status, request_id
+        ) VALUES ($1, $2, $3, $4, $5, 'retry', $6, $7::jsonb, $8, $9::jsonb, 'job', 202, $10::jsonb, $11::jsonb, $12, 'completed', $13)
+        ON CONFLICT (payment_id) DO UPDATE
+        SET
+          normalized_request_hash = EXCLUDED.normalized_request_hash,
+          buyer_wallet = EXCLUDED.buyer_wallet,
+          route_id = EXCLUDED.route_id,
+          route_version = EXCLUDED.route_version,
+          pending_recovery_action =
+            COALESCE(idempotency_records.pending_recovery_action, EXCLUDED.pending_recovery_action),
+          quoted_price = EXCLUDED.quoted_price,
+          payout_split = EXCLUDED.payout_split,
+          payment_payload = EXCLUDED.payment_payload,
+          facilitator_response = EXCLUDED.facilitator_response,
+          response_kind = 'job',
+          response_status_code = 202,
+          response_body = EXCLUDED.response_body,
+          response_headers = EXCLUDED.response_headers,
+          job_token = COALESCE(idempotency_records.job_token, EXCLUDED.job_token),
+          execution_status = 'completed',
+          request_id = COALESCE(idempotency_records.request_id, EXCLUDED.request_id),
+          updated_at = NOW()
         RETURNING *
         `,
         [
@@ -2166,9 +3410,12 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
           JSON.stringify(input.facilitatorResponse),
           JSON.stringify(input.responseBody),
           JSON.stringify(input.responseHeaders ?? {}),
-          input.jobToken
+          input.jobToken,
+          input.requestId ?? null
         ]
       );
+
+      const persistedIdempotency = mapIdempotencyRow(idempotencyResult.rows[0]);
 
       const jobResult = await client.query(
         `
@@ -2177,10 +3424,12 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
           payout_split, provider_job_id, request_body, route_snapshot, provider_state, status, result_body, error_message,
           refund_status, refund_id
         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10::jsonb, $11::jsonb, $12::jsonb, 'pending', NULL, NULL, 'not_required', NULL)
+        ON CONFLICT (job_token) DO UPDATE
+        SET updated_at = jobs.updated_at
         RETURNING *
         `,
         [
-          input.jobToken,
+          persistedIdempotency.jobToken ?? input.jobToken,
           input.paymentId,
           input.route.routeId,
           input.route.provider,
@@ -2195,9 +3444,26 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
         ]
       );
 
+      await client.query(
+        `
+        INSERT INTO access_grants (id, resource_type, resource_id, wallet, payment_id, metadata)
+        VALUES ($1, 'job', $2, $3, $4, $5::jsonb)
+        ON CONFLICT (resource_type, resource_id, wallet) DO NOTHING
+        `,
+        [
+          randomUUID(),
+          persistedIdempotency.jobToken ?? input.jobToken,
+          input.buyerWallet,
+          input.paymentId,
+          JSON.stringify({
+            routeId: input.route.routeId
+          })
+        ]
+      );
+
       await client.query("COMMIT");
       return {
-        idempotency: mapIdempotencyRow(idempotencyResult.rows[0]),
+        idempotency: persistedIdempotency,
         job: mapJobRow(jobResult.rows[0])
       };
     } catch (error) {
@@ -2429,6 +3695,1202 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
   async getRefundByJobToken(jobToken: string): Promise<RefundRecord | null> {
     const result = await this.pool.query("SELECT * FROM refunds WHERE job_token = $1", [jobToken]);
     return result.rowCount ? mapRefundRow(result.rows[0]) : null;
+  }
+
+  async getRefundByPaymentId(paymentId: string): Promise<RefundRecord | null> {
+    const result = await this.pool.query("SELECT * FROM refunds WHERE payment_id = $1", [paymentId]);
+    return result.rowCount ? mapRefundRow(result.rows[0]) : null;
+  }
+
+  async createProviderPayout(input: ProviderPayoutInput): Promise<ProviderPayoutRecord> {
+    const result = await this.pool.query(
+      `
+      INSERT INTO provider_payouts (
+        id, source_kind, source_id, provider_account_id, provider_wallet, currency, amount, status
+      ) VALUES (
+        $1, $2, $3, $4, $5, $6, $7, 'pending'
+      )
+      ON CONFLICT (source_kind, source_id) DO UPDATE
+      SET updated_at = provider_payouts.updated_at
+      RETURNING *
+      `,
+      [
+        randomUUID(),
+        input.sourceKind,
+        input.sourceId,
+        input.providerAccountId,
+        input.providerWallet,
+        input.currency,
+        input.amount
+      ]
+    );
+    return mapProviderPayoutRow(result.rows[0]);
+  }
+
+  async listRecoverableProviderPayouts(limit: number): Promise<ProviderPayoutInput[]> {
+    if (limit <= 0) {
+      return [];
+    }
+
+    const syncResult = await this.pool.query(
+      `
+      SELECT
+        provider_payout_source_kind AS source_kind,
+        payment_id AS source_id,
+        payout_split->>'providerAccountId' AS provider_account_id,
+        payout_split->>'providerWallet' AS provider_wallet,
+        payout_split->>'currency' AS currency,
+        payout_split->>'providerAmount' AS amount
+      FROM idempotency_records
+      WHERE execution_status = 'completed'
+        AND response_kind = 'sync'
+        AND response_status_code >= 200
+        AND response_status_code < 400
+        AND provider_payout_source_kind IS NOT NULL
+        AND COALESCE(payout_split->>'providerWallet', '') <> ''
+        AND (payout_split->>'providerAmount')::numeric > 0
+        AND NOT EXISTS (
+          SELECT 1
+          FROM provider_payouts
+          WHERE source_kind = idempotency_records.provider_payout_source_kind
+            AND source_id = idempotency_records.payment_id
+        )
+      ORDER BY created_at ASC
+      LIMIT $1
+      `,
+      [limit]
+    );
+    const syncCount = syncResult.rowCount ?? 0;
+
+    if (syncCount >= limit) {
+      return syncResult.rows.map(mapProviderPayoutInputRow);
+    }
+
+    const jobResult = await this.pool.query(
+      `
+      SELECT
+        'route_charge' AS source_kind,
+        job_token AS source_id,
+        payout_split->>'providerAccountId' AS provider_account_id,
+        payout_split->>'providerWallet' AS provider_wallet,
+        payout_split->>'currency' AS currency,
+        payout_split->>'providerAmount' AS amount
+      FROM jobs
+      WHERE status = 'completed'
+        AND COALESCE(payout_split->>'providerWallet', '') <> ''
+        AND (payout_split->>'providerAmount')::numeric > 0
+        AND NOT EXISTS (
+          SELECT 1
+          FROM provider_payouts
+          WHERE source_kind = 'route_charge'
+            AND source_id = jobs.job_token
+        )
+      ORDER BY created_at ASC
+      LIMIT $1
+      `,
+      [limit - syncCount]
+    );
+
+    return [...syncResult.rows, ...jobResult.rows].map(mapProviderPayoutInputRow);
+  }
+
+  async listPendingProviderPayouts(limit: number): Promise<ProviderPayoutRecord[]> {
+    const result = await this.pool.query(
+      `
+      SELECT *
+      FROM provider_payouts
+      WHERE status = 'pending'
+      ORDER BY created_at ASC
+      LIMIT $1
+      `,
+      [limit]
+    );
+    return result.rows.map(mapProviderPayoutRow);
+  }
+
+  async markProviderPayoutSendFailure(payoutIds: string[], errorMessage: string): Promise<void> {
+    if (payoutIds.length === 0) {
+      return;
+    }
+
+    await this.pool.query(
+      `
+      UPDATE provider_payouts
+      SET attempt_count = attempt_count + 1, last_error = $2, updated_at = NOW()
+      WHERE id = ANY($1::text[])
+      `,
+      [payoutIds, errorMessage]
+    );
+  }
+
+  async markProviderPayoutsSent(payoutIds: string[], txHash: string): Promise<ProviderPayoutRecord[]> {
+    if (payoutIds.length === 0) {
+      return [];
+    }
+
+    const result = await this.pool.query(
+      `
+      UPDATE provider_payouts
+      SET
+        status = 'sent',
+        tx_hash = $2,
+        sent_at = NOW(),
+        attempt_count = attempt_count + 1,
+        last_error = NULL,
+        updated_at = NOW()
+      WHERE id = ANY($1::text[])
+      RETURNING *
+      `,
+      [payoutIds, txHash]
+    );
+    return result.rows.map(mapProviderPayoutRow);
+  }
+
+  async completeCreditTopupCharge(
+    input: CompleteCreditTopupChargeInput
+  ): Promise<{ idempotency: IdempotencyRecord; account: CreditAccountRecord; entry: CreditLedgerEntryRecord }> {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+
+      const accountResult = await client.query(
+        `
+        INSERT INTO credit_accounts (
+          id, service_id, buyer_wallet, currency, available_amount, reserved_amount
+        ) VALUES (
+          $1, $2, $3, $4, '0', '0'
+        )
+        ON CONFLICT (service_id, buyer_wallet, currency) DO UPDATE
+        SET updated_at = NOW()
+        RETURNING *
+        `,
+        [randomUUID(), input.serviceId, input.buyerWallet, input.payoutSplit.currency]
+      );
+
+      let account = mapCreditAccountRow(accountResult.rows[0]);
+
+      const entryResult = await client.query(
+        `
+        INSERT INTO credit_ledger_entries (
+          id, account_id, service_id, buyer_wallet, currency, kind, amount, reservation_id, payment_id, metadata
+        ) VALUES (
+          $1, $2, $3, $4, $5, 'topup', $6, NULL, $7, $8::jsonb
+        )
+        ON CONFLICT DO NOTHING
+        RETURNING *
+        `,
+        [
+          randomUUID(),
+          account.id,
+          input.serviceId,
+          input.buyerWallet,
+          input.payoutSplit.currency,
+          input.quotedPrice,
+          input.paymentId,
+          JSON.stringify(input.metadata ?? {})
+        ]
+      );
+
+      let entry: CreditLedgerEntryRecord;
+      if (entryResult.rowCount) {
+        const updatedAccountResult = await client.query(
+          `
+          UPDATE credit_accounts
+          SET
+            available_amount = (available_amount::numeric + $2::numeric)::text,
+            updated_at = NOW()
+          WHERE id = $1
+          RETURNING *
+          `,
+          [account.id, input.quotedPrice]
+        );
+        account = mapCreditAccountRow(updatedAccountResult.rows[0]);
+        entry = mapCreditLedgerEntryRow(entryResult.rows[0]);
+      } else {
+        const existingEntryResult = await client.query(
+          `
+          SELECT *
+          FROM credit_ledger_entries
+          WHERE service_id = $1
+            AND payment_id = $2
+            AND kind = 'topup'
+          LIMIT 1
+          `,
+          [input.serviceId, input.paymentId]
+        );
+        if (!existingEntryResult.rowCount) {
+          throw new Error(`Credit top-up entry not found after conflict: ${input.serviceId}:${input.paymentId}`);
+        }
+
+        entry = mapCreditLedgerEntryRow(existingEntryResult.rows[0]);
+        const existingAccountResult = await client.query("SELECT * FROM credit_accounts WHERE id = $1", [entry.accountId]);
+        if (!existingAccountResult.rowCount) {
+          throw new Error(`Credit account not found: ${entry.accountId}`);
+        }
+        account = mapCreditAccountRow(existingAccountResult.rows[0]);
+      }
+
+      if (BigInt(input.payoutSplit.providerAmount) > 0n && input.payoutSplit.providerWallet) {
+        await client.query(
+          `
+          INSERT INTO provider_payouts (
+            id, source_kind, source_id, provider_account_id, provider_wallet, currency, amount, status
+          ) VALUES (
+            $1, 'credit_topup', $2, $3, $4, $5, $6, 'pending'
+          )
+          ON CONFLICT (source_kind, source_id) DO UPDATE
+          SET updated_at = provider_payouts.updated_at
+          `,
+          [
+            randomUUID(),
+            input.paymentId,
+            input.payoutSplit.providerAccountId,
+            input.payoutSplit.providerWallet,
+            input.payoutSplit.currency,
+            input.payoutSplit.providerAmount
+          ]
+        );
+      }
+
+      const responseBody = buildStoredTopupResponseBody({
+        routeId: input.routeId,
+        serviceId: input.serviceId,
+        buyerWallet: input.buyerWallet,
+        quotedPrice: input.quotedPrice,
+        account,
+        entry
+      });
+
+      const idempotencyResult = await client.query(
+        `
+        INSERT INTO idempotency_records (
+          payment_id, normalized_request_hash, buyer_wallet, route_id, route_version,
+          pending_recovery_action, quoted_price, payout_split, payment_payload, facilitator_response, response_kind,
+          response_status_code, response_body, response_headers, provider_payout_source_kind,
+          execution_status, request_id, job_token
+        ) VALUES (
+          $1, $2, $3, $4, $5, 'retry', $6, $7::jsonb, $8, $9::jsonb, 'sync',
+          200, $10::jsonb, $11::jsonb, 'credit_topup', 'completed', $12, NULL
+        )
+        ON CONFLICT (payment_id) DO UPDATE
+        SET
+          normalized_request_hash = EXCLUDED.normalized_request_hash,
+          buyer_wallet = EXCLUDED.buyer_wallet,
+          route_id = EXCLUDED.route_id,
+          route_version = EXCLUDED.route_version,
+          pending_recovery_action =
+            COALESCE(idempotency_records.pending_recovery_action, EXCLUDED.pending_recovery_action),
+          quoted_price = EXCLUDED.quoted_price,
+          payout_split = EXCLUDED.payout_split,
+          payment_payload = EXCLUDED.payment_payload,
+          facilitator_response = EXCLUDED.facilitator_response,
+          response_kind = 'sync',
+          response_status_code = 200,
+          response_body = EXCLUDED.response_body,
+          response_headers = EXCLUDED.response_headers,
+          provider_payout_source_kind = 'credit_topup',
+          execution_status = 'completed',
+          request_id = COALESCE(idempotency_records.request_id, EXCLUDED.request_id),
+          updated_at = NOW()
+        RETURNING *
+        `,
+        [
+          input.paymentId,
+          input.normalizedRequestHash,
+          input.buyerWallet,
+          input.routeId,
+          input.routeVersion,
+          input.quotedPrice,
+          JSON.stringify(input.payoutSplit),
+          input.paymentPayload,
+          JSON.stringify(input.facilitatorResponse),
+          JSON.stringify(responseBody),
+          JSON.stringify(input.responseHeaders ?? {}),
+          input.requestId ?? null
+        ]
+      );
+
+      await client.query("COMMIT");
+      return {
+        idempotency: mapIdempotencyRow(idempotencyResult.rows[0]),
+        account,
+        entry
+      };
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async createCreditTopup(input: {
+    serviceId: string;
+    buyerWallet: string;
+    currency: "fastUSDC" | "testUSDC";
+    amount: string;
+    paymentId: string;
+    metadata?: Record<string, unknown>;
+  }): Promise<{ account: CreditAccountRecord; entry: CreditLedgerEntryRecord }> {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+
+      const accountResult = await client.query(
+        `
+        INSERT INTO credit_accounts (
+          id, service_id, buyer_wallet, currency, available_amount, reserved_amount
+        ) VALUES (
+          $1, $2, $3, $4, '0', '0'
+        )
+        ON CONFLICT (service_id, buyer_wallet, currency) DO UPDATE
+        SET
+          updated_at = NOW()
+        RETURNING *
+        `,
+        [randomUUID(), input.serviceId, input.buyerWallet, input.currency]
+      );
+      let account = mapCreditAccountRow(accountResult.rows[0]);
+
+      const entryResult = await client.query(
+        `
+        INSERT INTO credit_ledger_entries (
+          id, account_id, service_id, buyer_wallet, currency, kind, amount, reservation_id, payment_id, metadata
+        ) VALUES (
+          $1, $2, $3, $4, $5, 'topup', $6, NULL, $7, $8::jsonb
+        )
+        ON CONFLICT DO NOTHING
+        RETURNING *
+        `,
+        [
+          randomUUID(),
+          account.id,
+          input.serviceId,
+          input.buyerWallet,
+          input.currency,
+          input.amount,
+          input.paymentId,
+          JSON.stringify(input.metadata ?? {})
+        ]
+      );
+
+      if (!entryResult.rowCount) {
+        const existingEntryResult = await client.query(
+          `
+          SELECT *
+          FROM credit_ledger_entries
+          WHERE service_id = $1
+            AND payment_id = $2
+            AND kind = 'topup'
+          LIMIT 1
+          `,
+          [input.serviceId, input.paymentId]
+        );
+        if (!existingEntryResult.rowCount) {
+          throw new Error(`Credit top-up entry not found after conflict: ${input.serviceId}:${input.paymentId}`);
+        }
+
+        const entry = mapCreditLedgerEntryRow(existingEntryResult.rows[0]);
+        const existingAccountResult = await client.query("SELECT * FROM credit_accounts WHERE id = $1", [entry.accountId]);
+        if (!existingAccountResult.rowCount) {
+          throw new Error(`Credit account not found: ${entry.accountId}`);
+        }
+
+        await client.query("COMMIT");
+        return {
+          account: mapCreditAccountRow(existingAccountResult.rows[0]),
+          entry
+        };
+      }
+
+      const updatedAccountResult = await client.query(
+        `
+        UPDATE credit_accounts
+        SET
+          available_amount = (available_amount::numeric + $2::numeric)::text,
+          updated_at = NOW()
+        WHERE id = $1
+        RETURNING *
+        `,
+        [account.id, input.amount]
+      );
+      account = mapCreditAccountRow(updatedAccountResult.rows[0]);
+
+      await client.query("COMMIT");
+      return {
+        account,
+        entry: mapCreditLedgerEntryRow(entryResult.rows[0])
+      };
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async getCreditTopupByPaymentId(
+    serviceId: string,
+    paymentId: string
+  ): Promise<{ account: CreditAccountRecord; entry: CreditLedgerEntryRecord } | null> {
+    const result = await this.pool.query(
+      `
+      SELECT
+        account.id AS account_id,
+        account.service_id AS account_service_id,
+        account.buyer_wallet AS account_buyer_wallet,
+        account.currency AS account_currency,
+        account.available_amount AS account_available_amount,
+        account.reserved_amount AS account_reserved_amount,
+        account.created_at AS account_created_at,
+        account.updated_at AS account_updated_at,
+        entry.*
+      FROM credit_ledger_entries entry
+      JOIN credit_accounts account ON account.id = entry.account_id
+      WHERE entry.service_id = $1
+        AND entry.payment_id = $2
+        AND entry.kind = 'topup'
+      LIMIT 1
+      `,
+      [serviceId, paymentId]
+    );
+    if (!result.rowCount) {
+      return null;
+    }
+
+    const row = result.rows[0];
+    return {
+      account: mapCreditAccountRow({
+        id: row.account_id,
+        service_id: row.account_service_id,
+        buyer_wallet: row.account_buyer_wallet,
+        currency: row.account_currency,
+        available_amount: row.account_available_amount,
+        reserved_amount: row.account_reserved_amount,
+        created_at: row.account_created_at,
+        updated_at: row.account_updated_at
+      }),
+      entry: mapCreditLedgerEntryRow(row)
+    };
+  }
+
+  async getCreditAccount(serviceId: string, buyerWallet: string, currency: "fastUSDC" | "testUSDC"): Promise<CreditAccountRecord | null> {
+    const result = await this.pool.query(
+      `
+      SELECT *
+      FROM credit_accounts
+      WHERE service_id = $1 AND buyer_wallet = $2 AND currency = $3
+      LIMIT 1
+      `,
+      [serviceId, buyerWallet, currency]
+    );
+    return result.rowCount ? mapCreditAccountRow(result.rows[0]) : null;
+  }
+
+  async reserveCredit(input: {
+    serviceId: string;
+    buyerWallet: string;
+    currency: "fastUSDC" | "testUSDC";
+    amount: string;
+    idempotencyKey: string;
+    providerReference?: string | null;
+    expiresAt: string;
+    metadata?: Record<string, unknown>;
+  }): Promise<{ account: CreditAccountRecord; reservation: CreditReservationRecord; entry: CreditLedgerEntryRecord }> {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+
+      const existingReservationResult = await client.query(
+        `
+        SELECT *
+        FROM credit_reservations
+        WHERE service_id = $1 AND idempotency_key = $2
+        LIMIT 1
+        FOR UPDATE
+        `,
+        [input.serviceId, input.idempotencyKey]
+      );
+
+      if (existingReservationResult.rowCount) {
+        let reservation = mapCreditReservationRow(existingReservationResult.rows[0]);
+        let account: CreditAccountRecord;
+
+        const accountResult = await client.query(
+          `
+          SELECT *
+          FROM credit_accounts
+          WHERE id = $1
+          LIMIT 1
+          FOR UPDATE
+          `,
+          [reservation.accountId]
+        );
+        if (!accountResult.rowCount) {
+          throw new Error(`Credit account not found: ${reservation.accountId}`);
+        }
+        account = mapCreditAccountRow(accountResult.rows[0]);
+
+        if (reservation.status === "reserved" && Date.parse(reservation.expiresAt) <= Date.now()) {
+          const updatedAccountResult = await client.query(
+            `
+            UPDATE credit_accounts
+            SET
+              available_amount = (available_amount::numeric + $2::numeric)::text,
+              reserved_amount = (reserved_amount::numeric - $2::numeric)::text,
+              updated_at = NOW()
+            WHERE id = $1
+            RETURNING *
+            `,
+            [account.id, reservation.reservedAmount]
+          );
+          account = mapCreditAccountRow(updatedAccountResult.rows[0]);
+
+          const updatedReservationResult = await client.query(
+            `
+            UPDATE credit_reservations
+            SET status = 'expired', updated_at = NOW()
+            WHERE id = $1
+            RETURNING *
+            `,
+            [reservation.id]
+            );
+          reservation = mapCreditReservationRow(updatedReservationResult.rows[0]);
+          await client.query(
+            `
+            INSERT INTO credit_ledger_entries (
+              id, account_id, service_id, buyer_wallet, currency, kind, amount, reservation_id, payment_id, metadata
+            ) VALUES (
+              $1, $2, $3, $4, $5, 'release', $6, $7, NULL, $8::jsonb
+            )
+            RETURNING *
+            `,
+            [
+              randomUUID(),
+              account.id,
+              reservation.serviceId,
+              reservation.buyerWallet,
+              reservation.currency,
+              reservation.reservedAmount,
+              reservation.id,
+              JSON.stringify({ reason: "expired" })
+            ]
+          );
+        }
+
+        const reserveEntryResult = await client.query(
+          `
+          SELECT *
+          FROM credit_ledger_entries
+          WHERE reservation_id = $1 AND kind = 'reserve'
+          ORDER BY created_at ASC
+          LIMIT 1
+          `,
+          [reservation.id]
+        );
+        if (!reserveEntryResult.rowCount) {
+          throw new Error(`Credit reserve entry not found: ${reservation.id}`);
+        }
+
+        await client.query("COMMIT");
+        return {
+          account,
+          reservation,
+          entry: mapCreditLedgerEntryRow(reserveEntryResult.rows[0])
+        };
+      }
+
+      const accountResult = await client.query(
+        `
+        SELECT *
+        FROM credit_accounts
+        WHERE service_id = $1 AND buyer_wallet = $2 AND currency = $3
+        LIMIT 1
+        FOR UPDATE
+        `,
+        [input.serviceId, input.buyerWallet, input.currency]
+      );
+      if (!accountResult.rowCount) {
+        throw new Error("Credit account not found.");
+      }
+
+      const account = mapCreditAccountRow(accountResult.rows[0]);
+      if (BigInt(account.availableAmount) < BigInt(input.amount)) {
+        throw new Error("Insufficient prepaid credit.");
+      }
+
+      const updatedAccountResult = await client.query(
+        `
+        UPDATE credit_accounts
+        SET
+          available_amount = (available_amount::numeric - $2::numeric)::text,
+          reserved_amount = (reserved_amount::numeric + $2::numeric)::text,
+          updated_at = NOW()
+        WHERE id = $1
+        RETURNING *
+        `,
+        [account.id, input.amount]
+      );
+      const updatedAccount = mapCreditAccountRow(updatedAccountResult.rows[0]);
+
+      const reservationResult = await client.query(
+        `
+        INSERT INTO credit_reservations (
+          id, account_id, service_id, buyer_wallet, currency, idempotency_key, provider_reference,
+          status, reserved_amount, captured_amount, expires_at
+        ) VALUES (
+          $1, $2, $3, $4, $5, $6, $7, 'reserved', $8, '0', $9
+        )
+        RETURNING *
+        `,
+        [
+          randomUUID(),
+          updatedAccount.id,
+          input.serviceId,
+          input.buyerWallet,
+          input.currency,
+          input.idempotencyKey,
+          input.providerReference ?? null,
+          input.amount,
+          input.expiresAt
+        ]
+      );
+      const reservation = mapCreditReservationRow(reservationResult.rows[0]);
+
+      const entryResult = await client.query(
+        `
+        INSERT INTO credit_ledger_entries (
+          id, account_id, service_id, buyer_wallet, currency, kind, amount, reservation_id, payment_id, metadata
+        ) VALUES (
+          $1, $2, $3, $4, $5, 'reserve', $6, $7, NULL, $8::jsonb
+        )
+        RETURNING *
+        `,
+        [
+          randomUUID(),
+          updatedAccount.id,
+          input.serviceId,
+          input.buyerWallet,
+          input.currency,
+          input.amount,
+          reservation.id,
+          JSON.stringify(input.metadata ?? {})
+        ]
+      );
+
+      await client.query("COMMIT");
+      return {
+        account: updatedAccount,
+        reservation,
+        entry: mapCreditLedgerEntryRow(entryResult.rows[0])
+      };
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async captureCreditReservation(input: {
+    reservationId: string;
+    amount: string;
+    metadata?: Record<string, unknown>;
+  }): Promise<{
+    account: CreditAccountRecord;
+    reservation: CreditReservationRecord;
+    captureEntry: CreditLedgerEntryRecord;
+    releaseEntry: CreditLedgerEntryRecord | null;
+  }> {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+
+      const reservationResult = await client.query(
+        `
+        SELECT *
+        FROM credit_reservations
+        WHERE id = $1
+        LIMIT 1
+        FOR UPDATE
+        `,
+        [input.reservationId]
+      );
+      if (!reservationResult.rowCount) {
+        throw new Error(`Credit reservation not found: ${input.reservationId}`);
+      }
+
+      let reservation = mapCreditReservationRow(reservationResult.rows[0]);
+      const accountResult = await client.query(
+        `
+        SELECT *
+        FROM credit_accounts
+        WHERE id = $1
+        LIMIT 1
+        FOR UPDATE
+        `,
+        [reservation.accountId]
+      );
+      if (!accountResult.rowCount) {
+        throw new Error(`Credit account not found: ${reservation.accountId}`);
+      }
+      let account = mapCreditAccountRow(accountResult.rows[0]);
+
+      if (reservation.status === "reserved" && Date.parse(reservation.expiresAt) <= Date.now()) {
+        const releasedAccountResult = await client.query(
+          `
+          UPDATE credit_accounts
+          SET
+            available_amount = (available_amount::numeric + $2::numeric)::text,
+            reserved_amount = (reserved_amount::numeric - $2::numeric)::text,
+            updated_at = NOW()
+          WHERE id = $1
+          RETURNING *
+          `,
+          [account.id, reservation.reservedAmount]
+        );
+        account = mapCreditAccountRow(releasedAccountResult.rows[0]);
+
+        const expiredReservationResult = await client.query(
+          `
+          UPDATE credit_reservations
+          SET status = 'expired', updated_at = NOW()
+          WHERE id = $1
+          RETURNING *
+          `,
+          [reservation.id]
+        );
+        reservation = mapCreditReservationRow(expiredReservationResult.rows[0]);
+
+        await client.query(
+          `
+          INSERT INTO credit_ledger_entries (
+            id, account_id, service_id, buyer_wallet, currency, kind, amount, reservation_id, payment_id, metadata
+          ) VALUES (
+            $1, $2, $3, $4, $5, 'release', $6, $7, NULL, $8::jsonb
+          )
+          RETURNING *
+          `,
+          [
+            randomUUID(),
+            account.id,
+            reservation.serviceId,
+            reservation.buyerWallet,
+            reservation.currency,
+            reservation.reservedAmount,
+            reservation.id,
+            JSON.stringify({ reason: "expired" })
+          ]
+        );
+        await client.query("COMMIT");
+        throw new Error(`Credit reservation cannot be captured from status ${reservation.status}.`);
+      }
+
+      if (reservation.status === "captured") {
+        const captureEntryResult = await client.query(
+          `
+          SELECT *
+          FROM credit_ledger_entries
+          WHERE reservation_id = $1 AND kind = 'capture'
+          ORDER BY created_at ASC
+          LIMIT 1
+          `,
+          [reservation.id]
+        );
+        if (!captureEntryResult.rowCount) {
+          throw new Error(`Capture entry not found for ${reservation.id}`);
+        }
+        const releaseEntryResult = await client.query(
+          `
+          SELECT *
+          FROM credit_ledger_entries
+          WHERE reservation_id = $1 AND kind = 'release'
+          ORDER BY created_at ASC
+          LIMIT 1
+          `,
+          [reservation.id]
+        );
+        await client.query("COMMIT");
+        return {
+          account,
+          reservation,
+          captureEntry: mapCreditLedgerEntryRow(captureEntryResult.rows[0]),
+          releaseEntry: releaseEntryResult.rowCount ? mapCreditLedgerEntryRow(releaseEntryResult.rows[0]) : null
+        };
+      }
+
+      if (reservation.status !== "reserved") {
+        throw new Error(`Credit reservation cannot be captured from status ${reservation.status}.`);
+      }
+      if (BigInt(input.amount) > BigInt(reservation.reservedAmount)) {
+        throw new Error("Captured amount cannot exceed reserved amount.");
+      }
+
+      const remainder = (BigInt(reservation.reservedAmount) - BigInt(input.amount)).toString();
+      const updatedAccountResult = await client.query(
+        `
+        UPDATE credit_accounts
+        SET
+          available_amount = (available_amount::numeric + $2::numeric)::text,
+          reserved_amount = (reserved_amount::numeric - $3::numeric)::text,
+          updated_at = NOW()
+        WHERE id = $1
+        RETURNING *
+        `,
+        [account.id, remainder, reservation.reservedAmount]
+      );
+      const updatedAccount = mapCreditAccountRow(updatedAccountResult.rows[0]);
+
+      const updatedReservationResult = await client.query(
+        `
+        UPDATE credit_reservations
+        SET status = 'captured', captured_amount = $2, updated_at = NOW()
+        WHERE id = $1
+        RETURNING *
+        `,
+        [reservation.id, input.amount]
+      );
+      const updatedReservation = mapCreditReservationRow(updatedReservationResult.rows[0]);
+
+      const captureEntryResult = await client.query(
+        `
+        INSERT INTO credit_ledger_entries (
+          id, account_id, service_id, buyer_wallet, currency, kind, amount, reservation_id, payment_id, metadata
+        ) VALUES (
+          $1, $2, $3, $4, $5, 'capture', $6, $7, NULL, $8::jsonb
+        )
+        RETURNING *
+        `,
+        [
+          randomUUID(),
+          updatedAccount.id,
+          updatedReservation.serviceId,
+          updatedReservation.buyerWallet,
+          updatedReservation.currency,
+          input.amount,
+          updatedReservation.id,
+          JSON.stringify(input.metadata ?? {})
+        ]
+      );
+
+      let releaseEntry: CreditLedgerEntryRecord | null = null;
+      if (BigInt(remainder) > 0n) {
+        const releaseEntryResult = await client.query(
+          `
+          INSERT INTO credit_ledger_entries (
+            id, account_id, service_id, buyer_wallet, currency, kind, amount, reservation_id, payment_id, metadata
+          ) VALUES (
+            $1, $2, $3, $4, $5, 'release', $6, $7, NULL, $8::jsonb
+          )
+          RETURNING *
+          `,
+          [
+            randomUUID(),
+            updatedAccount.id,
+            updatedReservation.serviceId,
+            updatedReservation.buyerWallet,
+            updatedReservation.currency,
+            remainder,
+            updatedReservation.id,
+            JSON.stringify(input.metadata ?? {})
+          ]
+        );
+        releaseEntry = mapCreditLedgerEntryRow(releaseEntryResult.rows[0]);
+      }
+
+      await client.query("COMMIT");
+      return {
+        account: updatedAccount,
+        reservation: updatedReservation,
+        captureEntry: mapCreditLedgerEntryRow(captureEntryResult.rows[0]),
+        releaseEntry
+      };
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async releaseCreditReservation(input: {
+    reservationId: string;
+    metadata?: Record<string, unknown>;
+  }): Promise<{ account: CreditAccountRecord; reservation: CreditReservationRecord; entry: CreditLedgerEntryRecord | null }> {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+
+      const reservationResult = await client.query(
+        `
+        SELECT *
+        FROM credit_reservations
+        WHERE id = $1
+        LIMIT 1
+        FOR UPDATE
+        `,
+        [input.reservationId]
+      );
+      if (!reservationResult.rowCount) {
+        throw new Error(`Credit reservation not found: ${input.reservationId}`);
+      }
+      const reservation = mapCreditReservationRow(reservationResult.rows[0]);
+
+      const accountResult = await client.query(
+        `
+        SELECT *
+        FROM credit_accounts
+        WHERE id = $1
+        LIMIT 1
+        FOR UPDATE
+        `,
+        [reservation.accountId]
+      );
+      if (!accountResult.rowCount) {
+        throw new Error(`Credit account not found: ${reservation.accountId}`);
+      }
+      const account = mapCreditAccountRow(accountResult.rows[0]);
+
+      if (reservation.status !== "reserved") {
+        await client.query("COMMIT");
+        return {
+          account,
+          reservation,
+          entry: null
+        };
+      }
+
+      const updatedAccountResult = await client.query(
+        `
+        UPDATE credit_accounts
+        SET
+          available_amount = (available_amount::numeric + $2::numeric)::text,
+          reserved_amount = (reserved_amount::numeric - $2::numeric)::text,
+          updated_at = NOW()
+        WHERE id = $1
+        RETURNING *
+        `,
+        [account.id, reservation.reservedAmount]
+      );
+      const updatedAccount = mapCreditAccountRow(updatedAccountResult.rows[0]);
+
+      const updatedReservationResult = await client.query(
+        `
+        UPDATE credit_reservations
+        SET status = 'released', updated_at = NOW()
+        WHERE id = $1
+        RETURNING *
+        `,
+        [reservation.id]
+      );
+      const updatedReservation = mapCreditReservationRow(updatedReservationResult.rows[0]);
+
+      const entryResult = await client.query(
+        `
+        INSERT INTO credit_ledger_entries (
+          id, account_id, service_id, buyer_wallet, currency, kind, amount, reservation_id, payment_id, metadata
+        ) VALUES (
+          $1, $2, $3, $4, $5, 'release', $6, $7, NULL, $8::jsonb
+        )
+        RETURNING *
+        `,
+        [
+          randomUUID(),
+          updatedAccount.id,
+          updatedReservation.serviceId,
+          updatedReservation.buyerWallet,
+          updatedReservation.currency,
+          reservation.reservedAmount,
+          updatedReservation.id,
+          JSON.stringify(input.metadata ?? {})
+        ]
+      );
+
+      await client.query("COMMIT");
+      return {
+        account: updatedAccount,
+        reservation: updatedReservation,
+        entry: mapCreditLedgerEntryRow(entryResult.rows[0])
+      };
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async expireCreditReservation(reservationId: string): Promise<{
+    account: CreditAccountRecord;
+    reservation: CreditReservationRecord;
+    entry: CreditLedgerEntryRecord | null;
+  }> {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+
+      const reservationResult = await client.query(
+        `
+        SELECT *
+        FROM credit_reservations
+        WHERE id = $1
+        LIMIT 1
+        FOR UPDATE
+        `,
+        [reservationId]
+      );
+      if (!reservationResult.rowCount) {
+        throw new Error(`Credit reservation not found: ${reservationId}`);
+      }
+      const reservation = mapCreditReservationRow(reservationResult.rows[0]);
+
+      const accountResult = await client.query(
+        `
+        SELECT *
+        FROM credit_accounts
+        WHERE id = $1
+        LIMIT 1
+        FOR UPDATE
+        `,
+        [reservation.accountId]
+      );
+      if (!accountResult.rowCount) {
+        throw new Error(`Credit account not found: ${reservation.accountId}`);
+      }
+      const account = mapCreditAccountRow(accountResult.rows[0]);
+
+      if (reservation.status !== "reserved") {
+        await client.query("COMMIT");
+        return {
+          account,
+          reservation,
+          entry: null
+        };
+      }
+
+      const updatedAccountResult = await client.query(
+        `
+        UPDATE credit_accounts
+        SET
+          available_amount = (available_amount::numeric + $2::numeric)::text,
+          reserved_amount = (reserved_amount::numeric - $2::numeric)::text,
+          updated_at = NOW()
+        WHERE id = $1
+        RETURNING *
+        `,
+        [account.id, reservation.reservedAmount]
+      );
+      const updatedAccount = mapCreditAccountRow(updatedAccountResult.rows[0]);
+
+      const updatedReservationResult = await client.query(
+        `
+        UPDATE credit_reservations
+        SET status = 'expired', updated_at = NOW()
+        WHERE id = $1
+        RETURNING *
+        `,
+        [reservation.id]
+      );
+      const updatedReservation = mapCreditReservationRow(updatedReservationResult.rows[0]);
+
+      const entryResult = await client.query(
+        `
+        INSERT INTO credit_ledger_entries (
+          id, account_id, service_id, buyer_wallet, currency, kind, amount, reservation_id, payment_id, metadata
+        ) VALUES (
+          $1, $2, $3, $4, $5, 'release', $6, $7, NULL, $8::jsonb
+        )
+        RETURNING *
+        `,
+        [
+          randomUUID(),
+          updatedAccount.id,
+          updatedReservation.serviceId,
+          updatedReservation.buyerWallet,
+          updatedReservation.currency,
+          reservation.reservedAmount,
+          updatedReservation.id,
+          JSON.stringify({ reason: "expired" })
+        ]
+      );
+
+      await client.query("COMMIT");
+      return {
+        account: updatedAccount,
+        reservation: updatedReservation,
+        entry: mapCreditLedgerEntryRow(entryResult.rows[0])
+      };
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async getCreditReservationById(reservationId: string): Promise<CreditReservationRecord | null> {
+    const result = await this.pool.query("SELECT * FROM credit_reservations WHERE id = $1 LIMIT 1", [reservationId]);
+    return result.rowCount ? mapCreditReservationRow(result.rows[0]) : null;
+  }
+
+  async rotateProviderRuntimeKey(serviceId: string, wallet: string, secretMaterial: {
+    keyHash: string;
+    keyPrefix: string;
+    ciphertext: string;
+    iv: string;
+    authTag: string;
+  }): Promise<ProviderRuntimeKeyRecord> {
+    const detail = await this.getProviderServiceForOwner(serviceId, wallet);
+    if (!detail) {
+      throw new Error("Provider service not found.");
+    }
+
+    const result = await this.pool.query(
+      `
+      INSERT INTO provider_runtime_keys (
+        id, service_id, key_prefix, key_hash, secret_ciphertext, iv, auth_tag
+      ) VALUES (
+        $1, $2, $3, $4, $5, $6, $7
+      )
+      ON CONFLICT (service_id) DO UPDATE
+      SET
+        id = EXCLUDED.id,
+        key_prefix = EXCLUDED.key_prefix,
+        key_hash = EXCLUDED.key_hash,
+        secret_ciphertext = EXCLUDED.secret_ciphertext,
+        iv = EXCLUDED.iv,
+        auth_tag = EXCLUDED.auth_tag,
+        updated_at = NOW()
+      RETURNING *
+      `,
+      [
+        randomUUID(),
+        serviceId,
+        secretMaterial.keyPrefix,
+        secretMaterial.keyHash,
+        secretMaterial.ciphertext,
+        secretMaterial.iv,
+        secretMaterial.authTag
+      ]
+    );
+    return mapProviderRuntimeKeyRow(result.rows[0]);
+  }
+
+  async getProviderRuntimeKeyForOwner(serviceId: string, wallet: string): Promise<ProviderRuntimeKeyRecord | null> {
+    const detail = await this.getProviderServiceForOwner(serviceId, wallet);
+    if (!detail) {
+      return null;
+    }
+
+    const result = await this.pool.query("SELECT * FROM provider_runtime_keys WHERE service_id = $1 LIMIT 1", [serviceId]);
+    return result.rowCount ? mapProviderRuntimeKeyRow(result.rows[0]) : null;
+  }
+
+  async getProviderRuntimeKeyByPlaintext(plaintextKey: string): Promise<ProviderRuntimeKeyRecord | null> {
+    const result = await this.pool.query("SELECT * FROM provider_runtime_keys WHERE key_hash = $1 LIMIT 1", [
+      hashProviderRuntimeKey(plaintextKey)
+    ]);
+    return result.rowCount ? mapProviderRuntimeKeyRow(result.rows[0]) : null;
   }
 
   async getServiceAnalytics(routeIds: string[]): Promise<ServiceAnalytics> {
@@ -2715,16 +5177,17 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
           )
         ).rows[0].id as string
       : null;
+    const billing = createDraftRouteBilling(input);
 
     const result = await this.pool.query(
       `
       INSERT INTO provider_endpoint_drafts (
-        id, service_id, route_id, operation, title, description, price, mode, request_schema_json, response_schema_json,
+        id, service_id, route_id, operation, title, description, price, billing, mode, request_schema_json, response_schema_json,
         request_example, response_example, usage_notes, executor_kind, upstream_base_url, upstream_path,
         upstream_auth_mode, upstream_auth_header_name, upstream_secret_ref, payout
       ) VALUES (
-        $1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb, $11::jsonb, $12::jsonb, $13, 'http', $14, $15,
-        $16, $17, $18, $19::jsonb
+        $1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10::jsonb, $11::jsonb, $12::jsonb, $13::jsonb, $14, $15, $16, $17,
+        $18, $19, $20, $21::jsonb
       )
       RETURNING *
       `,
@@ -2735,18 +5198,20 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
         input.operation,
         input.title,
         input.description,
-        input.price,
+        billing.price,
+        JSON.stringify(billing.billing),
         input.mode,
         JSON.stringify(input.requestSchemaJson),
         JSON.stringify(input.responseSchemaJson),
         JSON.stringify(input.requestExample),
         JSON.stringify(input.responseExample),
         input.usageNotes ?? null,
-        input.upstreamBaseUrl,
-        input.upstreamPath,
-        input.upstreamAuthMode,
-        input.upstreamAuthHeaderName ?? null,
-        secretRef,
+        billing.billing.type === "topup_x402_variable" ? "marketplace" : "http",
+        billing.billing.type === "topup_x402_variable" ? null : input.upstreamBaseUrl ?? null,
+        billing.billing.type === "topup_x402_variable" ? null : input.upstreamPath ?? null,
+        billing.billing.type === "topup_x402_variable" ? null : input.upstreamAuthMode ?? null,
+        billing.billing.type === "topup_x402_variable" ? null : input.upstreamAuthHeaderName ?? null,
+        billing.billing.type === "topup_x402_variable" ? null : secretRef,
         JSON.stringify({
           providerAccountId: detail.account.id,
           providerWallet: detail.service.payoutWallet,
@@ -2804,6 +5269,12 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
     }
 
     const operation = input.operation ?? existing.operation;
+    const billing = createDraftRouteBilling({
+      billingType: input.billingType ?? existing.billing.type,
+      price: input.price ?? existing.price,
+      minAmount: input.minAmount ?? (existing.billing.type === "topup_x402_variable" ? existing.billing.minAmount : null),
+      maxAmount: input.maxAmount ?? (existing.billing.type === "topup_x402_variable" ? existing.billing.maxAmount : null)
+    });
     const result = await this.pool.query(
       `
       UPDATE provider_endpoint_drafts
@@ -2813,17 +5284,19 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
         title = $5,
         description = $6,
         price = $7,
-        request_schema_json = $8::jsonb,
-        response_schema_json = $9::jsonb,
-        request_example = $10::jsonb,
-        response_example = $11::jsonb,
-        usage_notes = $12,
-        upstream_base_url = $13,
-        upstream_path = $14,
-        upstream_auth_mode = $15,
-        upstream_auth_header_name = $16,
-        upstream_secret_ref = $17,
-        payout = $18::jsonb,
+        billing = $8::jsonb,
+        request_schema_json = $9::jsonb,
+        response_schema_json = $10::jsonb,
+        request_example = $11::jsonb,
+        response_example = $12::jsonb,
+        usage_notes = $13,
+        executor_kind = $14,
+        upstream_base_url = $15,
+        upstream_path = $16,
+        upstream_auth_mode = $17,
+        upstream_auth_header_name = $18,
+        upstream_secret_ref = $19,
+        payout = $20::jsonb,
         updated_at = NOW()
       WHERE id = $1 AND service_id = $2
       RETURNING *
@@ -2835,19 +5308,23 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
         operation,
         input.title ?? existing.title,
         input.description ?? existing.description,
-        input.price ?? existing.price,
+        billing.price,
+        JSON.stringify(billing.billing),
         JSON.stringify(input.requestSchemaJson ?? existing.requestSchemaJson),
         JSON.stringify(input.responseSchemaJson ?? existing.responseSchemaJson),
         JSON.stringify(input.requestExample === undefined ? existing.requestExample : input.requestExample),
         JSON.stringify(input.responseExample === undefined ? existing.responseExample : input.responseExample),
         input.usageNotes === undefined ? existing.usageNotes : input.usageNotes,
-        input.upstreamBaseUrl ?? existing.upstreamBaseUrl,
-        input.upstreamPath ?? existing.upstreamPath,
-        input.upstreamAuthMode ?? existing.upstreamAuthMode,
-        input.upstreamAuthHeaderName === undefined
+        billing.billing.type === "topup_x402_variable" ? "marketplace" : "http",
+        billing.billing.type === "topup_x402_variable" ? null : input.upstreamBaseUrl ?? existing.upstreamBaseUrl,
+        billing.billing.type === "topup_x402_variable" ? null : input.upstreamPath ?? existing.upstreamPath,
+        billing.billing.type === "topup_x402_variable" ? null : input.upstreamAuthMode ?? existing.upstreamAuthMode,
+        billing.billing.type === "topup_x402_variable"
+          ? null
+          : input.upstreamAuthHeaderName === undefined
           ? existing.upstreamAuthHeaderName
           : input.upstreamAuthHeaderName,
-        secretRef,
+        billing.billing.type === "topup_x402_variable" ? null : secretRef,
         JSON.stringify({
           providerAccountId: detail.account.id,
           providerWallet: detail.service.payoutWallet,
@@ -2985,12 +5462,12 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
           `
           INSERT INTO published_endpoint_versions (
             endpoint_version_id, service_id, service_version_id, endpoint_draft_id, route_id, provider, operation,
-            version, mode, network, price, title, description, payout, request_example, response_example, usage_notes,
+            version, mode, network, price, billing, title, description, payout, request_example, response_example, usage_notes,
             request_schema_json, response_schema_json, executor_kind, upstream_base_url, upstream_path,
             upstream_auth_mode, upstream_auth_header_name, upstream_secret_ref
           ) VALUES (
-            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14::jsonb, $15::jsonb, $16::jsonb, $17,
-            $18::jsonb, $19::jsonb, $20, $21, $22, $23, $24, $25
+            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb, $13, $14, $15::jsonb, $16::jsonb, $17::jsonb, $18,
+            $19::jsonb, $20::jsonb, $21, $22, $23, $24, $25, $26
           )
           `,
           [
@@ -3005,6 +5482,7 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
             endpoint.mode,
             network.paymentNetwork,
             endpoint.price,
+            JSON.stringify(endpoint.billing),
             endpoint.title,
             endpoint.description,
             JSON.stringify(endpoint.payout),
@@ -3436,6 +5914,7 @@ function mapIdempotencyRow(row: Record<string, unknown>): IdempotencyRecord {
     buyerWallet: row.buyer_wallet as string,
     routeId: row.route_id as string,
     routeVersion: row.route_version as string,
+    pendingRecoveryAction: (row.pending_recovery_action as IdempotencyRecord["pendingRecoveryAction"]) ?? "retry",
     quotedPrice: row.quoted_price as string,
     payoutSplit: row.payout_split as IdempotencyRecord["payoutSplit"],
     paymentPayload: row.payment_payload as string,
@@ -3444,9 +5923,23 @@ function mapIdempotencyRow(row: Record<string, unknown>): IdempotencyRecord {
     responseStatusCode: row.response_status_code as number,
     responseBody: row.response_body,
     responseHeaders: (row.response_headers as Record<string, string>) ?? {},
+    providerPayoutSourceKind: (row.provider_payout_source_kind as IdempotencyRecord["providerPayoutSourceKind"]) ?? null,
+    executionStatus: (row.execution_status as IdempotencyRecord["executionStatus"]) ?? "completed",
+    requestId: (row.request_id as string | null) ?? null,
     jobToken: (row.job_token as string | null) ?? undefined,
     createdAt: new Date(row.created_at as string | Date).toISOString(),
     updatedAt: new Date(row.updated_at as string | Date).toISOString()
+  };
+}
+
+function mapProviderPayoutInputRow(row: Record<string, unknown>): ProviderPayoutInput {
+  return {
+    sourceKind: row.source_kind as ProviderPayoutInput["sourceKind"],
+    sourceId: row.source_id as string,
+    providerAccountId: row.provider_account_id as string,
+    providerWallet: row.provider_wallet as string,
+    currency: row.currency as ProviderPayoutInput["currency"],
+    amount: row.amount as string
   };
 }
 
@@ -3569,6 +6062,7 @@ function mapProviderServiceRow(row: Record<string, unknown>): ProviderServiceRec
 }
 
 function mapProviderEndpointDraftRow(row: Record<string, unknown>): ProviderEndpointDraftRecord {
+  const billing = normalizeRouteBilling(row.price as string, row.billing as ProviderEndpointDraftRecord["billing"]);
   return {
     id: row.id as string,
     serviceId: row.service_id as string,
@@ -3577,6 +6071,7 @@ function mapProviderEndpointDraftRow(row: Record<string, unknown>): ProviderEndp
     title: row.title as string,
     description: row.description as string,
     price: row.price as string,
+    billing,
     mode: row.mode as ProviderEndpointDraftRecord["mode"],
     requestSchemaJson: row.request_schema_json as ProviderEndpointDraftRecord["requestSchemaJson"],
     responseSchemaJson: row.response_schema_json as ProviderEndpointDraftRecord["responseSchemaJson"],
@@ -3650,6 +6145,7 @@ function mapPublishedServiceVersionRow(row: Record<string, unknown>): PublishedS
 }
 
 function mapPublishedEndpointVersionRow(row: Record<string, unknown>): PublishedEndpointVersionRecord {
+  const billing = normalizeRouteBilling(row.price as string, row.billing as PublishedEndpointVersionRecord["billing"]);
   return {
     endpointVersionId: row.endpoint_version_id as string,
     serviceId: row.service_id as string,
@@ -3662,6 +6158,7 @@ function mapPublishedEndpointVersionRow(row: Record<string, unknown>): Published
     mode: row.mode as PublishedEndpointVersionRecord["mode"],
     network: row.network as PublishedEndpointVersionRecord["network"],
     price: row.price as string,
+    billing,
     title: row.title as string,
     description: row.description as string,
     payout: row.payout as PublishedEndpointVersionRecord["payout"],
@@ -3686,6 +6183,86 @@ function mapProviderSecretRow(row: Record<string, unknown>): ProviderSecretRecor
     id: row.id as string,
     providerAccountId: row.provider_account_id as string,
     label: row.label as string,
+    secretCiphertext: row.secret_ciphertext as string,
+    iv: row.iv as string,
+    authTag: row.auth_tag as string,
+    createdAt: new Date(row.created_at as string | Date).toISOString(),
+    updatedAt: new Date(row.updated_at as string | Date).toISOString()
+  };
+}
+
+function mapProviderPayoutRow(row: Record<string, unknown>): ProviderPayoutRecord {
+  return {
+    id: row.id as string,
+    sourceKind: row.source_kind as ProviderPayoutRecord["sourceKind"],
+    sourceId: row.source_id as string,
+    providerAccountId: row.provider_account_id as string,
+    providerWallet: row.provider_wallet as string,
+    currency: row.currency as ProviderPayoutRecord["currency"],
+    amount: row.amount as string,
+    status: row.status as ProviderPayoutRecord["status"],
+    txHash: (row.tx_hash as string | null) ?? null,
+    sentAt: row.sent_at ? new Date(row.sent_at as string | Date).toISOString() : null,
+    attemptCount: Number(row.attempt_count),
+    lastError: (row.last_error as string | null) ?? null,
+    createdAt: new Date(row.created_at as string | Date).toISOString(),
+    updatedAt: new Date(row.updated_at as string | Date).toISOString()
+  };
+}
+
+function mapCreditAccountRow(row: Record<string, unknown>): CreditAccountRecord {
+  return {
+    id: row.id as string,
+    serviceId: row.service_id as string,
+    buyerWallet: row.buyer_wallet as string,
+    currency: row.currency as CreditAccountRecord["currency"],
+    availableAmount: row.available_amount as string,
+    reservedAmount: row.reserved_amount as string,
+    createdAt: new Date(row.created_at as string | Date).toISOString(),
+    updatedAt: new Date(row.updated_at as string | Date).toISOString()
+  };
+}
+
+function mapCreditLedgerEntryRow(row: Record<string, unknown>): CreditLedgerEntryRecord {
+  return {
+    id: row.id as string,
+    accountId: row.account_id as string,
+    serviceId: row.service_id as string,
+    buyerWallet: row.buyer_wallet as string,
+    currency: row.currency as CreditLedgerEntryRecord["currency"],
+    kind: row.kind as CreditLedgerEntryRecord["kind"],
+    amount: row.amount as string,
+    reservationId: (row.reservation_id as string | null) ?? null,
+    paymentId: (row.payment_id as string | null) ?? null,
+    metadata: (row.metadata as Record<string, unknown>) ?? {},
+    createdAt: new Date(row.created_at as string | Date).toISOString()
+  };
+}
+
+function mapCreditReservationRow(row: Record<string, unknown>): CreditReservationRecord {
+  return {
+    id: row.id as string,
+    accountId: row.account_id as string,
+    serviceId: row.service_id as string,
+    buyerWallet: row.buyer_wallet as string,
+    currency: row.currency as CreditReservationRecord["currency"],
+    idempotencyKey: row.idempotency_key as string,
+    providerReference: (row.provider_reference as string | null) ?? null,
+    status: row.status as CreditReservationRecord["status"],
+    reservedAmount: row.reserved_amount as string,
+    capturedAmount: row.captured_amount as string,
+    expiresAt: new Date(row.expires_at as string | Date).toISOString(),
+    createdAt: new Date(row.created_at as string | Date).toISOString(),
+    updatedAt: new Date(row.updated_at as string | Date).toISOString()
+  };
+}
+
+function mapProviderRuntimeKeyRow(row: Record<string, unknown>): ProviderRuntimeKeyRecord {
+  return {
+    id: row.id as string,
+    serviceId: row.service_id as string,
+    keyPrefix: row.key_prefix as string,
+    keyHash: row.key_hash as string,
     secretCiphertext: row.secret_ciphertext as string,
     iv: row.iv as string,
     authTag: row.auth_tag as string,
