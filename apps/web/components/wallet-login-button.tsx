@@ -198,11 +198,6 @@ export function WalletLoginButton({
           </Button>
         )}
       </div>
-      {session ? (
-        <div className="text-[11px] uppercase tracking-eyebrow text-muted-foreground">
-          Site session active for website-auth flows.
-        </div>
-      ) : null}
       {error ? (
         <div className="flex max-w-xs items-center gap-2 text-right text-xs text-muted-foreground">
           <AlertCircle className="h-3.5 w-3.5 shrink-0" />

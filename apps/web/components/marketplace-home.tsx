@@ -51,6 +51,31 @@ export function MarketplaceHome({ services }: { services: ServiceSummary[] }) {
                 Paid APIs for agents, presented like a real marketplace. Browse live Fast-native services, compare
                 pricing and performance, and route demand toward the next supply providers should ship.
               </p>
+
+              <div className="grid gap-4 md:grid-cols-[1fr_auto]">
+                <label className="relative block">
+                  <span className="sr-only">Search services, owners, or categories</span>
+                  <Search className="pointer-events-none absolute left-5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                  <Input
+                    value={query}
+                    onChange={(event) => setQuery(event.target.value)}
+                    placeholder="Search services, owners, or categories"
+                    className="pl-12"
+                  />
+                </label>
+                <div className="flex flex-wrap gap-2">
+                  {categories.map((item) => (
+                    <button
+                      key={item}
+                      type="button"
+                      onClick={() => setCategory(item)}
+                      className={item === category ? "filter-chip filter-chip-active" : "filter-chip"}
+                    >
+                      {item}
+                    </button>
+                  ))}
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -58,44 +83,6 @@ export function MarketplaceHome({ services }: { services: ServiceSummary[] }) {
 
       <section id="catalog" className="section-sep">
         <div className="section-container section-stack">
-          <div className="page-intro">
-            <Badge variant="eyebrow">Marketplace catalog</Badge>
-            <div className="space-y-4">
-              <h2 className="section-title">Explore live Fast services</h2>
-              <p className="body-copy">
-                Search provider supply, compare throughput and pricing, and open the exact service pages agents can use
-                right now.
-              </p>
-            </div>
-          </div>
-
-          <div className="glass-panel p-6 md:p-8">
-            <div className="grid gap-4 md:grid-cols-[1fr_auto]">
-              <label className="relative block">
-                <span className="sr-only">Search services, owners, or categories</span>
-                <Search className="pointer-events-none absolute left-5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-                <Input
-                  value={query}
-                  onChange={(event) => setQuery(event.target.value)}
-                  placeholder="Search services, owners, or categories"
-                  className="pl-12"
-                />
-              </label>
-              <div className="flex flex-wrap gap-2">
-                {categories.map((item) => (
-                  <button
-                    key={item}
-                    type="button"
-                    onClick={() => setCategory(item)}
-                    className={item === category ? "filter-chip filter-chip-active" : "filter-chip"}
-                  >
-                    {item}
-                  </button>
-                ))}
-              </div>
-            </div>
-          </div>
-
           <div className="mt-8 grid gap-5 lg:grid-cols-2">
             {filtered.map((service) => (
               <Link key={service.slug} href={`/services/${service.slug}`} className="group">
