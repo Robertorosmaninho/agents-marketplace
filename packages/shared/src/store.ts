@@ -101,7 +101,17 @@ function computeServiceAnalytics(input: {
   jobs: JobRecord[];
 }): ServiceAnalytics {
   const routeIds = new Set(input.routeIds);
-  const acceptedCalls = input.idempotencyRecords.filter((record) => routeIds.has(record.routeId));
+  const acceptedCalls = input.idempotencyRecords.filter((record) => {
+    if (!routeIds.has(record.routeId)) {
+      return false;
+    }
+
+    if (record.responseKind === "job") {
+      return true;
+    }
+
+    return record.responseStatusCode >= 200 && record.responseStatusCode < 400;
+  });
   const jobs = input.jobs.filter((job) => routeIds.has(job.routeId));
   const windowStart = new Date(Date.now() - 29 * 24 * 60 * 60 * 1000);
   const volumeMap = new Map<string, bigint>();
@@ -170,6 +180,7 @@ export class InMemoryMarketplaceStore implements MarketplaceStore {
   private readonly accessGrants = new Map<string, AccessGrantRecord>();
   private readonly refundsById = new Map<string, RefundRecord>();
   private readonly refundsByJobToken = new Map<string, RefundRecord>();
+  private readonly refundsByPaymentId = new Map<string, RefundRecord>();
   private readonly suggestionsById = new Map<string, SuggestionRecord>();
   private readonly attempts: ProviderAttemptRecord[] = [];
 
@@ -417,19 +428,21 @@ export class InMemoryMarketplaceStore implements MarketplaceStore {
   }
 
   async createRefund(input: {
-    jobToken: string;
+    jobToken?: string | null;
     paymentId: string;
     wallet: string;
     amount: string;
   }): Promise<RefundRecord> {
-    const existing = this.refundsByJobToken.get(input.jobToken);
+    const existing = input.jobToken
+      ? this.refundsByJobToken.get(input.jobToken)
+      : this.refundsByPaymentId.get(input.paymentId);
     if (existing) {
       return clone(existing);
     }
 
     const record: RefundRecord = {
       id: randomUUID(),
-      jobToken: input.jobToken,
+      jobToken: input.jobToken ?? null,
       paymentId: input.paymentId,
       wallet: input.wallet,
       amount: input.amount,
@@ -441,16 +454,20 @@ export class InMemoryMarketplaceStore implements MarketplaceStore {
     };
 
     this.refundsById.set(record.id, record);
-    this.refundsByJobToken.set(record.jobToken, record);
+    this.refundsByPaymentId.set(record.paymentId, record);
 
-    const job = this.jobsByToken.get(input.jobToken);
-    if (job) {
-      this.jobsByToken.set(input.jobToken, {
-        ...job,
-        refundStatus: "pending",
-        refundId: record.id,
-        updatedAt: timestamp()
-      });
+    if (record.jobToken) {
+      this.refundsByJobToken.set(record.jobToken, record);
+
+      const job = this.jobsByToken.get(record.jobToken);
+      if (job) {
+        this.jobsByToken.set(record.jobToken, {
+          ...job,
+          refundStatus: "pending",
+          refundId: record.id,
+          updatedAt: timestamp()
+        });
+      }
     }
 
     return clone(record);
@@ -471,16 +488,20 @@ export class InMemoryMarketplaceStore implements MarketplaceStore {
     };
 
     this.refundsById.set(refundId, updated);
-    this.refundsByJobToken.set(updated.jobToken, updated);
+    this.refundsByPaymentId.set(updated.paymentId, updated);
 
-    const job = this.jobsByToken.get(updated.jobToken);
-    if (job) {
-      this.jobsByToken.set(updated.jobToken, {
-        ...job,
-        refundStatus: "sent",
-        refundId,
-        updatedAt: timestamp()
-      });
+    if (updated.jobToken) {
+      this.refundsByJobToken.set(updated.jobToken, updated);
+
+      const job = this.jobsByToken.get(updated.jobToken);
+      if (job) {
+        this.jobsByToken.set(updated.jobToken, {
+          ...job,
+          refundStatus: "sent",
+          refundId,
+          updatedAt: timestamp()
+        });
+      }
     }
 
     return clone(updated);
@@ -500,16 +521,20 @@ export class InMemoryMarketplaceStore implements MarketplaceStore {
     };
 
     this.refundsById.set(refundId, updated);
-    this.refundsByJobToken.set(updated.jobToken, updated);
+    this.refundsByPaymentId.set(updated.paymentId, updated);
 
-    const job = this.jobsByToken.get(updated.jobToken);
-    if (job) {
-      this.jobsByToken.set(updated.jobToken, {
-        ...job,
-        refundStatus: "failed",
-        refundId,
-        updatedAt: timestamp()
-      });
+    if (updated.jobToken) {
+      this.refundsByJobToken.set(updated.jobToken, updated);
+
+      const job = this.jobsByToken.get(updated.jobToken);
+      if (job) {
+        this.jobsByToken.set(updated.jobToken, {
+          ...job,
+          refundStatus: "failed",
+          refundId,
+          updatedAt: timestamp()
+        });
+      }
     }
 
     return clone(updated);
@@ -1334,7 +1359,7 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
 
       CREATE TABLE IF NOT EXISTS refunds (
         id TEXT PRIMARY KEY,
-        job_token TEXT UNIQUE NOT NULL REFERENCES jobs(job_token),
+        job_token TEXT UNIQUE REFERENCES jobs(job_token),
         payment_id TEXT NOT NULL,
         wallet TEXT NOT NULL,
         amount TEXT NOT NULL,
@@ -1509,6 +1534,9 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
 
       ALTER TABLE jobs
       ADD COLUMN IF NOT EXISTS route_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb;
+
+      ALTER TABLE refunds
+      ALTER COLUMN job_token DROP NOT NULL;
     `);
 
     await this.seedDefaults();
@@ -2006,34 +2034,40 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
   }
 
   async createRefund(input: {
-    jobToken: string;
+    jobToken?: string | null;
     paymentId: string;
     wallet: string;
     amount: string;
   }): Promise<RefundRecord> {
-    const existing = await this.getRefundByJobToken(input.jobToken);
-    if (existing) {
-      return existing;
+    const existingResult = await this.pool.query(
+      "SELECT * FROM refunds WHERE payment_id = $1 LIMIT 1",
+      [input.paymentId]
+    );
+    if (existingResult.rowCount) {
+      return mapRefundRow(existingResult.rows[0]);
     }
 
+    const jobToken = input.jobToken ?? null;
     const result = await this.pool.query(
       `
       INSERT INTO refunds (id, job_token, payment_id, wallet, amount, status)
       VALUES ($1, $2, $3, $4, $5, 'pending')
       RETURNING *
       `,
-      [randomUUID(), input.jobToken, input.paymentId, input.wallet, input.amount]
+      [randomUUID(), jobToken, input.paymentId, input.wallet, input.amount]
     );
 
     const refund = mapRefundRow(result.rows[0]);
-    await this.pool.query(
-      `
-      UPDATE jobs
-      SET refund_status = 'pending', refund_id = $2, updated_at = NOW()
-      WHERE job_token = $1
-      `,
-      [input.jobToken, refund.id]
-    );
+    if (jobToken) {
+      await this.pool.query(
+        `
+        UPDATE jobs
+        SET refund_status = 'pending', refund_id = $2, updated_at = NOW()
+        WHERE job_token = $1
+        `,
+        [jobToken, refund.id]
+      );
+    }
 
     return refund;
   }
@@ -2050,14 +2084,16 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
     );
 
     const refund = mapRefundRow(result.rows[0]);
-    await this.pool.query(
-      `
-      UPDATE jobs
-      SET refund_status = 'sent', refund_id = $2, updated_at = NOW()
-      WHERE job_token = $1
-      `,
-      [refund.jobToken, refund.id]
-    );
+    if (refund.jobToken) {
+      await this.pool.query(
+        `
+        UPDATE jobs
+        SET refund_status = 'sent', refund_id = $2, updated_at = NOW()
+        WHERE job_token = $1
+        `,
+        [refund.jobToken, refund.id]
+      );
+    }
 
     return refund;
   }
@@ -2074,14 +2110,16 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
     );
 
     const refund = mapRefundRow(result.rows[0]);
-    await this.pool.query(
-      `
-      UPDATE jobs
-      SET refund_status = 'failed', refund_id = $2, updated_at = NOW()
-      WHERE job_token = $1
-      `,
-      [refund.jobToken, refund.id]
-    );
+    if (refund.jobToken) {
+      await this.pool.query(
+        `
+        UPDATE jobs
+        SET refund_status = 'failed', refund_id = $2, updated_at = NOW()
+        WHERE job_token = $1
+        `,
+        [refund.jobToken, refund.id]
+      );
+    }
 
     return refund;
   }
@@ -2281,8 +2319,16 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
   }
 
   async getProviderServiceForOwner(serviceId: string, wallet: string): Promise<ProviderServiceDetailRecord | null> {
-    const detail = await this.getProviderServiceDetailById(serviceId);
-    return detail.account.ownerWallet === wallet ? detail : null;
+    try {
+      const detail = await this.getProviderServiceDetailById(serviceId);
+      return detail.account.ownerWallet === wallet ? detail : null;
+    } catch (error) {
+      if (error instanceof Error && error.message.includes("Provider service not found")) {
+        return null;
+      }
+
+      throw error;
+    }
   }
 
   async updateProviderServiceForOwner(
@@ -3055,7 +3101,7 @@ function mapAccessGrantRow(row: Record<string, unknown>): AccessGrantRecord {
 function mapRefundRow(row: Record<string, unknown>): RefundRecord {
   return {
     id: row.id as string,
-    jobToken: row.job_token as string,
+    jobToken: (row.job_token as string | null) ?? null,
     paymentId: row.payment_id as string,
     wallet: row.wallet as string,
     amount: row.amount as string,

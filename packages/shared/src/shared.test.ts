@@ -217,6 +217,29 @@ describe("shared marketplace helpers", () => {
 
     await store.completeJob("job_catalog_1", { report: "done" });
 
+    await store.saveSyncIdempotency({
+      paymentId: "payment_sync_catalog_failed_1",
+      normalizedRequestHash: "hash_sync_failed",
+      buyerWallet: "fast1buyer00000000000000000000000000000000000000000000000000000000",
+      routeId: "mock.quick-insight.v1",
+      routeVersion: "v1",
+      quotedPrice: "50000",
+      payoutSplit: {
+        currency: "fastUSDC",
+        marketplaceWallet: "fast1market",
+        marketplaceBps: 6000,
+        marketplaceAmount: "30000",
+        providerAccountId: "provider_marketplace",
+        providerWallet: null,
+        providerBps: 4000,
+        providerAmount: "20000"
+      },
+      paymentPayload: "payload",
+      facilitatorResponse: { isValid: true },
+      statusCode: 502,
+      body: { error: "refunded" }
+    });
+
     const analytics = await store.getServiceAnalytics(["mock.quick-insight.v1", "mock.async-report.v1"]);
     expect(analytics.totalCalls).toBe(2);
     expect(analytics.revenueRaw).toBe("60000");

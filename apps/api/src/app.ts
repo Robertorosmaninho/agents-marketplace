@@ -47,6 +47,7 @@ import {
   type ProviderRegistry,
   type PublishedEndpointVersionRecord,
   type PublishedServiceVersionRecord,
+  type RefundService,
   type UpdateProviderEndpointDraftInput,
   type UpstreamAuthMode
 } from "@marketplace/shared";
@@ -57,6 +58,7 @@ export interface MarketplaceApiOptions {
   sessionSecret: string;
   adminToken: string;
   facilitatorClient: FacilitatorClient;
+  refundService: RefundService;
   providers?: ProviderRegistry;
   baseUrl?: string;
   webBaseUrl?: string;
@@ -605,6 +607,13 @@ export function createMarketplaceApi(options: MarketplaceApiOptions): Express {
       return res.status(404).json({ error: "Provider service not found." });
     }
 
+    if (websiteHostChanged(existing.service.websiteUrl, updated.websiteUrl)) {
+      await options.store.markProviderVerificationResult(req.params.id, "failed", {
+        verifiedHost: null,
+        failureReason: "Website URL changed. Re-verify ownership before submit."
+      });
+    }
+
     return res.json(updated);
   });
 
@@ -1030,6 +1039,35 @@ export function createMarketplaceApi(options: MarketplaceApiOptions): Express {
         : await executeHttpRoute(route, req.body ?? {}, options.store, secretsKey);
 
     if (executeResult.kind === "sync") {
+      if (executeResult.statusCode < 200 || executeResult.statusCode >= 400) {
+        const failedResponse = await buildRejectedSyncResponse({
+          executeResult,
+          paymentId: paymentHeaders.paymentId,
+          buyerWallet,
+          quotedPrice,
+          route,
+          store: options.store,
+          refundService: options.refundService
+        });
+
+        await options.store.saveSyncIdempotency({
+          paymentId: paymentHeaders.paymentId,
+          normalizedRequestHash: requestHash,
+          buyerWallet,
+          routeId: route.routeId,
+          routeVersion: route.version,
+          quotedPrice,
+          payoutSplit,
+          paymentPayload: paymentHeaders.paymentPayload,
+          facilitatorResponse: verifyResult,
+          statusCode: failedResponse.statusCode,
+          body: failedResponse.body,
+          headers: failedResponse.headers
+        });
+
+        return res.status(failedResponse.statusCode).set(failedResponse.headers).json(failedResponse.body);
+      }
+
       const paymentResponseHeaders = buildPaymentResponseHeaders({
         success: true,
         network: route.network,
@@ -1186,11 +1224,25 @@ async function executeHttpRoute(
     applyUpstreamAuthHeaders(headers, route.upstreamAuthMode, decrypted, route.upstreamAuthHeaderName ?? null);
   }
 
-  const response = await fetch(joinUrl(route.upstreamBaseUrl, route.upstreamPath), {
-    method: "POST",
-    headers,
-    body: JSON.stringify(input)
-  });
+  let response: globalThis.Response;
+  try {
+    response = await fetch(joinUrl(route.upstreamBaseUrl, route.upstreamPath), {
+      method: "POST",
+      headers,
+      body: JSON.stringify(input)
+    });
+  } catch (error) {
+    return {
+      kind: "sync" as const,
+      statusCode: 502,
+      body: {
+        error: error instanceof Error ? error.message : "Upstream request failed."
+      },
+      headers: {
+        "content-type": "application/json"
+      }
+    };
+  }
 
   return {
     kind: "sync" as const,
@@ -1200,6 +1252,71 @@ async function executeHttpRoute(
       "content-type": response.headers.get("content-type") ?? "application/json"
     }
   };
+}
+
+async function buildRejectedSyncResponse(input: {
+  executeResult: {
+    kind: "sync";
+    statusCode: number;
+    body: unknown;
+    headers?: Record<string, string>;
+  };
+  paymentId: string;
+  buyerWallet: string;
+  quotedPrice: string;
+  route: MarketplaceRoute;
+  store: MarketplaceStore;
+  refundService: RefundService;
+}) {
+  const refund = await input.store.createRefund({
+    paymentId: input.paymentId,
+    wallet: input.buyerWallet,
+    amount: input.quotedPrice
+  });
+
+  try {
+    const receipt = await input.refundService.issueRefund({
+      wallet: input.buyerWallet,
+      amount: input.quotedPrice,
+      reason: `Sync upstream request rejected for ${input.route.routeId}.`
+    });
+    const sentRefund = await input.store.markRefundSent(refund.id, receipt.txHash);
+
+    return {
+      statusCode: input.executeResult.statusCode,
+      headers: {
+        "content-type": "application/json"
+      },
+      body: {
+        error: "Upstream request failed. Payment was refunded.",
+        upstreamStatus: input.executeResult.statusCode,
+        upstreamBody: input.executeResult.body,
+        refund: {
+          status: sentRefund.status,
+          txHash: sentRefund.txHash
+        }
+      }
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Refund failed.";
+    const failedRefund = await input.store.markRefundFailed(refund.id, message);
+
+    return {
+      statusCode: input.executeResult.statusCode,
+      headers: {
+        "content-type": "application/json"
+      },
+      body: {
+        error: "Upstream request failed and the automatic refund did not complete.",
+        upstreamStatus: input.executeResult.statusCode,
+        upstreamBody: input.executeResult.body,
+        refund: {
+          status: failedRefund.status,
+          error: failedRefund.errorMessage
+        }
+      }
+    };
+  }
 }
 
 function applyUpstreamAuthHeaders(
@@ -1304,6 +1421,14 @@ async function validateProviderServiceForSubmit(detail: ProviderServiceDetailRec
   }
 
   const serviceHost = new URL(detail.service.websiteUrl).hostname;
+  if (verification.verifiedHost !== serviceHost) {
+    return {
+      ok: false as const,
+      statusCode: 400,
+      error: "Website URL changed since verification. Re-verify ownership before submit."
+    };
+  }
+
   for (const endpoint of detail.endpoints) {
     if (endpoint.mode !== "sync") {
       return { ok: false as const, statusCode: 400, error: "Provider-authored endpoints must be sync-only in v1." };
@@ -1325,6 +1450,14 @@ function isSameOrSubdomain(rootHost: string, candidateHost: string): boolean {
   const root = rootHost.toLowerCase();
   const candidate = candidateHost.toLowerCase();
   return candidate === root || candidate.endsWith(`.${root}`);
+}
+
+function websiteHostChanged(previousUrl: string | null, nextUrl: string | null): boolean {
+  if (!previousUrl || !nextUrl) {
+    return false;
+  }
+
+  return new URL(previousUrl).hostname !== new URL(nextUrl).hostname;
 }
 
 function parseServiceStatus(value: string | undefined | null) {

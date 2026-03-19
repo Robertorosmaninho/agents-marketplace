@@ -9,6 +9,7 @@ export * from "./mock-provider.js";
 export * from "./network.js";
 export * from "./payment.js";
 export * from "./payout.js";
+export * from "./refund.js";
 export * from "./routes.js";
 export * from "./seed.js";
 export * from "./secrets.js";

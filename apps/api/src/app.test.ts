@@ -70,6 +70,11 @@ async function createTestApp() {
         };
       }
     },
+    refundService: {
+      async issueRefund() {
+        return { txHash: "0xrefund" };
+      }
+    },
     webBaseUrl: "https://fast.8o.vc"
   });
 
@@ -304,6 +309,11 @@ describe("marketplace api", () => {
           };
         }
       },
+      refundService: {
+        async issueRefund() {
+          return { txHash: "0xrefund" };
+        }
+      },
       webBaseUrl: "https://fast.8o.vc"
     });
 
@@ -485,6 +495,230 @@ describe("marketplace api", () => {
     expect(record?.payoutSplit.providerAccountId).toBe(providerAccountId);
     expect(record?.payoutSplit.providerAmount).toBe("250000");
     expect(record?.payoutSplit.marketplaceAmount).toBe("0");
+  });
+
+  it("requires re-verification when the provider changes the service website host", async () => {
+    const providerWallet = await createTestWallet(PROVIDER_PRIVATE_KEY);
+    const { app } = await createTestApp();
+    const providerToken = await createSiteSession(app, providerWallet);
+
+    await request(app)
+      .post("/provider/me")
+      .set("Authorization", `Bearer ${providerToken}`)
+      .send({
+        displayName: "Signal Labs",
+        websiteUrl: "https://provider.example.com"
+      });
+
+    const createdService = await request(app)
+      .post("/provider/services")
+      .set("Authorization", `Bearer ${providerToken}`)
+      .send({
+        slug: "signal-labs-reverify",
+        apiNamespace: "signals-reverify",
+        name: "Signal Labs Reverify",
+        tagline: "Short-form market signals",
+        about: "Provider-authored signal endpoints.",
+        categories: ["Research"],
+        promptIntro: "Prompt intro",
+        setupInstructions: ["Use a funded Fast wallet."],
+        websiteUrl: "https://provider.example.com",
+        payoutWallet: providerWallet.address
+      });
+
+    const serviceId = createdService.body.service.id as string;
+
+    await request(app)
+      .post(`/provider/services/${serviceId}/endpoints`)
+      .set("Authorization", `Bearer ${providerToken}`)
+      .send({
+        operation: "quote",
+        title: "Quote",
+        description: "Return a single quote snapshot.",
+        price: "$0.25",
+        mode: "sync",
+        requestSchemaJson: {
+          type: "object",
+          properties: {
+            symbol: { type: "string" }
+          },
+          required: ["symbol"],
+          additionalProperties: false
+        },
+        responseSchemaJson: {
+          type: "object",
+          properties: {
+            symbol: { type: "string" }
+          },
+          required: ["symbol"],
+          additionalProperties: false
+        },
+        requestExample: { symbol: "FAST" },
+        responseExample: { symbol: "FAST" },
+        upstreamBaseUrl: "https://provider.example.com",
+        upstreamPath: "/api/quote",
+        upstreamAuthMode: "none"
+      });
+
+    const verificationChallenge = await request(app)
+      .post(`/provider/services/${serviceId}/verification-challenge`)
+      .set("Authorization", `Bearer ${providerToken}`);
+
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      if (String(input) === verificationChallenge.body.expectedUrl) {
+        return new Response(verificationChallenge.body.token, { status: 200 });
+      }
+
+      return new Response("not found", { status: 404 });
+    });
+
+    const verified = await request(app)
+      .post(`/provider/services/${serviceId}/verify`)
+      .set("Authorization", `Bearer ${providerToken}`);
+
+    expect(verified.status).toBe(200);
+
+    const patched = await request(app)
+      .patch(`/provider/services/${serviceId}`)
+      .set("Authorization", `Bearer ${providerToken}`)
+      .send({
+        websiteUrl: "https://new-provider.example.com"
+      });
+
+    expect(patched.status).toBe(200);
+
+    const submitted = await request(app)
+      .post(`/provider/services/${serviceId}/submit`)
+      .set("Authorization", `Bearer ${providerToken}`);
+
+    expect(submitted.status).toBe(400);
+    expect(submitted.body.error).toContain("Verify website ownership");
+  });
+
+  it("refunds rejected sync upstream calls and excludes them from accepted call analytics", async () => {
+    const providerWallet = await createTestWallet(PROVIDER_PRIVATE_KEY);
+    const { app, store } = await createTestApp();
+    const providerToken = await createSiteSession(app, providerWallet);
+
+    const profile = await request(app)
+      .post("/provider/me")
+      .set("Authorization", `Bearer ${providerToken}`)
+      .send({
+        displayName: "Signal Labs",
+        websiteUrl: "https://provider.example.com"
+      });
+
+    const createdService = await request(app)
+      .post("/provider/services")
+      .set("Authorization", `Bearer ${providerToken}`)
+      .send({
+        slug: "signal-labs-failure",
+        apiNamespace: "signals-failure",
+        name: "Signal Labs Failure",
+        tagline: "Short-form market signals",
+        about: "Provider-authored signal endpoints.",
+        categories: ["Research"],
+        promptIntro: "Prompt intro",
+        setupInstructions: ["Use a funded Fast wallet."],
+        websiteUrl: "https://provider.example.com",
+        payoutWallet: providerWallet.address
+      });
+
+    const serviceId = createdService.body.service.id as string;
+
+    await request(app)
+      .post(`/provider/services/${serviceId}/endpoints`)
+      .set("Authorization", `Bearer ${providerToken}`)
+      .send({
+        operation: "quote",
+        title: "Quote",
+        description: "Return a single quote snapshot.",
+        price: "$0.25",
+        mode: "sync",
+        requestSchemaJson: {
+          type: "object",
+          properties: {
+            symbol: { type: "string" }
+          },
+          required: ["symbol"],
+          additionalProperties: false
+        },
+        responseSchemaJson: {
+          type: "object",
+          properties: {
+            symbol: { type: "string" }
+          },
+          required: ["symbol"],
+          additionalProperties: false
+        },
+        requestExample: { symbol: "FAST" },
+        responseExample: { symbol: "FAST" },
+        upstreamBaseUrl: "https://provider.example.com",
+        upstreamPath: "/api/quote",
+        upstreamAuthMode: "none"
+      });
+
+    const verificationChallenge = await request(app)
+      .post(`/provider/services/${serviceId}/verification-challenge`)
+      .set("Authorization", `Bearer ${providerToken}`);
+
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = String(input);
+      if (url === verificationChallenge.body.expectedUrl) {
+        return new Response(verificationChallenge.body.token, { status: 200 });
+      }
+
+      if (url === "https://provider.example.com/api/quote") {
+        return new Response(JSON.stringify({ error: "provider unavailable" }), {
+          status: 502,
+          headers: {
+            "content-type": "application/json"
+          }
+        });
+      }
+
+      return new Response("not found", { status: 404 });
+    });
+
+    await request(app)
+      .post(`/provider/services/${serviceId}/verify`)
+      .set("Authorization", `Bearer ${providerToken}`);
+    await request(app)
+      .post(`/provider/services/${serviceId}/submit`)
+      .set("Authorization", `Bearer ${providerToken}`);
+    await request(app)
+      .post(`/internal/provider-services/${serviceId}/publish`)
+      .set("Authorization", "Bearer test-admin-token")
+      .send({
+        reviewerIdentity: "ops@test"
+      });
+
+    const failed = await request(app)
+      .post("/api/signals-failure/quote")
+      .set("X-PAYMENT", Buffer.from(JSON.stringify({ paid: true })).toString("base64"))
+      .set("PAYMENT-IDENTIFIER", "payment_provider_sync_failure_1")
+      .send({ symbol: "FAST" });
+
+    expect(failed.status).toBe(502);
+    expect(failed.body.error).toContain("Payment was refunded");
+    expect(failed.body.refund.status).toBe("sent");
+    expect(failed.body.refund.txHash).toBe("0xrefund");
+
+    const replay = await request(app)
+      .post("/api/signals-failure/quote")
+      .set("X-PAYMENT", Buffer.from(JSON.stringify({ paid: true })).toString("base64"))
+      .set("PAYMENT-IDENTIFIER", "payment_provider_sync_failure_1")
+      .send({ symbol: "FAST" });
+
+    expect(replay.status).toBe(502);
+    expect(replay.body).toEqual(failed.body);
+
+    const record = await store.getIdempotencyByPaymentId("payment_provider_sync_failure_1");
+    expect(record?.responseStatusCode).toBe(502);
+
+    const analytics = await store.getServiceAnalytics(["signals-failure.quote.v1"]);
+    expect(analytics.totalCalls).toBe(0);
+    expect(analytics.revenueRaw).toBe("0");
   });
 
   it("prevents a different wallet from reading another provider draft", async () => {

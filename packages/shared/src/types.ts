@@ -487,7 +487,7 @@ export interface AccessGrantRecord {
 
 export interface RefundRecord {
   id: string;
-  jobToken: string;
+  jobToken: string | null;
   paymentId: string;
   wallet: string;
   amount: string;
@@ -557,7 +557,7 @@ export interface MarketplaceStore {
     errorMessage?: string;
   }): Promise<ProviderAttemptRecord>;
   createRefund(input: {
-    jobToken: string;
+    jobToken?: string | null;
     paymentId: string;
     wallet: string;
     amount: string;
