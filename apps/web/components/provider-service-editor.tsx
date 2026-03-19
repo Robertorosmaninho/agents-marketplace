@@ -59,7 +59,7 @@ function ProviderServiceEditorInner({
   accessToken: string;
   serviceId: string;
 }) {
-  const [detail, setDetail] = React.useState<Awaited<ReturnType<typeof fetchProviderService>>>(null);
+  const [detail, setDetail] = React.useState<Awaited<ReturnType<typeof fetchProviderService>> | undefined>(undefined);
   const [pending, startTransition] = React.useTransition();
   const [message, setMessage] = React.useState<string | null>(null);
   const [error, setError] = React.useState<string | null>(null);
@@ -68,6 +68,7 @@ function ProviderServiceEditorInner({
   React.useEffect(() => {
     startTransition(async () => {
       try {
+        setError(null);
         setDetail(await fetchProviderService(apiBaseUrl, accessToken, serviceId));
       } catch (nextError) {
         setError(nextError instanceof Error ? nextError.message : "Failed to load service draft.");
@@ -77,8 +78,32 @@ function ProviderServiceEditorInner({
 
   const [newEndpoint, setNewEndpoint] = React.useState(defaultEndpointFormState());
 
-  if (!detail) {
-    return <Card><CardContent className="p-6 text-sm text-muted-foreground">Loading service draft...</CardContent></Card>;
+  if (detail === undefined) {
+    return (
+      <Card>
+        <CardContent className="p-6 text-sm text-muted-foreground">
+          {error ?? "Loading service draft..."}
+        </CardContent>
+      </Card>
+    );
+  }
+
+  if (detail === null) {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle>Service draft unavailable</CardTitle>
+          <CardDescription>
+            This draft was deleted or is no longer accessible from the connected wallet session.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-wrap gap-3">
+          <Button type="button" variant="outline" onClick={() => window.location.assign("/providers/services")}>
+            Back to drafts
+          </Button>
+        </CardContent>
+      </Card>
+    );
   }
 
   async function refresh() {

@@ -260,6 +260,27 @@ describe("shared marketplace helpers", () => {
     expect((await store.listSuggestions()).length).toBe(1);
   });
 
+  it("deduplicates refunds by payment id in the in-memory store", async () => {
+    const store = new InMemoryMarketplaceStore();
+
+    const first = await store.createRefund({
+      paymentId: "payment_refund_1",
+      wallet: "fast1buyer00000000000000000000000000000000000000000000000000000000",
+      amount: "50000"
+    });
+
+    const second = await store.createRefund({
+      jobToken: "job_refund_1",
+      paymentId: "payment_refund_1",
+      wallet: "fast1buyer00000000000000000000000000000000000000000000000000000000",
+      amount: "50000"
+    });
+
+    expect(second.id).toBe(first.id);
+    expect(second.paymentId).toBe(first.paymentId);
+    expect(second.jobToken).toBeNull();
+  });
+
   it("publishes provider snapshots and resolves them by api namespace and operation", async () => {
     const store = new InMemoryMarketplaceStore();
     const wallet = "fast1provider000000000000000000000000000000000000000000000000000000";

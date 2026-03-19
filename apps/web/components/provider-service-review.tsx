@@ -39,7 +39,7 @@ function ProviderServiceReviewInner({
   accessToken: string;
   serviceId: string;
 }) {
-  const [detail, setDetail] = React.useState<Awaited<ReturnType<typeof fetchProviderService>>>(null);
+  const [detail, setDetail] = React.useState<Awaited<ReturnType<typeof fetchProviderService>> | undefined>(undefined);
   const [pending, startTransition] = React.useTransition();
   const [message, setMessage] = React.useState<string | null>(null);
   const [error, setError] = React.useState<string | null>(null);
@@ -47,6 +47,7 @@ function ProviderServiceReviewInner({
   React.useEffect(() => {
     startTransition(async () => {
       try {
+        setError(null);
         setDetail(await fetchProviderService(apiBaseUrl, accessToken, serviceId));
       } catch (nextError) {
         setError(nextError instanceof Error ? nextError.message : "Failed to load review state.");
@@ -54,8 +55,32 @@ function ProviderServiceReviewInner({
     });
   }, [accessToken, apiBaseUrl, serviceId]);
 
-  if (!detail) {
-    return <Card><CardContent className="p-6 text-sm text-muted-foreground">Loading review state...</CardContent></Card>;
+  if (detail === undefined) {
+    return (
+      <Card>
+        <CardContent className="p-6 text-sm text-muted-foreground">
+          {error ?? "Loading review state..."}
+        </CardContent>
+      </Card>
+    );
+  }
+
+  if (detail === null) {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle>Review draft unavailable</CardTitle>
+          <CardDescription>
+            This draft was deleted or is no longer accessible from the connected wallet session.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-wrap gap-3">
+          <Button type="button" variant="outline" onClick={() => window.location.assign("/providers/services")}>
+            Back to drafts
+          </Button>
+        </CardContent>
+      </Card>
+    );
   }
 
   const checklist = [

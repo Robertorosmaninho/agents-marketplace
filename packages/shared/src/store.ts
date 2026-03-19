@@ -433,9 +433,8 @@ export class InMemoryMarketplaceStore implements MarketplaceStore {
     wallet: string;
     amount: string;
   }): Promise<RefundRecord> {
-    const existing = input.jobToken
-      ? this.refundsByJobToken.get(input.jobToken)
-      : this.refundsByPaymentId.get(input.paymentId);
+    const existing = this.refundsByPaymentId.get(input.paymentId)
+      ?? (input.jobToken ? this.refundsByJobToken.get(input.jobToken) : undefined);
     if (existing) {
       return clone(existing);
     }
@@ -1537,6 +1536,33 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
 
       ALTER TABLE refunds
       ALTER COLUMN job_token DROP NOT NULL;
+
+      WITH ranked_refunds AS (
+        SELECT
+          ctid,
+          ROW_NUMBER() OVER (
+            PARTITION BY payment_id
+            ORDER BY
+              CASE status
+                WHEN 'sent' THEN 0
+                WHEN 'pending' THEN 1
+                ELSE 2
+              END,
+              updated_at DESC,
+              created_at DESC,
+              id DESC
+          ) AS row_num
+        FROM refunds
+      )
+      DELETE FROM refunds
+      WHERE ctid IN (
+        SELECT ctid
+        FROM ranked_refunds
+        WHERE row_num > 1
+      );
+
+      CREATE UNIQUE INDEX IF NOT EXISTS refunds_payment_id_idx
+      ON refunds(payment_id);
     `);
 
     await this.seedDefaults();
@@ -2039,19 +2065,28 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
     wallet: string;
     amount: string;
   }): Promise<RefundRecord> {
+    const jobToken = input.jobToken ?? null;
     const existingResult = await this.pool.query(
-      "SELECT * FROM refunds WHERE payment_id = $1 LIMIT 1",
-      [input.paymentId]
+      `
+      SELECT *
+      FROM refunds
+      WHERE payment_id = $1
+        OR ($2::text IS NOT NULL AND job_token = $2)
+      ORDER BY created_at ASC
+      LIMIT 1
+      `,
+      [input.paymentId, jobToken]
     );
     if (existingResult.rowCount) {
       return mapRefundRow(existingResult.rows[0]);
     }
 
-    const jobToken = input.jobToken ?? null;
     const result = await this.pool.query(
       `
       INSERT INTO refunds (id, job_token, payment_id, wallet, amount, status)
       VALUES ($1, $2, $3, $4, $5, 'pending')
+      ON CONFLICT (payment_id) DO UPDATE
+      SET updated_at = refunds.updated_at
       RETURNING *
       `,
       [randomUUID(), jobToken, input.paymentId, input.wallet, input.amount]
