@@ -5,7 +5,11 @@ import Link from "next/link";
 import type { MarketplaceDeploymentNetwork } from "@marketplace/shared";
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { readStoredWalletSession, type StoredWalletSession } from "@/lib/wallet-session";
+import {
+  WALLET_SESSION_CHANGE_EVENT,
+  readStoredWalletSession,
+  type StoredWalletSession
+} from "@/lib/wallet-session";
 
 export function ProviderSessionGate({
   deploymentNetwork,
@@ -22,8 +26,19 @@ export function ProviderSessionGate({
   const [ready, setReady] = React.useState(false);
 
   React.useEffect(() => {
-    setSession(readStoredWalletSession(deploymentNetwork));
-    setReady(true);
+    function syncSession() {
+      setSession(readStoredWalletSession(deploymentNetwork));
+      setReady(true);
+    }
+
+    syncSession();
+    window.addEventListener(WALLET_SESSION_CHANGE_EVENT, syncSession);
+    window.addEventListener("storage", syncSession);
+
+    return () => {
+      window.removeEventListener(WALLET_SESSION_CHANGE_EVENT, syncSession);
+      window.removeEventListener("storage", syncSession);
+    };
   }, [deploymentNetwork]);
 
   if (!ready) {

@@ -8,6 +8,15 @@ export interface StoredWalletSession {
 }
 
 export const WALLET_SESSION_STORAGE_KEY = "fast-marketplace-wallet-session";
+export const WALLET_SESSION_CHANGE_EVENT = "fast-marketplace-wallet-session-change";
+
+function emitWalletSessionChange(): void {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  window.dispatchEvent(new Event(WALLET_SESSION_CHANGE_EVENT));
+}
 
 export function normalizeWalletConnectorNetwork(value: string | null | undefined): MarketplaceDeploymentNetwork | null {
   const normalized = value?.trim().toLowerCase();
@@ -65,12 +74,20 @@ export function readStoredWalletSession(expectedNetwork: MarketplaceDeploymentNe
 
     if (parsed.deploymentNetwork !== expectedNetwork) {
       window.localStorage.removeItem(WALLET_SESSION_STORAGE_KEY);
+      emitWalletSessionChange();
+      return null;
+    }
+
+    if (parsed.resourceId !== window.location.origin) {
+      window.localStorage.removeItem(WALLET_SESSION_STORAGE_KEY);
+      emitWalletSessionChange();
       return null;
     }
 
     return parsed;
   } catch {
     window.localStorage.removeItem(WALLET_SESSION_STORAGE_KEY);
+    emitWalletSessionChange();
     return null;
   }
 }
@@ -81,6 +98,7 @@ export function writeStoredWalletSession(session: StoredWalletSession): void {
   }
 
   window.localStorage.setItem(WALLET_SESSION_STORAGE_KEY, JSON.stringify(session));
+  emitWalletSessionChange();
 }
 
 export function clearStoredWalletSession(): void {
@@ -89,4 +107,5 @@ export function clearStoredWalletSession(): void {
   }
 
   window.localStorage.removeItem(WALLET_SESSION_STORAGE_KEY);
+  emitWalletSessionChange();
 }

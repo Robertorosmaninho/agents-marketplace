@@ -6,6 +6,7 @@ import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ProviderSessionGate } from "./provider-session-gate";
+import { clearStoredWalletSession } from "@/lib/wallet-session";
 
 vi.mock("next/link", () => ({
   default: ({ href, children, ...props }: { href: string; children: ReactNode }) => (
@@ -42,7 +43,7 @@ describe("ProviderSessionGate", () => {
         accessToken: "token_123",
         wallet: "fast1provider000000000000000000000000000000000000000000000000000000",
         deploymentNetwork: "testnet",
-        resourceId: "https://fast.8o.vc"
+        resourceId: window.location.origin
       })
     );
 
@@ -54,6 +55,34 @@ describe("ProviderSessionGate", () => {
 
     await waitFor(() => {
       expect(screen.getByText(/fast1provider/i)).toBeTruthy();
+    });
+  });
+
+  it("reacts to same-tab session clears and falls back to the wallet-required state", async () => {
+    window.localStorage.setItem(
+      "fast-marketplace-wallet-session",
+      JSON.stringify({
+        accessToken: "token_123",
+        wallet: "fast1provider000000000000000000000000000000000000000000000000000000",
+        deploymentNetwork: "testnet",
+        resourceId: window.location.origin
+      })
+    );
+
+    render(
+      <ProviderSessionGate deploymentNetwork="testnet" title="Provider access">
+        {(session) => <div>{session.wallet}</div>}
+      </ProviderSessionGate>
+    );
+
+    await waitFor(() => {
+      expect(screen.getAllByText(/fast1provider/i).length).toBeGreaterThan(0);
+    });
+
+    clearStoredWalletSession();
+
+    await waitFor(() => {
+      expect(screen.getByText(/connect the extension wallet first/i)).toBeTruthy();
     });
   });
 });

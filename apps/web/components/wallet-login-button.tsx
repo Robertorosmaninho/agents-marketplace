@@ -7,6 +7,7 @@ import type { MarketplaceDeploymentNetwork } from "@marketplace/shared";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
+  WALLET_SESSION_CHANGE_EVENT,
   clearStoredWalletSession,
   normalizeWalletConnectorNetwork,
   readStoredWalletSession,
@@ -51,10 +52,18 @@ export function WalletLoginButton({
   const [error, setError] = React.useState<string | null>(null);
 
   React.useEffect(() => {
-    const stored = readStoredWalletSession(deploymentNetwork);
-    if (stored) {
-      setSession(stored);
+    function syncSession() {
+      setSession(readStoredWalletSession(deploymentNetwork));
     }
+
+    syncSession();
+    window.addEventListener(WALLET_SESSION_CHANGE_EVENT, syncSession);
+    window.addEventListener("storage", syncSession);
+
+    return () => {
+      window.removeEventListener(WALLET_SESSION_CHANGE_EVENT, syncSession);
+      window.removeEventListener("storage", syncSession);
+    };
   }, [deploymentNetwork]);
 
   async function connectWallet() {

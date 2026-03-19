@@ -12,6 +12,7 @@ import type {
   UpdateProviderEndpointDraftInput,
   UpdateProviderServiceInput
 } from "@marketplace/shared";
+import { clearStoredWalletSession } from "@/lib/wallet-session";
 
 function getApiBaseUrl(): string {
   return process.env.MARKETPLACE_API_BASE_URL ?? "http://localhost:3000";
@@ -45,6 +46,11 @@ async function fetchMarketplace<T>(input: {
     return undefined as T;
   }
 
+  if (response.status === 401 && input.accessToken) {
+    clearStoredWalletSession();
+    throw new Error("Wallet session expired. Reconnect your wallet.");
+  }
+
   if (!response.ok) {
     const message = await response.text();
     throw new Error(message || `Marketplace request failed: ${response.status}`);
@@ -67,6 +73,11 @@ export async function fetchServiceDetail(slug: string): Promise<ServiceDetail | 
 
   if (response.status === 404) {
     return null;
+  }
+
+  if (response.status === 401) {
+    clearStoredWalletSession();
+    throw new Error("Wallet session expired. Reconnect your wallet.");
   }
 
   if (!response.ok) {
@@ -141,6 +152,11 @@ export async function fetchProviderAccount(
 
   if (response.status === 404) {
     return null;
+  }
+
+  if (response.status === 401) {
+    clearStoredWalletSession();
+    throw new Error("Wallet session expired. Reconnect your wallet.");
   }
 
   if (!response.ok) {

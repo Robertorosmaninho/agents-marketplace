@@ -26,7 +26,7 @@ describe("ProviderServiceReview", () => {
         accessToken: "provider_token",
         wallet: "fast1provider000000000000000000000000000000000000000000000000000000",
         deploymentNetwork: "mainnet",
-        resourceId: "https://fast.8o.vc"
+        resourceId: window.location.origin
       })
     );
   });
