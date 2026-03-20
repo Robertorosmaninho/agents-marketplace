@@ -235,8 +235,14 @@ Provider runtime key operations:
 - provider backends reserve, capture, and release buyer credit through:
   - `POST /provider/runtime/credits/reserve`
   - `POST /provider/runtime/credits/:reservationId/capture`
-  - `POST /provider/runtime/credits/:reservationId/release`
+- `POST /provider/runtime/credits/:reservationId/release`
 - top-up purchases recognize provider revenue at purchase time; later credit consumption does not create a second provider payout
+
+## Admin Surfaces
+
+- `/admin/login`: shared-token admin login
+- `/admin/services`: review submitted provider services, assign `community_direct` or `verified_escrow`, publish drafts, request changes, and suspend live services
+- `/admin/suggestions`: triage endpoint and source suggestions from marketplace demand intake
 
 ## Scripts
 

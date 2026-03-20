@@ -151,6 +151,11 @@ export function buildOpenApiDocument(input: {
         summary: "Get one provider service draft for marketplace review."
       }
     },
+    "/internal/provider-services/{id}/submitted": {
+      get: {
+        summary: "Get the submitted provider service snapshot for marketplace review."
+      }
+    },
     "/internal/provider-services/{id}/request-changes": {
       post: {
         summary: "Request provider changes before publish."

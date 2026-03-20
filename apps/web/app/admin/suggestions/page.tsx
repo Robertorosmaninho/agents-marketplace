@@ -2,6 +2,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 
 import { adminLogoutAction, updateSuggestionAction } from "@/app/actions";
+import { AdminNav } from "@/components/admin-nav";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -50,7 +51,7 @@ export default async function AdminSuggestionsPage({
                 <p className="eyebrow">Admin review</p>
                 <h1 className="section-title">Suggestion queue</h1>
                 <p className="body-copy">
-                  Private intake for new endpoints and source integrations. Update status as providers pick up work.
+                  Private intake for new endpoints and source integrations. Switch to Provider Services to review submitted supply and assign settlement tiers.
                 </p>
               </div>
             </div>
@@ -61,7 +62,9 @@ export default async function AdminSuggestionsPage({
             </form>
           </div>
 
-          <section className="mt-8 flex flex-wrap gap-2">
+          <AdminNav current="suggestions" />
+
+          <section className="mt-4 flex flex-wrap gap-2">
             {["all", "submitted", "reviewing", "accepted", "rejected", "shipped"].map((status) => {
               const href = status === "all" ? "/admin/suggestions" : `/admin/suggestions?status=${status}`;
               const isActive = (status === "all" && !statusFilter) || statusFilter === status;

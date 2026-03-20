@@ -5,8 +5,10 @@ import type {
   ProviderAccountRecord,
   ProviderEndpointDraftRecord,
   ProviderServiceDetailRecord,
+  ProviderServiceStatus,
   ServiceDetail,
   ServiceSummary,
+  SettlementMode,
   SuggestionRecord,
   SuggestionStatus,
   SuggestionType,
@@ -138,6 +140,116 @@ export async function patchAdminSuggestion(
     path: `/internal/suggestions/${id}`,
     init: {
       method: "PATCH",
+      headers: {
+        Authorization: `Bearer ${getAdminToken()}`,
+        "content-type": "application/json"
+      },
+      body: JSON.stringify(input)
+    }
+  });
+}
+
+async function fetchAdminMarketplaceNullable<T>(path: string): Promise<T | null> {
+  const response = await fetch(`${getApiBaseUrl().replace(/\/$/, "")}${path}`, {
+    cache: "no-store",
+    headers: {
+      Authorization: `Bearer ${getAdminToken()}`
+    }
+  });
+
+  if (response.status === 404) {
+    return null;
+  }
+
+  if (!response.ok) {
+    const message = await response.text();
+    throw new Error(message || `Marketplace request failed: ${response.status}`);
+  }
+
+  return response.json() as Promise<T>;
+}
+
+export async function fetchAdminProviderServices(status?: ProviderServiceStatus): Promise<ProviderServiceDetailRecord[]> {
+  const query = status ? `?status=${status}` : "";
+  const data = await fetchMarketplace<{ services: ProviderServiceDetailRecord[] }>({
+    path: `/internal/provider-services${query}`,
+    init: {
+      headers: {
+        Authorization: `Bearer ${getAdminToken()}`
+      }
+    }
+  });
+
+  return data.services;
+}
+
+export async function fetchAdminProviderService(serviceId: string): Promise<ProviderServiceDetailRecord | null> {
+  return fetchAdminMarketplaceNullable<ProviderServiceDetailRecord>(`/internal/provider-services/${serviceId}`);
+}
+
+export async function fetchSubmittedAdminProviderService(serviceId: string): Promise<ProviderServiceDetailRecord | null> {
+  return fetchAdminMarketplaceNullable<ProviderServiceDetailRecord>(`/internal/provider-services/${serviceId}/submitted`);
+}
+
+export async function requestAdminProviderServiceChanges(
+  serviceId: string,
+  input: { reviewNotes: string; reviewerIdentity?: string | null }
+): Promise<ProviderServiceDetailRecord> {
+  return fetchMarketplace<ProviderServiceDetailRecord>({
+    path: `/internal/provider-services/${serviceId}/request-changes`,
+    init: {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${getAdminToken()}`,
+        "content-type": "application/json"
+      },
+      body: JSON.stringify(input)
+    }
+  });
+}
+
+export async function publishAdminProviderService(
+  serviceId: string,
+  input: { reviewerIdentity?: string | null; settlementMode?: SettlementMode | null }
+): Promise<ProviderServiceDetailRecord> {
+  return fetchMarketplace<ProviderServiceDetailRecord>({
+    path: `/internal/provider-services/${serviceId}/publish`,
+    init: {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${getAdminToken()}`,
+        "content-type": "application/json"
+      },
+      body: JSON.stringify(input)
+    }
+  });
+}
+
+export async function updateAdminProviderServiceSettlementMode(
+  serviceId: string,
+  input: { reviewerIdentity?: string | null; settlementMode: SettlementMode }
+): Promise<ProviderServiceDetailRecord> {
+  return fetchMarketplace<ProviderServiceDetailRecord>({
+    path: `/internal/provider-services/${serviceId}/settlement-mode`,
+    init: {
+      method: "PATCH",
+      headers: {
+        Authorization: `Bearer ${getAdminToken()}`,
+        "content-type": "application/json"
+      },
+      body: JSON.stringify(input)
+    }
+  });
+}
+
+export async function suspendAdminProviderService(
+  serviceId: string,
+  input: { reviewNotes?: string | null; reviewerIdentity?: string | null }
+): Promise<ProviderServiceDetailRecord> {
+  return fetchMarketplace<ProviderServiceDetailRecord>({
+    path: `/internal/provider-services/${serviceId}/suspend`,
+    init: {
+      method: "POST",
       headers: {
         Authorization: `Bearer ${getAdminToken()}`,
         "content-type": "application/json"

@@ -11,7 +11,7 @@ export default function AdminLoginPage() {
               <div className="space-y-4">
                 <h1 className="section-title">Review the supply queue</h1>
                 <p className="body-copy">
-                  Use the shared admin token to review endpoint and source requests before providers pick them up.
+                  Use the shared admin token to review submitted provider services, assign settlement tiers, and triage endpoint or source requests.
                 </p>
               </div>
             </div>

@@ -199,6 +199,7 @@ Important provider constraints:
 - Provider onboarding: `https://marketplace.example.com/providers/onboard`
 - Provider services: `https://marketplace.example.com/providers/services`
 - Admin login: `https://marketplace.example.com/admin/login`
+- Admin provider services: `https://marketplace.example.com/admin/services`
 - Admin suggestions: `https://marketplace.example.com/admin/suggestions`
 - Website wallet login: use the `Connect Wallet` control in the site header
 - OpenAPI: `https://api.marketplace.example.com/openapi.json`

@@ -1124,6 +1124,19 @@ export function createMarketplaceApi(options: MarketplaceApiOptions): Express {
     return res.json(detail);
   });
 
+  app.get("/internal/provider-services/:id/submitted", async (req, res) => {
+    if (!requireAdminToken(req, res, options.adminToken)) {
+      return;
+    }
+
+    const detail = await options.store.getSubmittedProviderService(req.params.id);
+    if (!detail) {
+      return res.status(404).json({ error: "Submitted provider service snapshot not found." });
+    }
+
+    return res.json(detail);
+  });
+
   app.post("/internal/provider-services/:id/request-changes", async (req, res) => {
     if (!requireAdminToken(req, res, options.adminToken)) {
       return;
