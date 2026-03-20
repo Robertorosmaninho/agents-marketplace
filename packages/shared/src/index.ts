@@ -8,6 +8,7 @@ export * from "./hashing.js";
 export * from "./json-schema.js";
 export * from "./mock-provider.js";
 export * from "./network.js";
+export * from "./openapi.js";
 export * from "./payment.js";
 export * from "./payout.js";
 export * from "./provider-runtime.js";

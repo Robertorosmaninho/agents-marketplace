@@ -2024,4 +2024,135 @@ describe("marketplace api", () => {
     expect(duplicateEndpoint.status).toBe(409);
     expect(duplicateEndpoint.body.error).toContain("Operation already exists");
   });
+
+  it("previews provider endpoint drafts from an OpenAPI document", async () => {
+    const providerWallet = await createTestWallet(PROVIDER_PRIVATE_KEY);
+    const { app } = await createTestApp();
+    const providerToken = await createSiteSession(app, providerWallet);
+
+    await request(app)
+      .post("/provider/me")
+      .set("Authorization", `Bearer ${providerToken}`)
+      .send({
+        displayName: "Signal Labs",
+        websiteUrl: "https://provider.example.com"
+      });
+
+    const createdService = await request(app)
+      .post("/provider/services")
+      .set("Authorization", `Bearer ${providerToken}`)
+      .send({
+        slug: "signal-import",
+        apiNamespace: "signal-import",
+        name: "Signal Import",
+        tagline: "Short-form market signals",
+        about: "Provider-authored signal endpoints.",
+        categories: ["Research"],
+        promptIntro: "Prompt intro",
+        setupInstructions: ["Use a funded Fast wallet."],
+        websiteUrl: "https://provider.example.com",
+        payoutWallet: providerWallet.address
+      });
+
+    expect(createdService.status).toBe(201);
+
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          openapi: "3.0.3",
+          info: {
+            title: "Provider API",
+            version: "1.0.0"
+          },
+          servers: [
+            {
+              url: "https://api.provider.example.com"
+            }
+          ],
+          paths: {
+            "/search": {
+              post: {
+                operationId: "SearchSignals",
+                summary: "Search signals",
+                description: "Search provider signals.",
+                requestBody: {
+                  content: {
+                    "application/json": {
+                      schema: {
+                        type: "object",
+                        properties: {
+                          query: { type: "string" }
+                        },
+                        required: ["query"],
+                        additionalProperties: false
+                      }
+                    }
+                  }
+                },
+                responses: {
+                  "200": {
+                    content: {
+                      "application/json": {
+                        schema: {
+                          type: "object",
+                          properties: {
+                            items: {
+                              type: "array",
+                              items: { type: "string" }
+                            }
+                          },
+                          required: ["items"],
+                          additionalProperties: false
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "/health": {
+              get: {
+                summary: "Health"
+              }
+            }
+          }
+        }),
+        {
+          status: 200,
+          headers: {
+            "content-type": "application/json"
+          }
+        }
+      )
+    );
+
+    const response = await request(app)
+      .post(`/provider/services/${createdService.body.service.id}/openapi/import`)
+      .set("Authorization", `Bearer ${providerToken}`)
+      .send({
+        documentUrl: "https://docs.provider.example.com/openapi.json"
+      });
+
+    expect(response.status).toBe(200);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://docs.provider.example.com/openapi.json",
+      expect.objectContaining({
+        headers: {
+          accept: "application/json"
+        }
+      })
+    );
+    expect(response.body.title).toBe("Provider API");
+    expect(response.body.endpoints).toHaveLength(1);
+    expect(response.body.endpoints[0]).toMatchObject({
+      operation: "search-signals",
+      title: "Search signals",
+      upstreamBaseUrl: "https://api.provider.example.com",
+      upstreamPath: "/search",
+      upstreamAuthMode: "none"
+    });
+    expect(response.body.warnings).toContain(
+      "Skipped 1 non-POST operation because provider imports are POST-only in v1."
+    );
+  });
 });

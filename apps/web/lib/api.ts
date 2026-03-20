@@ -1,6 +1,7 @@
 import type {
   CreateProviderEndpointDraftInput,
   CreateProviderServiceInput,
+  OpenApiImportPreview,
   ProviderRequestRecord,
   ProviderAccountRecord,
   ProviderEndpointDraftRecord,
@@ -429,6 +430,28 @@ export async function createProviderEndpoint(
         "content-type": "application/json"
       },
       body: JSON.stringify(input)
+    }
+  });
+}
+
+export async function importProviderOpenApi(
+  apiBaseUrl: string,
+  accessToken: string,
+  serviceId: string,
+  documentUrl: string
+): Promise<OpenApiImportPreview> {
+  return fetchMarketplace<OpenApiImportPreview>({
+    apiBaseUrl,
+    accessToken,
+    path: `/provider/services/${serviceId}/openapi/import`,
+    init: {
+      method: "POST",
+      headers: {
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({
+        documentUrl
+      })
     }
   });
 }

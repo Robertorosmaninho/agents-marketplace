@@ -4,6 +4,7 @@ import React from "react";
 import type {
   CreateProviderEndpointDraftInput,
   MarketplaceDeploymentNetwork,
+  OpenApiImportPreview,
   UpdateProviderEndpointDraftInput
 } from "@marketplace/shared";
 
@@ -19,6 +20,7 @@ import {
   createProviderVerificationChallenge,
   deleteProviderEndpoint,
   fetchProviderService,
+  importProviderOpenApi,
   rotateProviderRuntimeKey,
   submitProviderService,
   updateProviderEndpoint,
@@ -86,6 +88,8 @@ function ProviderServiceEditorInner({
   }, [accessToken, apiBaseUrl, serviceId]);
 
   const [newEndpoint, setNewEndpoint] = React.useState(defaultEndpointFormState());
+  const [openApiUrl, setOpenApiUrl] = React.useState("");
+  const [openApiPreview, setOpenApiPreview] = React.useState<OpenApiImportPreview | null>(null);
 
   if (detail === undefined) {
     return (
@@ -169,6 +173,26 @@ function ProviderServiceEditorInner({
         setMessage("Endpoint draft created.");
       } catch (nextError) {
         setError(nextError instanceof Error ? nextError.message : "Endpoint creation failed.");
+      }
+    });
+  }
+
+  function onImportOpenApi(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setError(null);
+    setMessage(null);
+
+    startTransition(async () => {
+      try {
+        const preview = await importProviderOpenApi(apiBaseUrl, accessToken, serviceId, openApiUrl);
+        setOpenApiPreview(preview);
+        setMessage(
+          preview.endpoints.length === 0
+            ? "OpenAPI import loaded, but no importable POST operations were found."
+            : `OpenAPI import loaded ${preview.endpoints.length} candidate endpoint${preview.endpoints.length === 1 ? "" : "s"}.`
+        );
+      } catch (nextError) {
+        setError(nextError instanceof Error ? nextError.message : "OpenAPI import failed.");
       }
     });
   }
@@ -387,6 +411,79 @@ function ProviderServiceEditorInner({
               }}
             />
           ))}
+
+          <form
+            className="grid gap-4 rounded-card border border-border bg-background/70 p-5 dark:bg-background/20"
+            onSubmit={onImportOpenApi}
+          >
+            <div className="metric-label">Import from OpenAPI</div>
+            <label className="grid gap-2 text-sm font-medium">
+              OpenAPI JSON URL
+              <Input
+                value={openApiUrl}
+                type="url"
+                placeholder="https://api.example.com/openapi.json"
+                required
+                onChange={(event) => setOpenApiUrl(event.target.value)}
+              />
+            </label>
+            <div className="text-sm text-muted-foreground">
+              Import previews only. Load a candidate into the new endpoint form, then set price and any upstream secret before
+              creating the draft.
+            </div>
+            <div className="flex flex-wrap gap-3">
+              <Button type="submit" variant="outline" disabled={pending}>
+                {pending ? "Loading..." : "Load OpenAPI"}
+              </Button>
+            </div>
+            {openApiPreview ? (
+              <div className="grid gap-4 rounded-card border border-border bg-background/80 p-4 dark:bg-background/30">
+                <div>
+                  <div className="text-sm font-medium text-foreground">
+                    {openApiPreview.title ?? "Imported OpenAPI document"}
+                  </div>
+                  <div className="text-xs text-muted-foreground">
+                    {openApiPreview.version ? `Version ${openApiPreview.version} · ` : ""}
+                    {openApiPreview.documentUrl}
+                  </div>
+                </div>
+                {openApiPreview.warnings.length > 0 ? (
+                  <div className="grid gap-2 text-sm text-muted-foreground">
+                    {openApiPreview.warnings.map((warning) => (
+                      <div key={warning}>{warning}</div>
+                    ))}
+                  </div>
+                ) : null}
+                {openApiPreview.endpoints.map((candidate) => (
+                  <div key={`${candidate.operation}:${candidate.upstreamPath}`} className="grid gap-3 rounded-card border border-border p-4">
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div>
+                        <div className="font-medium text-foreground">{candidate.title}</div>
+                        <div className="text-xs text-muted-foreground">
+                          {candidate.operation} · POST {candidate.upstreamPath}
+                        </div>
+                      </div>
+                      <Button type="button" variant="outline" onClick={() => setNewEndpoint(openApiCandidateToFormState(candidate))}>
+                        Load into new draft
+                      </Button>
+                    </div>
+                    <div className="text-sm text-muted-foreground">{candidate.description}</div>
+                    <div className="text-xs text-muted-foreground">
+                      Base URL: {candidate.upstreamBaseUrl} · Auth: {candidate.upstreamAuthMode}
+                      {candidate.upstreamAuthHeaderName ? ` (${candidate.upstreamAuthHeaderName})` : ""}
+                    </div>
+                    {candidate.warnings.length > 0 ? (
+                      <div className="grid gap-2 text-xs text-muted-foreground">
+                        {candidate.warnings.map((warning) => (
+                          <div key={warning}>{warning}</div>
+                        ))}
+                      </div>
+                    ) : null}
+                  </div>
+                ))}
+              </div>
+            ) : null}
+          </form>
 
           <form className="grid gap-4 rounded-card border border-border bg-background/70 p-5 dark:bg-background/20" onSubmit={onCreateEndpoint}>
             <div className="metric-label">New endpoint</div>
@@ -732,6 +829,25 @@ function endpointToFormState(endpoint: {
     upstreamPath: endpoint.upstreamPath ?? "/",
     upstreamAuthMode: endpoint.upstreamAuthMode ?? "none",
     upstreamAuthHeaderName: endpoint.upstreamAuthHeaderName ?? "",
+    upstreamSecret: ""
+  };
+}
+
+function openApiCandidateToFormState(candidate: OpenApiImportPreview["endpoints"][number]): EndpointFormState {
+  return {
+    operation: candidate.operation,
+    title: candidate.title,
+    description: candidate.description,
+    price: "",
+    requestSchemaJson: JSON.stringify(candidate.requestSchemaJson, null, 2),
+    responseSchemaJson: JSON.stringify(candidate.responseSchemaJson, null, 2),
+    requestExample: JSON.stringify(candidate.requestExample, null, 2),
+    responseExample: JSON.stringify(candidate.responseExample, null, 2),
+    usageNotes: candidate.usageNotes ?? "",
+    upstreamBaseUrl: candidate.upstreamBaseUrl,
+    upstreamPath: candidate.upstreamPath,
+    upstreamAuthMode: candidate.upstreamAuthMode,
+    upstreamAuthHeaderName: candidate.upstreamAuthHeaderName ?? "",
     upstreamSecret: ""
   };
 }

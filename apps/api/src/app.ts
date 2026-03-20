@@ -34,6 +34,7 @@ import {
   isTopupX402Billing,
   normalizeFastWalletAddress,
   normalizePaymentHeaders,
+  parseOpenApiImportDocument,
   parseBearerToken,
   quotedPriceRaw,
   rawToDecimalString,
@@ -58,6 +59,7 @@ import {
   type JobRecord,
   type MarketplaceRoute,
   type MarketplaceStore,
+  type OpenApiImportPreview,
   type ProviderExecuteContext,
   type ProviderRequestRecord,
   type ProviderRuntimeKeyRecord,
@@ -171,6 +173,10 @@ const endpointUpdateSchema = endpointSchemaInput
   .extend({
     clearUpstreamSecret: z.boolean().optional()
   });
+
+const openApiImportSchema = z.object({
+  documentUrl: z.string().url()
+});
 
 const reviewRequestSchema = z.object({
   reviewNotes: z.string().min(3).max(4_000),
@@ -892,6 +898,103 @@ export function createMarketplaceApi(options: MarketplaceApiOptions): Express {
     }
 
     return res.status(204).end();
+  });
+
+  app.post("/provider/services/:id/openapi/import", async (req, res) => {
+    const session = requireSiteSession(req, res, options.sessionSecret, webBaseUrl);
+    if (!session) {
+      return;
+    }
+
+    const service = await options.store.getProviderServiceForOwner(req.params.id, session.wallet);
+    if (!service) {
+      return res.status(404).json({ error: "Provider service not found." });
+    }
+
+    const parsed = openApiImportSchema.safeParse(req.body ?? {});
+    if (!parsed.success) {
+      return res.status(400).json({ error: "OpenAPI import validation failed.", issues: parsed.error.issues });
+    }
+
+    if (!service.service.websiteUrl) {
+      return res.status(400).json({ error: "websiteUrl is required before OpenAPI import." });
+    }
+
+    const serviceHost = new URL(service.service.websiteUrl).hostname;
+    const documentHost = new URL(parsed.data.documentUrl).hostname;
+    if (!isSameOrSubdomain(serviceHost, documentHost)) {
+      return res.status(400).json({
+        error: "documentUrl host must match the service website host or one of its subdomains."
+      });
+    }
+
+    let importResponse: globalThis.Response;
+    try {
+      importResponse = await fetch(parsed.data.documentUrl, {
+        headers: {
+          accept: "application/json"
+        }
+      });
+    } catch (error) {
+      return res.status(502).json({
+        error: error instanceof Error ? error.message : "OpenAPI document fetch failed."
+      });
+    }
+
+    if (!importResponse.ok) {
+      return res.status(502).json({
+        error: `OpenAPI document fetch failed with status ${importResponse.status}.`
+      });
+    }
+
+    const finalDocumentHost = new URL(importResponse.url || parsed.data.documentUrl).hostname;
+    if (!isSameOrSubdomain(serviceHost, finalDocumentHost)) {
+      return res.status(400).json({
+        error: "OpenAPI document redirects must stay on the service website host or one of its subdomains."
+      });
+    }
+
+    let document: unknown;
+    try {
+      document = JSON.parse(await importResponse.text());
+    } catch {
+      return res.status(400).json({
+        error: "Only JSON OpenAPI documents are supported right now."
+      });
+    }
+
+    let preview: OpenApiImportPreview;
+    try {
+      preview = parseOpenApiImportDocument({
+        document,
+        documentUrl: importResponse.url || parsed.data.documentUrl
+      });
+    } catch (error) {
+      return res.status(400).json({
+        error: error instanceof Error ? error.message : "OpenAPI import parsing failed."
+      });
+    }
+
+    const existingOperations = new Set(service.endpoints.map((endpoint) => endpoint.operation));
+    return res.json({
+      ...preview,
+      endpoints: preview.endpoints.map((endpoint) => {
+        const warnings = [...endpoint.warnings];
+
+        if (existingOperations.has(endpoint.operation)) {
+          warnings.push("An endpoint draft with this operation already exists. Rename it before creating a new draft.");
+        }
+
+        if (!isSameOrSubdomain(serviceHost, new URL(endpoint.upstreamBaseUrl).hostname)) {
+          warnings.push("Upstream base URL host must match the service website host or one of its subdomains.");
+        }
+
+        return {
+          ...endpoint,
+          warnings
+        };
+      })
+    });
   });
 
   app.post("/provider/services/:id/verification-challenge", async (req, res) => {

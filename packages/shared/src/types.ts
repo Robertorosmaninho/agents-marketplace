@@ -406,6 +406,34 @@ export interface UpdateProviderEndpointDraftInput {
   clearUpstreamSecret?: boolean;
 }
 
+export interface OpenApiImportRequest {
+  documentUrl: string;
+}
+
+export interface OpenApiImportCandidate {
+  operation: string;
+  title: string;
+  description: string;
+  requestSchemaJson: JsonSchema;
+  responseSchemaJson: JsonSchema;
+  requestExample: unknown;
+  responseExample: unknown;
+  usageNotes: string | null;
+  upstreamBaseUrl: string;
+  upstreamPath: string;
+  upstreamAuthMode: UpstreamAuthMode;
+  upstreamAuthHeaderName: string | null;
+  warnings: string[];
+}
+
+export interface OpenApiImportPreview {
+  documentUrl: string;
+  title: string | null;
+  version: string | null;
+  endpoints: OpenApiImportCandidate[];
+  warnings: string[];
+}
+
 export interface SyncExecuteResult {
   kind: "sync";
   statusCode: number;

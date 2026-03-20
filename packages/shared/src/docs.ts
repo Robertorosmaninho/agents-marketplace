@@ -108,6 +108,11 @@ export function buildOpenApiDocument(input: {
         summary: "Create a provider endpoint draft."
       }
     },
+    "/provider/services/{id}/openapi/import": {
+      post: {
+        summary: "Preview provider endpoint drafts from an upstream OpenAPI document."
+      }
+    },
     "/provider/services/{id}/endpoints/{endpointId}": {
       patch: {
         summary: "Update a provider endpoint draft."
