@@ -1350,6 +1350,141 @@ describe("marketplace api", () => {
     expect(routeResponse.status).toBe(404);
   });
 
+  it("keeps the published catalog bound to the published slug while the next draft slug changes", async () => {
+    const providerWallet = await createTestWallet(PROVIDER_PRIVATE_KEY);
+    const { app } = await createTestApp();
+    const providerToken = await createSiteSession(app, providerWallet);
+
+    const profile = await request(app)
+      .post("/provider/me")
+      .set("Authorization", `Bearer ${providerToken}`)
+      .send({
+        displayName: "Signal Labs",
+        websiteUrl: "https://provider.example.com"
+      });
+
+    expect(profile.status).toBe(201);
+
+    const createdService = await request(app)
+      .post("/provider/services")
+      .set("Authorization", `Bearer ${providerToken}`)
+      .send({
+        serviceType: "marketplace_proxy",
+        slug: "signal-labs",
+        apiNamespace: "signals",
+        name: "Signal Labs",
+        tagline: "Short-form market signals",
+        about: "Provider-authored signal endpoints.",
+        categories: ["Research"],
+        promptIntro: 'I want to use the "Signal Labs" service on Fast Marketplace.',
+        setupInstructions: ["Use a funded Fast wallet."],
+        websiteUrl: "https://provider.example.com",
+        payoutWallet: providerWallet.address
+      });
+
+    expect(createdService.status).toBe(201);
+    const serviceId = createdService.body.service.id as string;
+
+    const createdEndpoint = await request(app)
+      .post(`/provider/services/${serviceId}/endpoints`)
+      .set("Authorization", `Bearer ${providerToken}`)
+      .send({
+        endpointType: "marketplace_proxy",
+        operation: "quote",
+        title: "Quote",
+        description: "Return a single quote snapshot.",
+        billingType: "fixed_x402",
+        price: "$0.25",
+        mode: "sync",
+        requestSchemaJson: {
+          type: "object",
+          properties: {
+            symbol: { type: "string" }
+          },
+          required: ["symbol"],
+          additionalProperties: false
+        },
+        responseSchemaJson: {
+          type: "object",
+          properties: {
+            symbol: { type: "string" },
+            price: { type: "number" }
+          },
+          required: ["symbol", "price"],
+          additionalProperties: false
+        },
+        requestExample: { symbol: "FAST" },
+        responseExample: { symbol: "FAST", price: 42.5 },
+        upstreamBaseUrl: "https://provider.example.com",
+        upstreamPath: "/api/quote",
+        upstreamAuthMode: "none"
+      });
+
+    expect(createdEndpoint.status).toBe(201);
+
+    const verificationChallenge = await request(app)
+      .post(`/provider/services/${serviceId}/verification-challenge`)
+      .set("Authorization", `Bearer ${providerToken}`);
+
+    expect(verificationChallenge.status).toBe(200);
+
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = String(input);
+      if (url === verificationChallenge.body.expectedUrl) {
+        return new Response(verificationChallenge.body.token, { status: 200 });
+      }
+
+      return new Response("not found", { status: 404 });
+    });
+
+    const verified = await request(app)
+      .post(`/provider/services/${serviceId}/verify`)
+      .set("Authorization", `Bearer ${providerToken}`);
+
+    expect(verified.status).toBe(200);
+
+    const submitted = await request(app)
+      .post(`/provider/services/${serviceId}/submit`)
+      .set("Authorization", `Bearer ${providerToken}`);
+
+    expect(submitted.status).toBe(202);
+
+    const published = await request(app)
+      .post(`/internal/provider-services/${serviceId}/publish`)
+      .set("Authorization", "Bearer test-admin-token")
+      .send({
+        reviewerIdentity: "ops@test",
+        settlementMode: "verified_escrow"
+      });
+
+    expect(published.status).toBe(200);
+
+    const originalDetail = await request(app).get("/catalog/services/signal-labs");
+    expect(originalDetail.status).toBe(200);
+
+    const updatedDraft = await request(app)
+      .patch(`/provider/services/${serviceId}`)
+      .set("Authorization", `Bearer ${providerToken}`)
+      .send({
+        slug: "signal-labs-next"
+      });
+
+    expect(updatedDraft.status).toBe(200);
+    expect(updatedDraft.body.slug).toBe("signal-labs-next");
+
+    const publicList = await request(app).get("/catalog/services");
+    expect(publicList.status).toBe(200);
+    expect(publicList.body.services.some((service: { slug: string }) => service.slug === "signal-labs")).toBe(true);
+    expect(publicList.body.services.some((service: { slug: string }) => service.slug === "signal-labs-next")).toBe(false);
+
+    const publishedDetail = await request(app).get("/catalog/services/signal-labs");
+    expect(publishedDetail.status).toBe(200);
+    expect(publishedDetail.body.summary.slug).toBe("signal-labs");
+
+    const draftSlugDetail = await request(app).get("/catalog/services/signal-labs-next");
+    expect(draftSlugDetail.status).toBe(404);
+  });
+
   it("still returns the free upstream result when completion persistence fails", async () => {
     class FailingCompletionAttemptStore extends InMemoryMarketplaceStore {
       private attemptWrites = 0;

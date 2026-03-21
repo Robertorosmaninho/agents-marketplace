@@ -1768,20 +1768,30 @@ export class InMemoryMarketplaceStore implements MarketplaceStore {
     service: PublishedServiceVersionRecord;
     endpoints: PublishedServiceEndpointVersionRecord[];
   } | null> {
-    const service = Array.from(this.providerServicesById.values()).find(
-      (record) => record.slug === slug && record.status === "published"
-    );
-    if (!service) {
-      return null;
+    let version: PublishedServiceVersionRecord | null = null;
+    let versionId: string | null = null;
+
+    for (const service of this.providerServicesById.values()) {
+      if (service.status !== "published") {
+        continue;
+      }
+
+      const candidateVersionId = this.latestPublishedVersionByServiceId.get(service.id);
+      if (!candidateVersionId) {
+        continue;
+      }
+
+      const candidateVersion = this.publishedServicesByVersionId.get(candidateVersionId);
+      if (!candidateVersion || candidateVersion.slug !== slug) {
+        continue;
+      }
+
+      version = candidateVersion;
+      versionId = candidateVersionId;
+      break;
     }
 
-    const versionId = this.latestPublishedVersionByServiceId.get(service.id);
-    if (!versionId) {
-      return null;
-    }
-
-    const version = this.publishedServicesByVersionId.get(versionId);
-    if (!version) {
+    if (!version || !versionId) {
       return null;
     }
 
@@ -5767,7 +5777,7 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
       FROM provider_services s
       JOIN published_service_versions v
         ON v.version_id = s.latest_published_version_id
-      WHERE s.slug = $1 AND s.status = 'published'
+      WHERE v.slug = $1 AND s.status = 'published'
       `,
       [slug]
     );
