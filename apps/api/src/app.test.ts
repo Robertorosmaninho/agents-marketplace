@@ -1350,6 +1350,74 @@ describe("marketplace api", () => {
     expect(routeResponse.status).toBe(404);
   });
 
+  it("returns 409 when an external service tries to add a duplicate external endpoint", async () => {
+    const providerWallet = await createTestWallet(PROVIDER_PRIVATE_KEY);
+    const { app } = await createTestApp();
+    const providerToken = await createSiteSession(app, providerWallet);
+
+    const profile = await request(app)
+      .post("/provider/me")
+      .set("Authorization", `Bearer ${providerToken}`)
+      .send({
+        displayName: "Signal Labs",
+        websiteUrl: "https://provider.example.com"
+      });
+
+    expect(profile.status).toBe(201);
+
+    const createdService = await request(app)
+      .post("/provider/services")
+      .set("Authorization", `Bearer ${providerToken}`)
+      .send({
+        serviceType: "external_registry",
+        slug: "signal-labs-direct-duplicate",
+        name: "Signal Labs Direct Duplicate",
+        tagline: "Direct provider APIs",
+        about: "Discovery-only direct APIs that the marketplace lists but does not execute.",
+        categories: ["Research"],
+        promptIntro: 'I want to use the "Signal Labs Direct Duplicate" service.',
+        setupInstructions: ["Read the provider docs first."],
+        websiteUrl: "https://provider.example.com"
+      });
+
+    expect(createdService.status).toBe(201);
+
+    const firstEndpoint = await request(app)
+      .post(`/provider/services/${createdService.body.service.id}/endpoints`)
+      .set("Authorization", `Bearer ${providerToken}`)
+      .send({
+        endpointType: "external_registry",
+        title: "Status",
+        description: "Returns service status directly from the provider.",
+        method: "GET",
+        publicUrl: "https://provider.example.com/api/status",
+        docsUrl: "https://provider.example.com/docs/status",
+        authNotes: "Bearer token required.",
+        requestExample: {},
+        responseExample: { status: "ok" }
+      });
+
+    expect(firstEndpoint.status).toBe(201);
+
+    const duplicateEndpoint = await request(app)
+      .post(`/provider/services/${createdService.body.service.id}/endpoints`)
+      .set("Authorization", `Bearer ${providerToken}`)
+      .send({
+        endpointType: "external_registry",
+        title: "Status duplicate",
+        description: "Duplicate provider status route.",
+        method: "GET",
+        publicUrl: "https://provider.example.com/api/status",
+        docsUrl: "https://provider.example.com/docs/status-v2",
+        authNotes: "Bearer token required.",
+        requestExample: {},
+        responseExample: { status: "ok" }
+      });
+
+    expect(duplicateEndpoint.status).toBe(409);
+    expect(duplicateEndpoint.body.error).toContain("External endpoint already exists");
+  });
+
   it("keeps the published catalog bound to the published slug while the next draft slug changes", async () => {
     const providerWallet = await createTestWallet(PROVIDER_PRIVATE_KEY);
     const { app } = await createTestApp();
@@ -1483,6 +1551,89 @@ describe("marketplace api", () => {
 
     const draftSlugDetail = await request(app).get("/catalog/services/signal-labs-next");
     expect(draftSlugDetail.status).toBe(404);
+  });
+
+  it("returns 409 when serviceType changes after endpoints already exist", async () => {
+    const providerWallet = await createTestWallet(PROVIDER_PRIVATE_KEY);
+    const { app } = await createTestApp();
+    const providerToken = await createSiteSession(app, providerWallet);
+
+    const profile = await request(app)
+      .post("/provider/me")
+      .set("Authorization", `Bearer ${providerToken}`)
+      .send({
+        displayName: "Signal Labs",
+        websiteUrl: "https://provider.example.com"
+      });
+
+    expect(profile.status).toBe(201);
+
+    const createdService = await request(app)
+      .post("/provider/services")
+      .set("Authorization", `Bearer ${providerToken}`)
+      .send({
+        serviceType: "marketplace_proxy",
+        slug: "signal-labs-service-type-lock",
+        apiNamespace: "signals-service-type-lock",
+        name: "Signal Labs Service Type Lock",
+        tagline: "Short-form market signals",
+        about: "Provider-authored signal endpoints.",
+        categories: ["Research"],
+        promptIntro: 'I want to use the "Signal Labs Service Type Lock" service on Fast Marketplace.',
+        setupInstructions: ["Use a funded Fast wallet."],
+        websiteUrl: "https://provider.example.com",
+        payoutWallet: providerWallet.address
+      });
+
+    expect(createdService.status).toBe(201);
+    const serviceId = createdService.body.service.id as string;
+
+    const createdEndpoint = await request(app)
+      .post(`/provider/services/${serviceId}/endpoints`)
+      .set("Authorization", `Bearer ${providerToken}`)
+      .send({
+        endpointType: "marketplace_proxy",
+        operation: "quote",
+        title: "Quote",
+        description: "Return a single quote snapshot.",
+        billingType: "fixed_x402",
+        price: "$0.25",
+        mode: "sync",
+        requestSchemaJson: {
+          type: "object",
+          properties: {
+            symbol: { type: "string" }
+          },
+          required: ["symbol"],
+          additionalProperties: false
+        },
+        responseSchemaJson: {
+          type: "object",
+          properties: {
+            symbol: { type: "string" },
+            price: { type: "number" }
+          },
+          required: ["symbol", "price"],
+          additionalProperties: false
+        },
+        requestExample: { symbol: "FAST" },
+        responseExample: { symbol: "FAST", price: 42.5 },
+        upstreamBaseUrl: "https://provider.example.com",
+        upstreamPath: "/api/quote",
+        upstreamAuthMode: "none"
+      });
+
+    expect(createdEndpoint.status).toBe(201);
+
+    const updatedService = await request(app)
+      .patch(`/provider/services/${serviceId}`)
+      .set("Authorization", `Bearer ${providerToken}`)
+      .send({
+        serviceType: "external_registry"
+      });
+
+    expect(updatedService.status).toBe(409);
+    expect(updatedService.body.error).toContain("serviceType can only change before");
   });
 
   it("still returns the free upstream result when completion persistence fails", async () => {

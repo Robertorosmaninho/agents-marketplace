@@ -863,23 +863,27 @@ export function createMarketplaceApi(options: MarketplaceApiOptions): Express {
       payoutWallet = null;
     }
 
-    const updated = await options.store.updateProviderServiceForOwner(req.params.id, session.wallet, {
-      ...parsed.data,
-      apiNamespace: nextServiceType === "external_registry" ? null : parsed.data.apiNamespace,
-      payoutWallet
-    });
-    if (!updated) {
-      return res.status(404).json({ error: "Provider service not found." });
-    }
-
-    if (websiteHostChanged(existing.service.websiteUrl, updated.websiteUrl)) {
-      await options.store.markProviderVerificationResult(req.params.id, "failed", {
-        verifiedHost: null,
-        failureReason: "Website URL changed. Re-verify ownership before submit."
+    try {
+      const updated = await options.store.updateProviderServiceForOwner(req.params.id, session.wallet, {
+        ...parsed.data,
+        apiNamespace: nextServiceType === "external_registry" ? null : parsed.data.apiNamespace,
+        payoutWallet
       });
-    }
+      if (!updated) {
+        return res.status(404).json({ error: "Provider service not found." });
+      }
 
-    return res.json(updated);
+      if (websiteHostChanged(existing.service.websiteUrl, updated.websiteUrl)) {
+        await options.store.markProviderVerificationResult(req.params.id, "failed", {
+          verifiedHost: null,
+          failureReason: "Website URL changed. Re-verify ownership before submit."
+        });
+      }
+
+      return res.json(updated);
+    } catch (error) {
+      return handleProviderMutationError(res, error);
+    }
   });
 
   app.post("/provider/services/:id/endpoints", async (req, res) => {
@@ -2956,6 +2960,7 @@ function handleProviderMutationError(res: ExpressResponse, error: unknown) {
   if (
     message.includes("already exists") ||
     message.includes("cannot change after endpoints exist") ||
+    message.includes("can only change before") ||
     message.includes("already claimed") ||
     message.includes("not claimable")
   ) {

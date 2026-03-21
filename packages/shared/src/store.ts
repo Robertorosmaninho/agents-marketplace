@@ -173,6 +173,10 @@ function isSameOrSubdomain(input: { rootHost: string; candidateHost: string }): 
   return candidate === root || candidate.endsWith(`.${root}`);
 }
 
+function isPostgresUniqueViolation(error: unknown): boolean {
+  return (error as { code?: string }).code === "23505";
+}
+
 function mapPublishedServiceToDefinition(service: PublishedServiceVersionRecord): PublishedServiceVersionRecord {
   return clone(service);
 }
@@ -2876,7 +2880,11 @@ export class InMemoryMarketplaceStore implements MarketplaceStore {
         continue;
       }
 
-      if (service.slug === slug) {
+      const latestPublishedVersionId = this.latestPublishedVersionByServiceId.get(service.id);
+      const latestPublishedVersion = latestPublishedVersionId
+        ? this.publishedServicesByVersionId.get(latestPublishedVersionId) ?? null
+        : null;
+      if (service.slug === slug || (service.status === "published" && latestPublishedVersion?.slug === slug)) {
         throw new Error(`Service slug already exists: ${slug}`);
       }
 
@@ -4071,8 +4079,7 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
         created: true
       };
     } catch (error) {
-      const pgError = error as { code?: string };
-      if (pgError.code !== "23505") {
+      if (!isPostgresUniqueViolation(error)) {
         throw error;
       }
 
@@ -6077,29 +6084,46 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
         throw new Error("External services only accept external endpoint drafts.");
       }
 
-      const result = await this.pool.query(
-        `
-        INSERT INTO provider_external_endpoint_drafts (
-          id, service_id, title, description, method, public_url, docs_url, auth_notes, request_example, response_example, usage_notes
-        ) VALUES (
-          $1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb, $11
-        )
-        RETURNING *
-        `,
-        [
-          randomUUID(),
-          serviceId,
-          input.title,
-          input.description,
-          input.method,
-          input.publicUrl,
-          input.docsUrl,
-          input.authNotes ?? null,
-          JSON.stringify(input.requestExample),
-          JSON.stringify(input.responseExample),
-          input.usageNotes ?? null
-        ]
-      );
+      if (detail.endpoints.some((endpoint) =>
+        isExternalEndpointDraft(endpoint)
+        && endpoint.method === input.method
+        && endpoint.publicUrl === input.publicUrl
+      )) {
+        throw new Error(`External endpoint already exists: ${input.method} ${input.publicUrl}`);
+      }
+
+      let result;
+      try {
+        result = await this.pool.query(
+          `
+          INSERT INTO provider_external_endpoint_drafts (
+            id, service_id, title, description, method, public_url, docs_url, auth_notes, request_example, response_example, usage_notes
+          ) VALUES (
+            $1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb, $11
+          )
+          RETURNING *
+          `,
+          [
+            randomUUID(),
+            serviceId,
+            input.title,
+            input.description,
+            input.method,
+            input.publicUrl,
+            input.docsUrl,
+            input.authNotes ?? null,
+            JSON.stringify(input.requestExample),
+            JSON.stringify(input.responseExample),
+            input.usageNotes ?? null
+          ]
+        );
+      } catch (error) {
+        if (!isPostgresUniqueViolation(error)) {
+          throw error;
+        }
+
+        throw new Error(`External endpoint already exists: ${input.method} ${input.publicUrl}`);
+      }
 
       return mapProviderExternalEndpointDraftRow(result.rows[0]);
     }
@@ -6209,37 +6233,60 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
       }
 
       const existing = mapProviderExternalEndpointDraftRow(existingExternalResult.rows[0]);
-      const result = await this.pool.query(
-        `
-        UPDATE provider_external_endpoint_drafts
-        SET
-          title = $3,
-          description = $4,
-          method = $5,
-          public_url = $6,
-          docs_url = $7,
-          auth_notes = $8,
-          request_example = $9::jsonb,
-          response_example = $10::jsonb,
-          usage_notes = $11,
-          updated_at = NOW()
-        WHERE id = $1 AND service_id = $2
-        RETURNING *
-        `,
-        [
-          endpointId,
-          serviceId,
-          input.title ?? existing.title,
-          input.description ?? existing.description,
-          input.method ?? existing.method,
-          input.publicUrl ?? existing.publicUrl,
-          input.docsUrl ?? existing.docsUrl,
-          input.authNotes === undefined ? existing.authNotes : input.authNotes,
-          JSON.stringify(input.requestExample === undefined ? existing.requestExample : input.requestExample),
-          JSON.stringify(input.responseExample === undefined ? existing.responseExample : input.responseExample),
-          input.usageNotes === undefined ? existing.usageNotes : input.usageNotes
-        ]
-      );
+      const nextMethod = input.method ?? existing.method;
+      const nextPublicUrl = input.publicUrl ?? existing.publicUrl;
+      if (
+        (nextMethod !== existing.method || nextPublicUrl !== existing.publicUrl)
+        && detail.endpoints.some((endpoint) =>
+          endpoint.id !== endpointId
+          && isExternalEndpointDraft(endpoint)
+          && endpoint.method === nextMethod
+          && endpoint.publicUrl === nextPublicUrl
+        )
+      ) {
+        throw new Error(`External endpoint already exists: ${nextMethod} ${nextPublicUrl}`);
+      }
+
+      let result;
+      try {
+        result = await this.pool.query(
+          `
+          UPDATE provider_external_endpoint_drafts
+          SET
+            title = $3,
+            description = $4,
+            method = $5,
+            public_url = $6,
+            docs_url = $7,
+            auth_notes = $8,
+            request_example = $9::jsonb,
+            response_example = $10::jsonb,
+            usage_notes = $11,
+            updated_at = NOW()
+          WHERE id = $1 AND service_id = $2
+          RETURNING *
+          `,
+          [
+            endpointId,
+            serviceId,
+            input.title ?? existing.title,
+            input.description ?? existing.description,
+            nextMethod,
+            nextPublicUrl,
+            input.docsUrl ?? existing.docsUrl,
+            input.authNotes === undefined ? existing.authNotes : input.authNotes,
+            JSON.stringify(input.requestExample === undefined ? existing.requestExample : input.requestExample),
+            JSON.stringify(input.responseExample === undefined ? existing.responseExample : input.responseExample),
+            input.usageNotes === undefined ? existing.usageNotes : input.usageNotes
+          ]
+        );
+      } catch (error) {
+        if (!isPostgresUniqueViolation(error)) {
+          throw error;
+        }
+
+        throw new Error(`External endpoint already exists: ${nextMethod} ${nextPublicUrl}`);
+      }
 
       return result.rowCount ? mapProviderExternalEndpointDraftRow(result.rows[0]) : null;
     }
@@ -7016,24 +7063,34 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
   private async assertServiceUniqueness(slug: string, apiNamespace: string | null, serviceId?: string) {
     const result = await this.pool.query(
       `
-      SELECT id, slug, api_namespace
-      FROM provider_services
-      WHERE (slug = $1 OR ($2::text IS NOT NULL AND api_namespace = $2))
-        AND ($3::text IS NULL OR id <> $3)
-      LIMIT 1
+      SELECT
+        EXISTS (
+          SELECT 1
+          FROM provider_services s
+          LEFT JOIN published_service_versions v
+            ON v.version_id = s.latest_published_version_id
+            AND s.status = 'published'
+          WHERE (s.slug = $1 OR v.slug = $1)
+            AND ($3::text IS NULL OR s.id <> $3)
+        ) AS slug_conflict,
+        EXISTS (
+          SELECT 1
+          FROM provider_services s
+          WHERE $2::text IS NOT NULL
+            AND s.api_namespace = $2
+            AND ($3::text IS NULL OR s.id <> $3)
+        ) AS namespace_conflict
       `,
       [slug, apiNamespace, serviceId ?? null]
     );
 
-    if (!result.rowCount) {
-      return;
-    }
-
-    if (result.rows[0].slug === slug) {
+    if (result.rows[0]?.slug_conflict) {
       throw new Error(`Service slug already exists: ${slug}`);
     }
 
-    throw new Error(`API namespace already exists: ${apiNamespace ?? ""}`);
+    if (result.rows[0]?.namespace_conflict) {
+      throw new Error(`API namespace already exists: ${apiNamespace ?? ""}`);
+    }
   }
 
   private async getProviderServiceDetailById(serviceId: string): Promise<ProviderServiceDetailRecord> {
