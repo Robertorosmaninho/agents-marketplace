@@ -995,6 +995,91 @@ describe("shared marketplace helpers", () => {
     ).rejects.toThrow("Service slug already exists: signal-labs");
   });
 
+  it("keeps a live published apiNamespace reserved after the next draft namespace changes", async () => {
+    const store = new InMemoryMarketplaceStore();
+    const wallet = "fast1provider000000000000000000000000000000000000000000000000000000";
+
+    await store.upsertProviderAccount(wallet, {
+      displayName: "Signal Labs",
+      websiteUrl: "https://provider.example.com"
+    });
+
+    const created = await store.createProviderService(wallet, {
+      serviceType: "marketplace_proxy",
+      slug: "signal-labs-namespace",
+      apiNamespace: "signals-namespace",
+      name: "Signal Labs Namespace",
+      tagline: "Short-form market signals",
+      about: "Provider-authored signal endpoints.",
+      categories: ["Research"],
+      promptIntro: 'I want to use the "Signal Labs Namespace" service on Fast Marketplace.',
+      setupInstructions: ["Use a funded Fast wallet."],
+      websiteUrl: "https://provider.example.com",
+      payoutWallet: wallet
+    });
+
+    const endpoint = await store.createProviderEndpointDraft(created.service.id, wallet, {
+      endpointType: "marketplace_proxy",
+      operation: "quote",
+      title: "Quote",
+      description: "Return a single quote snapshot.",
+      billingType: "fixed_x402",
+      price: "$0.25",
+      mode: "sync",
+      requestSchemaJson: {
+        type: "object",
+        properties: {
+          symbol: { type: "string" }
+        },
+        required: ["symbol"],
+        additionalProperties: false
+      },
+      responseSchemaJson: {
+        type: "object",
+        properties: {
+          symbol: { type: "string" },
+          price: { type: "number" }
+        },
+        required: ["symbol", "price"],
+        additionalProperties: false
+      },
+      requestExample: { symbol: "FAST" },
+      responseExample: { symbol: "FAST", price: 42.5 },
+      upstreamBaseUrl: "https://provider.example.com",
+      upstreamPath: "/api/quote",
+      upstreamAuthMode: "none"
+    });
+
+    await store.createProviderVerificationChallenge(created.service.id, wallet);
+    await store.markProviderVerificationResult(created.service.id, "verified", {
+      verifiedHost: "provider.example.com"
+    });
+    await store.submitProviderService(created.service.id, wallet);
+    await store.publishProviderService(created.service.id, {
+      reviewerIdentity: "ops@test"
+    });
+    await store.deleteProviderEndpointDraft(created.service.id, endpoint.id, wallet);
+    await store.updateProviderServiceForOwner(created.service.id, wallet, {
+      apiNamespace: "signals-namespace-next"
+    });
+
+    await expect(
+      store.createProviderService(wallet, {
+        serviceType: "marketplace_proxy",
+        slug: "signal-labs-namespace-two",
+        apiNamespace: "signals-namespace",
+        name: "Signal Labs Namespace Two",
+        tagline: "Short-form market signals",
+        about: "Provider-authored signal endpoints.",
+        categories: ["Research"],
+        promptIntro: 'I want to use the "Signal Labs Namespace Two" service on Fast Marketplace.',
+        setupInstructions: ["Use a funded Fast wallet."],
+        websiteUrl: "https://provider.example.com",
+        payoutWallet: wallet
+      })
+    ).rejects.toThrow("API namespace already exists: signals-namespace");
+  });
+
   it("propagates service payout-wallet changes into existing endpoint drafts before submit", async () => {
     const store = new InMemoryMarketplaceStore();
     const wallet = "fast1provider000000000000000000000000000000000000000000000000000000";

@@ -1636,6 +1636,246 @@ describe("marketplace api", () => {
     expect(updatedService.body.error).toContain("serviceType can only change before");
   });
 
+  it("returns 409 when republishing a submitted snapshot whose apiNamespace is now claimed by another service", async () => {
+    const providerWallet = await createTestWallet(PROVIDER_PRIVATE_KEY);
+    const { app } = await createTestApp();
+    const providerToken = await createSiteSession(app, providerWallet);
+
+    const profile = await request(app)
+      .post("/provider/me")
+      .set("Authorization", `Bearer ${providerToken}`)
+      .send({
+        displayName: "Signal Labs",
+        websiteUrl: "https://provider.example.com"
+      });
+
+    expect(profile.status).toBe(201);
+
+    const firstService = await request(app)
+      .post("/provider/services")
+      .set("Authorization", `Bearer ${providerToken}`)
+      .send({
+        serviceType: "marketplace_proxy",
+        slug: "signal-labs-republish-a",
+        apiNamespace: "signals-republish",
+        name: "Signal Labs Republish A",
+        tagline: "Short-form market signals",
+        about: "Provider-authored signal endpoints.",
+        categories: ["Research"],
+        promptIntro: 'I want to use the "Signal Labs Republish A" service on Fast Marketplace.',
+        setupInstructions: ["Use a funded Fast wallet."],
+        websiteUrl: "https://provider.example.com",
+        payoutWallet: providerWallet.address
+      });
+
+    expect(firstService.status).toBe(201);
+    const firstServiceId = firstService.body.service.id as string;
+
+    const firstEndpoint = await request(app)
+      .post(`/provider/services/${firstServiceId}/endpoints`)
+      .set("Authorization", `Bearer ${providerToken}`)
+      .send({
+        endpointType: "marketplace_proxy",
+        operation: "quote",
+        title: "Quote",
+        description: "Return a single quote snapshot.",
+        billingType: "fixed_x402",
+        price: "$0.25",
+        mode: "sync",
+        requestSchemaJson: {
+          type: "object",
+          properties: {
+            symbol: { type: "string" }
+          },
+          required: ["symbol"],
+          additionalProperties: false
+        },
+        responseSchemaJson: {
+          type: "object",
+          properties: {
+            symbol: { type: "string" },
+            price: { type: "number" }
+          },
+          required: ["symbol", "price"],
+          additionalProperties: false
+        },
+        requestExample: { symbol: "FAST" },
+        responseExample: { symbol: "FAST", price: 42.5 },
+        upstreamBaseUrl: "https://provider.example.com",
+        upstreamPath: "/api/quote",
+        upstreamAuthMode: "none"
+      });
+
+    expect(firstEndpoint.status).toBe(201);
+
+    const fetchMock = vi.spyOn(globalThis, "fetch");
+
+    const firstChallenge = await request(app)
+      .post(`/provider/services/${firstServiceId}/verification-challenge`)
+      .set("Authorization", `Bearer ${providerToken}`);
+
+    expect(firstChallenge.status).toBe(200);
+    fetchMock.mockImplementation(async (input) => {
+      const url = String(input);
+      if (url === firstChallenge.body.expectedUrl) {
+        return new Response(firstChallenge.body.token, { status: 200 });
+      }
+
+      return new Response("not found", { status: 404 });
+    });
+
+    const firstVerified = await request(app)
+      .post(`/provider/services/${firstServiceId}/verify`)
+      .set("Authorization", `Bearer ${providerToken}`);
+
+    expect(firstVerified.status).toBe(200);
+
+    const firstSubmitted = await request(app)
+      .post(`/provider/services/${firstServiceId}/submit`)
+      .set("Authorization", `Bearer ${providerToken}`);
+
+    expect(firstSubmitted.status).toBe(202);
+
+    const firstPublished = await request(app)
+      .post(`/internal/provider-services/${firstServiceId}/publish`)
+      .set("Authorization", "Bearer test-admin-token")
+      .send({
+        reviewerIdentity: "ops@test",
+        settlementMode: "verified_escrow"
+      });
+
+    expect(firstPublished.status).toBe(200);
+
+    const firstReviewChanges = await request(app)
+      .post(`/internal/provider-services/${firstServiceId}/request-changes`)
+      .set("Authorization", "Bearer test-admin-token")
+      .send({
+        reviewerIdentity: "ops@test",
+        reviewNotes: "Move the provider namespace before republishing."
+      });
+
+    expect(firstReviewChanges.status).toBe(200);
+
+    const firstEndpointDeleted = await request(app)
+      .delete(`/provider/services/${firstServiceId}/endpoints/${firstEndpoint.body.id}`)
+      .set("Authorization", `Bearer ${providerToken}`);
+
+    expect(firstEndpointDeleted.status).toBe(204);
+
+    const firstUpdatedDraft = await request(app)
+      .patch(`/provider/services/${firstServiceId}`)
+      .set("Authorization", `Bearer ${providerToken}`)
+      .send({
+        apiNamespace: "signals-republish-next"
+      });
+
+    expect(firstUpdatedDraft.status).toBe(200);
+
+    const secondService = await request(app)
+      .post("/provider/services")
+      .set("Authorization", `Bearer ${providerToken}`)
+      .send({
+        serviceType: "marketplace_proxy",
+        slug: "signal-labs-republish-b",
+        apiNamespace: "signals-republish",
+        name: "Signal Labs Republish B",
+        tagline: "Short-form market signals",
+        about: "Provider-authored signal endpoints.",
+        categories: ["Research"],
+        promptIntro: 'I want to use the "Signal Labs Republish B" service on Fast Marketplace.',
+        setupInstructions: ["Use a funded Fast wallet."],
+        websiteUrl: "https://provider.example.com",
+        payoutWallet: providerWallet.address
+      });
+
+    expect(secondService.status).toBe(201);
+    const secondServiceId = secondService.body.service.id as string;
+
+    const secondEndpoint = await request(app)
+      .post(`/provider/services/${secondServiceId}/endpoints`)
+      .set("Authorization", `Bearer ${providerToken}`)
+      .send({
+        endpointType: "marketplace_proxy",
+        operation: "quote",
+        title: "Quote",
+        description: "Return a single quote snapshot.",
+        billingType: "fixed_x402",
+        price: "$0.25",
+        mode: "sync",
+        requestSchemaJson: {
+          type: "object",
+          properties: {
+            symbol: { type: "string" }
+          },
+          required: ["symbol"],
+          additionalProperties: false
+        },
+        responseSchemaJson: {
+          type: "object",
+          properties: {
+            symbol: { type: "string" },
+            price: { type: "number" }
+          },
+          required: ["symbol", "price"],
+          additionalProperties: false
+        },
+        requestExample: { symbol: "FAST" },
+        responseExample: { symbol: "FAST", price: 42.5 },
+        upstreamBaseUrl: "https://provider.example.com",
+        upstreamPath: "/api/quote",
+        upstreamAuthMode: "none"
+      });
+
+    expect(secondEndpoint.status).toBe(201);
+
+    const secondChallenge = await request(app)
+      .post(`/provider/services/${secondServiceId}/verification-challenge`)
+      .set("Authorization", `Bearer ${providerToken}`);
+
+    expect(secondChallenge.status).toBe(200);
+    fetchMock.mockImplementation(async (input) => {
+      const url = String(input);
+      if (url === secondChallenge.body.expectedUrl) {
+        return new Response(secondChallenge.body.token, { status: 200 });
+      }
+
+      return new Response("not found", { status: 404 });
+    });
+
+    const secondVerified = await request(app)
+      .post(`/provider/services/${secondServiceId}/verify`)
+      .set("Authorization", `Bearer ${providerToken}`);
+
+    expect(secondVerified.status).toBe(200);
+
+    const secondSubmitted = await request(app)
+      .post(`/provider/services/${secondServiceId}/submit`)
+      .set("Authorization", `Bearer ${providerToken}`);
+
+    expect(secondSubmitted.status).toBe(202);
+
+    const secondPublished = await request(app)
+      .post(`/internal/provider-services/${secondServiceId}/publish`)
+      .set("Authorization", "Bearer test-admin-token")
+      .send({
+        reviewerIdentity: "ops@test",
+        settlementMode: "verified_escrow"
+      });
+
+    expect(secondPublished.status).toBe(200);
+
+    const republishedFirst = await request(app)
+      .post(`/internal/provider-services/${firstServiceId}/publish`)
+      .set("Authorization", "Bearer test-admin-token")
+      .send({
+        reviewerIdentity: "ops@test",
+        settlementMode: "verified_escrow"
+      });
+
+    expect(republishedFirst.status).toBe(409);
+    expect(republishedFirst.body.error).toContain("API namespace already exists: signals-republish");
+  });
+
   it("still returns the free upstream result when completion persistence fails", async () => {
     class FailingCompletionAttemptStore extends InMemoryMarketplaceStore {
       private attemptWrites = 0;

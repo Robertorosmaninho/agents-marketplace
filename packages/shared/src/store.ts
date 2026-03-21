@@ -2564,6 +2564,8 @@ export class InMemoryMarketplaceStore implements MarketplaceStore {
       return null;
     }
 
+    this.assertServiceUniqueness(version.slug, version.apiNamespace, serviceId);
+
     const settlementMode = service.serviceType === "marketplace_proxy"
       ? normalizeSettlementMode(input?.settlementMode ?? service.settlementMode, service.settlementMode ?? "community_direct")
       : null;
@@ -2888,7 +2890,10 @@ export class InMemoryMarketplaceStore implements MarketplaceStore {
         throw new Error(`Service slug already exists: ${slug}`);
       }
 
-      if (apiNamespace && service.apiNamespace === apiNamespace) {
+      if (
+        apiNamespace
+        && (service.apiNamespace === apiNamespace || (service.status === "published" && latestPublishedVersion?.apiNamespace === apiNamespace))
+      ) {
         throw new Error(`API namespace already exists: ${apiNamespace}`);
       }
     }
@@ -6738,6 +6743,25 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
       return null;
     }
 
+    const versionResult = await this.pool.query(
+      `
+      SELECT slug, api_namespace
+      FROM published_service_versions
+      WHERE service_id = $1 AND version_id = $2
+      LIMIT 1
+      `,
+      [serviceId, submittedVersionId]
+    );
+    if (!versionResult.rowCount) {
+      return null;
+    }
+
+    await this.assertServiceUniqueness(
+      versionResult.rows[0].slug as string,
+      (versionResult.rows[0].api_namespace as string | null) ?? null,
+      serviceId
+    );
+
     const settlementMode = service.service.serviceType === "marketplace_proxy"
       ? normalizeSettlementMode(
         input?.settlementMode ?? service.service.settlementMode,
@@ -7076,8 +7100,11 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
         EXISTS (
           SELECT 1
           FROM provider_services s
+          LEFT JOIN published_service_versions v
+            ON v.version_id = s.latest_published_version_id
+            AND s.status = 'published'
           WHERE $2::text IS NOT NULL
-            AND s.api_namespace = $2
+            AND (s.api_namespace = $2 OR v.api_namespace = $2)
             AND ($3::text IS NULL OR s.id <> $3)
         ) AS namespace_conflict
       `,

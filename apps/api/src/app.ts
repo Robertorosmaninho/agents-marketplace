@@ -1461,16 +1461,20 @@ export function createMarketplaceApi(options: MarketplaceApiOptions): Express {
       }
     }
 
-    const updated = await options.store.publishProviderService(req.params.id, {
-      reviewerIdentity: parsed.data.reviewerIdentity,
-      settlementMode,
-      submittedVersionId: validationDetail.latestReview?.submittedVersionId ?? null
-    });
-    if (!updated) {
-      return res.status(404).json({ error: "Provider service not found." });
-    }
+    try {
+      const updated = await options.store.publishProviderService(req.params.id, {
+        reviewerIdentity: parsed.data.reviewerIdentity,
+        settlementMode,
+        submittedVersionId: validationDetail.latestReview?.submittedVersionId ?? null
+      });
+      if (!updated) {
+        return res.status(404).json({ error: "Provider service not found." });
+      }
 
-    return res.json(updated);
+      return res.json(updated);
+    } catch (error) {
+      return handleProviderMutationError(res, error);
+    }
   });
 
   app.patch("/internal/provider-services/:id/settlement-mode", async (req, res) => {
