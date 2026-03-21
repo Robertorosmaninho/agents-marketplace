@@ -91,7 +91,6 @@ export interface MarketplaceApiOptions {
   baseUrl?: string;
   webBaseUrl?: string;
   secretsKey: string;
-  tavilyApiKey?: string;
 }
 
 type PublishedCatalogService = {
@@ -296,7 +295,6 @@ export function createMarketplaceApi(options: MarketplaceApiOptions): Express {
   const allowedWebOrigin = safeOrigin(webBaseUrl);
   const networkConfig = getDefaultMarketplaceNetworkConfig();
   const secretsKey = options.secretsKey;
-  const tavilyEnabled = Boolean(options.tavilyApiKey);
 
   app.use(express.json({ limit: "1mb" }));
   app.use((req, res, next) => {
@@ -333,7 +331,7 @@ export function createMarketplaceApi(options: MarketplaceApiOptions): Express {
   });
 
   app.get("/openapi.json", async (_req, res) => {
-    const catalog = filterVisibleCatalog(await loadPublishedCatalog(options.store), tavilyEnabled);
+    const catalog = await loadPublishedCatalog(options.store);
     res.json(
       buildOpenApiDocument({
         baseUrl,
@@ -344,7 +342,7 @@ export function createMarketplaceApi(options: MarketplaceApiOptions): Express {
   });
 
   app.get("/llms.txt", async (_req, res) => {
-    const catalog = filterVisibleCatalog(await loadPublishedCatalog(options.store), tavilyEnabled);
+    const catalog = await loadPublishedCatalog(options.store);
     res.type("text/plain").send(
       buildLlmsTxt({
         baseUrl,
@@ -355,7 +353,7 @@ export function createMarketplaceApi(options: MarketplaceApiOptions): Express {
   });
 
   app.get("/.well-known/marketplace.json", async (_req, res) => {
-    const catalog = filterVisibleCatalog(await loadPublishedCatalog(options.store), tavilyEnabled);
+    const catalog = await loadPublishedCatalog(options.store);
     res.json(
       buildMarketplaceCatalog({
         baseUrl,
@@ -366,7 +364,7 @@ export function createMarketplaceApi(options: MarketplaceApiOptions): Express {
   });
 
   app.get("/catalog/services", async (_req, res) => {
-    const catalog = filterVisibleCatalog(await loadPublishedCatalog(options.store), tavilyEnabled);
+    const catalog = await loadPublishedCatalog(options.store);
 
     const services = await Promise.all(
       catalog.services.map(async (serviceDetail) =>
@@ -383,15 +381,14 @@ export function createMarketplaceApi(options: MarketplaceApiOptions): Express {
 
   app.get("/catalog/services/:slug", async (req, res) => {
     const published = await options.store.getPublishedServiceBySlug(req.params.slug);
-    const visible = published ? filterVisibleServiceDetail(published, tavilyEnabled) : null;
-    if (!visible) {
+    if (!published) {
       return res.status(404).json({ error: "Service not found." });
     }
 
     const detail = buildServiceDetail({
-      service: visible.service,
-      endpoints: visible.endpoints,
-      analytics: await options.store.getServiceAnalytics(visible.service.routeIds),
+      service: published.service,
+      endpoints: published.endpoints,
+      analytics: await options.store.getServiceAnalytics(published.service.routeIds),
       apiBaseUrl: baseUrl,
       webBaseUrl
     });
@@ -410,7 +407,7 @@ export function createMarketplaceApi(options: MarketplaceApiOptions): Express {
 
     if (parsed.data.serviceSlug) {
       const published = await options.store.getPublishedServiceBySlug(parsed.data.serviceSlug);
-      if (!published || !filterVisibleServiceDetail(published, tavilyEnabled)) {
+      if (!published) {
         return res.status(400).json({ error: "Unknown serviceSlug." });
       }
     }
@@ -483,7 +480,7 @@ export function createMarketplaceApi(options: MarketplaceApiOptions): Express {
       }
     } else {
       const route = await findPublishedRouteByRouteId(options.store, resourceId);
-      if (!route || !isRouteVisible(route, tavilyEnabled)) {
+      if (!route) {
         return res.status(404).json({ error: "Route not found." });
       }
       if (!requiresWalletSession(route)) {
@@ -549,7 +546,7 @@ export function createMarketplaceApi(options: MarketplaceApiOptions): Express {
       }
     } else {
       const route = await findPublishedRouteByRouteId(options.store, resourceId);
-      if (!route || !isRouteVisible(route, tavilyEnabled)) {
+      if (!route) {
         return res.status(404).json({ error: "Route not found." });
       }
       if (!requiresWalletSession(route)) {
@@ -1575,10 +1572,6 @@ export function createMarketplaceApi(options: MarketplaceApiOptions): Express {
       return res.status(404).json({ error: "Route not found." });
     }
 
-    if (!isRouteVisible(route, tavilyEnabled)) {
-      return res.status(404).json({ error: "Route not found." });
-    }
-
     try {
       validateJsonSchema({
         schema: route.requestSchemaJson,
@@ -1599,8 +1592,7 @@ export function createMarketplaceApi(options: MarketplaceApiOptions): Express {
         sessionSecret: options.sessionSecret,
         providers,
         store: options.store,
-        secretsKey,
-        tavilyApiKey: options.tavilyApiKey
+        secretsKey
       });
     }
 
@@ -1610,8 +1602,7 @@ export function createMarketplaceApi(options: MarketplaceApiOptions): Express {
         res,
         route,
         store: options.store,
-        secretsKey,
-        tavilyApiKey: options.tavilyApiKey
+        secretsKey
       });
     }
 
@@ -1624,8 +1615,7 @@ export function createMarketplaceApi(options: MarketplaceApiOptions): Express {
       refundService: options.refundService,
       providers,
       store: options.store,
-      secretsKey,
-      tavilyApiKey: options.tavilyApiKey
+      secretsKey
     });
   });
 
@@ -1650,78 +1640,6 @@ async function loadPublishedCatalog(store: MarketplaceStore): Promise<{
   return { services: serviceDetails, routes };
 }
 
-function isExternalPublishedEndpoint(
-  endpoint: PublishedServiceEndpointVersionRecord
-): endpoint is Extract<PublishedServiceEndpointVersionRecord, { endpointType: "external_registry" }> {
-  return endpoint.endpointType === "external_registry";
-}
-
-function filterVisiblePublishedService(
-  input: PublishedCatalogService,
-  tavilyEnabled: boolean
-): PublishedCatalogService | null {
-  if (input.service.serviceType === "external_registry") {
-    const endpoints = input.endpoints.filter(isExternalPublishedEndpoint);
-    if (endpoints.length === 0) {
-      return null;
-    }
-
-    return {
-      service: {
-        ...input.service,
-        routeIds: []
-      },
-      endpoints
-    };
-  }
-
-  const endpoints = input.endpoints.filter((endpoint): endpoint is PublishedEndpointVersionRecord =>
-    endpoint.endpointType === "marketplace_proxy" && isRouteVisible(endpoint, tavilyEnabled)
-  );
-  if (endpoints.length === 0) {
-    return null;
-  }
-
-  const routeIds = new Set(endpoints.map((endpoint) => endpoint.routeId));
-  return {
-    service: {
-      ...input.service,
-      routeIds: input.service.routeIds.filter((routeId) => routeIds.has(routeId))
-    },
-    endpoints
-  };
-}
-
-function isRouteVisible(route: Pick<MarketplaceRoute, "executorKind">, tavilyEnabled: boolean): boolean {
-  if (route.executorKind === "tavily") {
-    return tavilyEnabled;
-  }
-
-  return true;
-}
-
-function filterVisibleCatalog(input: {
-  services: PublishedCatalogService[];
-  routes: PublishedEndpointVersionRecord[];
-}, tavilyEnabled: boolean): {
-  services: PublishedCatalogService[];
-  routes: PublishedEndpointVersionRecord[];
-} {
-  const routes = input.routes.filter((route) => isRouteVisible(route, tavilyEnabled));
-  const services = input.services
-    .map((service) => filterVisiblePublishedService(service, tavilyEnabled))
-    .filter((service): service is PublishedCatalogService => Boolean(service));
-
-  return { services, routes };
-}
-
-function filterVisibleServiceDetail(
-  input: PublishedCatalogService,
-  tavilyEnabled: boolean
-): PublishedCatalogService | null {
-  return filterVisiblePublishedService(input, tavilyEnabled);
-}
-
 async function handlePrepaidCreditRoute(input: {
   req: Request;
   res: ExpressResponse;
@@ -1730,7 +1648,6 @@ async function handlePrepaidCreditRoute(input: {
   providers: ProviderRegistry;
   store: MarketplaceStore;
   secretsKey: string;
-  tavilyApiKey?: string;
 }) {
   if (input.route.settlementMode !== "verified_escrow") {
     return input.res.status(500).json({ error: "Prepaid-credit routes require Verified escrow settlement." });
@@ -1749,8 +1666,7 @@ async function handlePrepaidCreditRoute(input: {
     paymentId: null,
     providers: input.providers,
     store: input.store,
-    secretsKey: input.secretsKey,
-    tavilyApiKey: input.tavilyApiKey
+    secretsKey: input.secretsKey
   });
 
   if (executeResult.kind !== "sync") {
@@ -1769,7 +1685,6 @@ async function handleFreeRoute(input: {
   route: PublishedEndpointVersionRecord;
   store: MarketplaceStore;
   secretsKey: string;
-  tavilyApiKey?: string;
 }) {
   if (input.route.mode !== "sync" || input.route.executorKind !== "http") {
     return input.res.status(500).json({ error: "Free routes currently support sync HTTP execution only." });
@@ -1857,7 +1772,6 @@ async function handleX402Route(input: {
   providers: ProviderRegistry;
   store: MarketplaceStore;
   secretsKey: string;
-  tavilyApiKey?: string;
 }) {
   if (
     input.route.settlementMode === "community_direct"
@@ -2096,8 +2010,7 @@ async function handleX402Route(input: {
       paymentId: paymentHeaders.paymentId,
       providers: input.providers,
       store: input.store,
-      secretsKey: input.secretsKey,
-      tavilyApiKey: input.tavilyApiKey
+      secretsKey: input.secretsKey
     });
   } catch (error) {
     const failedResponse = await buildRejectedSyncResponse({
@@ -2291,7 +2204,6 @@ async function executeRoute(input: {
   providers: ProviderRegistry;
   store: MarketplaceStore;
   secretsKey: string;
-  tavilyApiKey?: string;
 }) {
   switch (input.route.executorKind) {
     case "mock":
@@ -2313,8 +2225,6 @@ async function executeRoute(input: {
         store: input.store,
         secretsKey: input.secretsKey
       });
-    case "tavily":
-      return executeTavilyRoute(input.route, input.input, input.tavilyApiKey);
     default:
       throw new Error(`Unsupported route executor: ${String(input.route.executorKind)}`);
   }
@@ -2425,57 +2335,6 @@ async function executeUpstreamHttpRequest(
       statusCode: 502,
       body: {
         error: error instanceof Error ? error.message : "Upstream request failed."
-      },
-      headers: {
-        "content-type": "application/json"
-      }
-    };
-  }
-
-  return {
-    kind: "sync" as const,
-    statusCode: response.status,
-    body: await safeResponseBody(response),
-    headers: {
-      "content-type": response.headers.get("content-type") ?? "application/json"
-    }
-  };
-}
-
-async function executeTavilyRoute(route: MarketplaceRoute, input: unknown, tavilyApiKey?: string) {
-  if (route.mode !== "sync") {
-    throw new Error("Tavily executor only supports sync routes in v1.");
-  }
-
-  if (!tavilyApiKey) {
-    return {
-      kind: "sync" as const,
-      statusCode: 503,
-      body: {
-        error: "Tavily API key is not configured."
-      },
-      headers: {
-        "content-type": "application/json"
-      }
-    };
-  }
-
-  let response: globalThis.Response;
-  try {
-    response = await fetch("https://api.tavily.com/search", {
-      method: "POST",
-      headers: {
-        authorization: `Bearer ${tavilyApiKey}`,
-        "content-type": "application/json"
-      },
-      body: JSON.stringify(input)
-    });
-  } catch (error) {
-    return {
-      kind: "sync" as const,
-      statusCode: 502,
-      body: {
-        error: error instanceof Error ? error.message : "Tavily request failed."
       },
       headers: {
         "content-type": "application/json"
@@ -3160,7 +3019,6 @@ function pendingPaymentRecoveryActionForRoute(
 ) {
   return ("settlementMode" in route && route.settlementMode === "community_direct")
     || route.executorKind === "mock"
-    || route.executorKind === "tavily"
     || route.executorKind === "marketplace"
     ? "retry"
     : "refund";

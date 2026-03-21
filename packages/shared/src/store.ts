@@ -3482,7 +3482,7 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
 
       UPDATE idempotency_records records
       SET pending_recovery_action = CASE
-        WHEN published.executor_kind IN ('mock', 'tavily', 'marketplace') THEN 'retry'
+        WHEN published.executor_kind IN ('mock', 'marketplace') THEN 'retry'
         ELSE 'refund'
       END
       FROM (

@@ -172,7 +172,6 @@ describe("shared marketplace helpers", () => {
     });
     expect(document.paths["/api/mock/quick-insight"]).toBeDefined();
     expect(document.paths["/api/mock/async-report"]).toBeDefined();
-    expect(document.paths["/api/tavily/search"]).toBeDefined();
     expect(document.paths["/catalog/services"]).toBeDefined();
 
     const asyncPath = document.paths["/api/mock/async-report"] as {
@@ -299,92 +298,6 @@ describe("shared marketplace helpers", () => {
     expect(detail.useThisServicePrompt).toContain('I want to use the "Mock Research Signals" service');
     expect(detail.useThisServicePrompt).toContain("https://api.marketplace.example.com/api/mock/quick-insight");
     expect(detail.useThisServicePrompt).toContain("($0.05 fastUSDC)");
-  });
-
-  it("publishes the seeded Tavily service from the shared registry", () => {
-    const tavilyService = listServiceDefinitions().find((service) => service.slug === "tavily-search");
-    if (!tavilyService) {
-      throw new Error("Tavily seeded service is missing.");
-    }
-
-    const tavilyRoute = marketplaceRoutes.find((route) => route.routeId === "tavily.search.v1");
-    if (!tavilyRoute) {
-      throw new Error("Tavily seeded route is missing.");
-    }
-
-    expect(tavilyRoute.executorKind).toBe("tavily");
-
-    const detail = buildServiceDetail({
-      service: tavilyService,
-      endpoints: [buildPublishedEndpointFromRoute(tavilyRoute)],
-      analytics: {
-        totalCalls: 3,
-        revenueRaw: "150000",
-        successRate30d: 100,
-        volume30d: [{ date: "2026-03-18", amountRaw: "150000" }]
-      },
-      apiBaseUrl: "https://api.marketplace.example.com",
-      webBaseUrl: "https://marketplace.example.com"
-    });
-
-    expect(detail.summary.endpointCount).toBe(1);
-    const endpoint = detail.endpoints[0];
-    expect(endpoint?.endpointType).toBe("marketplace_proxy");
-    expect(endpoint && "proxyUrl" in endpoint ? endpoint.proxyUrl : null).toBe("https://api.marketplace.example.com/api/tavily/search");
-    expect(detail.useThisServicePrompt).toContain("https://api.marketplace.example.com/api/tavily/search");
-  });
-
-  it("rejects invalid Tavily request combinations in the shared schema", () => {
-    const tavilyRoute = marketplaceRoutes.find((route) => route.routeId === "tavily.search.v1");
-    if (!tavilyRoute) {
-      throw new Error("Tavily seeded route is missing.");
-    }
-
-    expect(() =>
-      validateJsonSchema({
-        schema: tavilyRoute.requestSchemaJson,
-        value: {
-          query: "fast payments",
-          country: "united states"
-        },
-        label: "Request body"
-      })
-    ).not.toThrow();
-
-    expect(() =>
-      validateJsonSchema({
-        schema: tavilyRoute.requestSchemaJson,
-        value: {
-          query: "fast payments",
-          topic: "news",
-          country: "united states"
-        },
-        label: "Request body"
-      })
-    ).toThrow(/schema validation/i);
-
-    expect(() =>
-      validateJsonSchema({
-        schema: tavilyRoute.requestSchemaJson,
-        value: {
-          query: "fast payments",
-          country: "us"
-        },
-        label: "Request body"
-      })
-    ).toThrow(/schema validation/i);
-
-    expect(() =>
-      validateJsonSchema({
-        schema: tavilyRoute.requestSchemaJson,
-        value: {
-          query: "fast payments",
-          search_depth: "basic",
-          chunks_per_source: 2
-        },
-        label: "Request body"
-      })
-    ).toThrow(/schema validation/i);
   });
 
   it("computes service analytics and provider request queue state in the in-memory store", async () => {

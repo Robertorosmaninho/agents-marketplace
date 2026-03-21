@@ -17,11 +17,13 @@
     "test:web:smoke": "npm run build:web && playwright test --config apps/web/playwright.config.ts",
     "dev:api": "tsx apps/api/src/index.ts",
     "dev:facilitator": "tsx apps/facilitator/src/index.ts",
+    "dev:tavily-service": "tsx apps/tavily-service/src/index.ts",
     "dev:worker": "tsx apps/worker/src/index.ts",
     "dev:web": "npm run dev --workspace @marketplace/web",
     "cli": "tsx packages/cli/src/index.ts",
     "start:api": "node dist/apps/api/index.js",
     "start:facilitator": "node dist/apps/facilitator/index.js",
+    "start:tavily-service": "node dist/apps/tavily-service/index.js",
     "start:worker": "node dist/apps/worker/index.js",
     "start:web": "npm run start --workspace @marketplace/web",
     "start:cli": "node dist/packages/cli/index.js"
