@@ -1,47 +1,99 @@
-# Fast-Native Agent Data Marketplace v1
+# Fast-Native Agent Data Marketplace
 
-Greenfield TypeScript workspace for a Fast-native paid data marketplace with x402 route charges, variable top-ups, prepaid credit, provider payouts, and wallet-bound auth.
+Fast-native data marketplace using [`@fastxyz/sdk`](https://www.npmjs.com/package/@fastxyz/sdk), [`@fastxyz/x402-client`](https://www.npmjs.com/package/@fastxyz/x402-client), and [`@fastxyz/fast-connector`](https://www.npmjs.com/package/@fastxyz/fast-connector).
 
-## Workspace
+## Architecture
 
-- `apps/api`: Express gateway with x402 compatibility, wallet auth, provider passthrough routes, prepaid-credit runtime endpoints, and the marketplace-owned Tavily example
-- `apps/facilitator`: x402 facilitator service for payment verification
-- `apps/web`: Next.js marketplace frontend for service discovery, `SKILL.md`, and suggestion intake
-- `apps/worker`: async job poller, refund worker, stale-payment reconciler, and provider payout settlement worker
-- `packages/shared`: shared route registry, billing contracts, auth, payment compatibility, docs, payout logic, and credit stores
-- `packages/cli`: buyer CLI for wallet, x402 invocation, prepaid-credit invocation, API sessions, and job retrieval
-
-## Implementation Example
-
-This repo includes a concrete marketplace-owned third-party API integration: `Tavily Search`.
-
-- buyer-facing route: `POST /api/tavily/search`
-- upstream route: `POST https://api.tavily.com/search`
-- auth: server-side `TAVILY_API_KEY`
-- catalog behavior: the Tavily service is only published when `TAVILY_API_KEY` is configured
-
-This is the reference example for "marketplace-operated wrapper" routes in v1. The marketplace owns the public catalog entry, pricing, and payment flow, while the API executes the upstream request with server-held credentials.
+- `apps/api`: Express gateway for public catalog discovery, provider/admin workflows, wallet auth, and marketplace-executed API routes
+- `apps/web`: Next.js frontend for the marketplace catalog, provider dashboard, and admin review surfaces
+- `apps/worker`: background processing for async jobs, treasury refunds, stale-payment recovery, and provider payout settlement
+- `apps/facilitator`: x402 facilitator service used for payment verification
+- `apps/tavily-service`: optional standalone Tavily-backed provider example that can be onboarded through the website like any other provider service. See [`apps/tavily-service/README.md`](./apps/tavily-service/README.md)
+- `packages/shared`: source of truth for shared contracts, route registry, catalog/docs generation, auth, billing, payout logic, and store behavior
+- `packages/cli`: buyer CLI for wallet setup, x402 calls, prepaid-credit flows, API sessions, and job retrieval
 
 ## Billing Model
 
-Marketplace routes use one of three billing modes:
+Marketplace-executed routes use one of four billing modes:
 
 - `fixed_x402`: standard paid route; buyer sends the request, gets `402 Payment Required`, pays with x402, then retries the same request
 - `topup_x402_variable`: buyer supplies an amount in the request body, pays that exact amount with x402, and receives marketplace-managed service credit
 - `prepaid_credit`: buyer first funds service credit, then invokes the route with wallet-session bearer auth instead of paying x402 on every call
+- `free`: buyer invokes the marketplace route directly with no x402 payment
+
+Discovery-only `external_registry` listings do not use marketplace billing. They publish direct provider URLs and the provider defines payment and auth outside the marketplace.
 
 ## Settlement Tiers
 
-Services publish under one of two settlement tiers:
+Only `marketplace_proxy` services publish under settlement tiers:
 
-- `community_direct`: buyer pays the provider wallet directly through x402, provider-owned refunds and reimbursements, no marketplace treasury custody
-- `verified_escrow`: buyer pays marketplace treasury, marketplace can refund failures, reconcile stale payments, support prepaid credit, and settle provider payouts later
+- `community_direct`: buyer pays the provider wallet directly through x402, the provider owns reimbursements/refunds, and the route must be sync HTTP `fixed_x402`
+- `verified_escrow`: buyer pays marketplace treasury, marketplace can refund failures, reconcile stale payments, support free routes, variable top-ups, prepaid credit, async jobs, and settle provider payouts later
 
-New provider-created drafts default to `community_direct`. Marketplace-operated seeded services remain `verified_escrow`, and only `verified_escrow` services can publish `topup_x402_variable` or `prepaid_credit` routes.
+New `marketplace_proxy` drafts default to `community_direct`. Marketplace-operated seeded services remain `verified_escrow`, and only `verified_escrow` services can publish `free`, `topup_x402_variable`, `prepaid_credit`, async, or marketplace-executed routes.
 
 For `verified_escrow`, successful route charges and top-ups create provider payout records, and the worker batches and sends those payouts on Fast. `community_direct` does not create treasury payout records because the buyer already paid the provider wallet directly.
 
-## Quick Start
+`external_registry` services do not use settlement tiers. They are discovery-only listings and are never executed by the marketplace.
+
+## Persona Flows
+
+### External API Provider
+
+- Creates a service as `external_registry`
+- Adds direct `GET` or `POST` endpoint listings with `publicUrl`, `docsUrl`, auth notes, and examples
+- Verifies website ownership
+- Submits for admin review
+- After publish, appears in the catalog as a discovery-only external API
+- Marketplace does not proxy calls, collect payment, mint runtime auth, or track execution analytics
+
+### Community API Provider
+
+- Creates a service as `marketplace_proxy`
+- Adds marketplace-hosted endpoints
+- Configures payout wallet and provider runtime key
+- Verifies website ownership
+- Submits for admin review
+- Admin publishes with `community_direct`
+- Buyers call the marketplace route, but payment settles directly to the provider
+- Only sync HTTP `fixed_x402` endpoints are allowed
+
+### Verified Escrow API Provider
+
+- Starts with the same onboarding flow as the External API provider, but publishes as a marketplace-hosted `marketplace_proxy` service
+- Admin publishes with `verified_escrow`
+- Marketplace acts as execution and settlement middleman
+- Supports the broader marketplace-managed billing, refund, payout, and async/prepaid flows
+
+### Marketplace Admin
+
+- Log in at `/admin/login`
+- Reviews submitted provider services
+- Checks website verification and service completeness
+- Requests changes or publishes
+- Publishes discovery-only metadata for `external_registry` services
+- Chooses `community_direct` or `verified_escrow` for `marketplace_proxy` services
+- Can later suspend live services
+
+### Human User
+
+- Browses one shared marketplace catalog
+- Sees marketplace-hosted services with pricing, settlement badges, metrics, and runnable proxy routes
+- Sees external services with an `External API` label, direct URLs, docs links, and auth notes
+- Uses marketplace-hosted services through the marketplace
+- Uses external services by going directly to the provider
+
+### Agent User
+
+- Discovers services through catalog pages, `llms.txt`, and `.well-known/marketplace.json`
+- Uses marketplace execution prompts and `skill.md` for marketplace-hosted services
+- Calls marketplace routes when the service is executable by the marketplace
+- Uses direct-integration prompts for external services instead
+- Calls the provider directly for discovery-only external services
+
+## Development
+
+### Quick Start
 
 1. Install dependencies:
 
@@ -60,7 +112,6 @@ export MARKETPLACE_SECRETS_KEY=change-me-again
 export MARKETPLACE_ADMIN_TOKEN=change-me-too
 export MARKETPLACE_FAST_NETWORK=mainnet
 export MARKETPLACE_WEB_BASE_URL=http://localhost:3001
-export TAVILY_API_KEY=tvly-...
 ```
 
 Use long random values for `MARKETPLACE_SESSION_SECRET` and `MARKETPLACE_SECRETS_KEY`.
@@ -114,13 +165,24 @@ npm run dev:worker
 npm run dev:web
 ```
 
-7. Use the CLI:
+7. Optional: run the standalone Tavily provider example:
+
+See [`apps/tavily-service/README.md`](./apps/tavily-service/README.md) for the full setup and onboarding flow.
+
+```bash
+export TAVILY_API_KEY=tvly-...
+export TAVILY_SERVICE_PORT=4030
+npm run dev:tavily-service
+```
+
+This service is not wired into `apps/api`. To use it, create a `marketplace_proxy` provider service in the web UI, point the endpoint upstream at `http://localhost:4030/search` or your deployed host, and serve the marketplace website-verification token from `/.well-known/fast-marketplace-verification.txt` by setting `MARKETPLACE_VERIFICATION_TOKEN` on that service. Provider website verification still expects an HTTPS host.
+
+8. Use the CLI:
 
 ```bash
 npm run cli -- wallet init
 npm run cli -- wallet address
 npm run cli -- invoke mock quick-insight --body '{"query":"alpha"}'
-npm run cli -- invoke tavily search --body '{"query":"latest Fast blockchain updates","topic":"general","max_results":5}'
 ```
 
 For prepaid-credit routes, the CLI can mint an API-scoped wallet session automatically when the route responds with auth requirements instead of `402`. You can also create that session explicitly:
@@ -131,22 +193,23 @@ npm run cli -- auth api-session <provider> <operation>
 
 For provider-authored top-up routes, call the route with an amount in the request body. For prepaid-credit routes, fund credit first, then call the prepaid route with the same `invoke` command; the CLI will switch to wallet-session auth when needed.
 
-8. Build runtime artifacts:
+9. Build runtime artifacts:
 
 ```bash
 npm run build
 ```
 
-9. Start production-style processes:
+10. Start production-style processes:
 
 ```bash
 npm run start:api
 npm run start:facilitator
+npm run start:tavily-service
 npm run start:worker
 npm run start:web
 ```
 
-## Docker Deployment
+### Docker Deployment
 
 Use the repo-root Docker context with one Dockerfile per service:
 
@@ -167,7 +230,6 @@ MARKETPLACE_SECRETS_KEY=change-me-again
 MARKETPLACE_FAST_NETWORK=mainnet
 MARKETPLACE_BASE_URL=https://fastapi.example.com
 MARKETPLACE_WEB_BASE_URL=https://fast.example.com
-TAVILY_API_KEY=tvly-...
 PORT=3000
 ```
 
@@ -211,17 +273,7 @@ If you want both networks, deploy two stacks from the same repo:
 
 Keep the web, API, and worker on the same network value inside each stack. The facilitator can stay shared if it supports both Fast networks.
 
-## Website Wallet Login
-
-The web app supports wallet login with the Fast browser extension through `@fastxyz/fast-connector`.
-
-- login happens in the site header via a signed wallet challenge
-- this creates a short-lived website session token
-- service pages support in-browser x402 execution for payable endpoints through the extension
-- prepaid-credit routes use wallet-session auth instead of x402 at invoke time
-- async browser calls can refresh job results by signing a job-specific challenge with the same wallet
-
-## Provider Credit Runtime
+### Provider Credit Runtime
 
 Provider runtime keys are used in two cases:
 
@@ -238,13 +290,7 @@ Provider runtime key operations:
 - `POST /provider/runtime/credits/:reservationId/release`
 - top-up purchases recognize provider revenue at purchase time; later credit consumption does not create a second provider payout
 
-## Admin Surfaces
-
-- `/admin/login`: shared-token admin login
-- `/admin/services`: review submitted provider services, assign `community_direct` or `verified_escrow`, publish drafts, request changes, and suspend live services
-- `/admin/suggestions`: triage endpoint and source suggestions from marketplace demand intake
-
-## Scripts
+### Scripts
 
 - `npm run typecheck`: typecheck the workspace
 - `npm run build`: typecheck and emit runtime bundles into `dist`
