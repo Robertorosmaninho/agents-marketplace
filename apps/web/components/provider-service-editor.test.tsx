@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
 
 import React from "react";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ProviderServiceEditor } from "./provider-service-editor";
 
@@ -75,6 +75,10 @@ function buildServiceDetail(overrides?: {
 }
 
 describe("ProviderServiceEditor", () => {
+  afterEach(() => {
+    cleanup();
+  });
+
   beforeEach(() => {
     window.localStorage.clear();
     fetchProviderService.mockReset();
@@ -198,6 +202,24 @@ describe("ProviderServiceEditor", () => {
     expect(screen.getByDisplayValue("Search")).toBeTruthy();
     expect(screen.getByDisplayValue("https://api.provider.example.com")).toBeTruthy();
     expect(screen.getByDisplayValue("/search")).toBeTruthy();
+  });
+
+  it("shows deploy env var guidance for website verification", async () => {
+    fetchProviderService.mockResolvedValue(buildServiceDetail());
+
+    render(
+      <ProviderServiceEditor
+        apiBaseUrl="https://api.marketplace.example.com"
+        deploymentNetwork="mainnet"
+        serviceId="service_1"
+      />
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Website verification")).toBeTruthy();
+    });
+
+    expect(screen.getAllByText(/you can add the token there as an env var/i).length).toBeGreaterThan(0);
   });
 
   it("creates a free endpoint draft through the editor", async () => {

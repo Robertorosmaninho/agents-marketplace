@@ -420,7 +420,10 @@ function ProviderServiceEditorInner({
       <Card variant="frosted">
         <CardHeader>
           <CardTitle className="text-3xl">Website verification</CardTitle>
-          <CardDescription>Host the issued token on your site before submitting this service for review.</CardDescription>
+          <CardDescription>
+            Host the issued token on your site before submitting this service for review. If your deploy is set up to
+            serve this file from config, you can add the token there as an env var.
+          </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="text-sm text-muted-foreground">
@@ -452,6 +455,10 @@ function ProviderServiceEditorInner({
                   <div className="text-sm font-medium break-all">{challenge.token}</div>
                 </div>
                 <CopyButton value={challenge.token} />
+              </div>
+              <div className="text-sm text-muted-foreground">
+                You can also add this token to your deploy as an env var if your service serves the verification file
+                from environment config.
               </div>
             </div>
           ) : null}
