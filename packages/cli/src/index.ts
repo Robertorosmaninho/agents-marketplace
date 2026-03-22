@@ -11,6 +11,11 @@ import {
   walletAddress,
   walletBalance
 } from "./lib.js";
+import {
+  submitProviderService,
+  syncProviderSpec,
+  verifyProviderService
+} from "./provider.js";
 
 const program = new Command();
 const deps = defaultCliDependencies();
@@ -168,6 +173,74 @@ jobProgram
         keyfilePath: options.keyfile,
         configPath: options.config,
         network: options.network
+      },
+      deps
+    );
+    deps.print(JSON.stringify(result, null, 2));
+  });
+
+const providerProgram = program.command("provider");
+
+providerProgram
+  .command("sync")
+  .requiredOption("--spec <path>")
+  .option("--api-url <url>", "Marketplace API URL")
+  .option("--network <network>", "Fast network (mainnet or testnet)")
+  .option("--keyfile <path>")
+  .option("--config <path>")
+  .action(async (options) => {
+    const result = await syncProviderSpec(
+      {
+        specPath: options.spec,
+        apiUrl: options.apiUrl,
+        keyfilePath: options.keyfile,
+        configPath: options.config,
+        network: options.network,
+        rpcUrl: undefined
+      },
+      deps
+    );
+    deps.print(JSON.stringify(result, null, 2));
+  });
+
+providerProgram
+  .command("verify")
+  .requiredOption("--service <slug-or-id>")
+  .option("--api-url <url>", "Marketplace API URL")
+  .option("--network <network>", "Fast network (mainnet or testnet)")
+  .option("--keyfile <path>")
+  .option("--config <path>")
+  .action(async (options) => {
+    const result = await verifyProviderService(
+      {
+        serviceRef: options.service,
+        apiUrl: options.apiUrl,
+        keyfilePath: options.keyfile,
+        configPath: options.config,
+        network: options.network,
+        rpcUrl: undefined
+      },
+      deps
+    );
+    deps.print(JSON.stringify(result, null, 2));
+  });
+
+providerProgram
+  .command("submit")
+  .requiredOption("--service <slug-or-id>")
+  .option("--api-url <url>", "Marketplace API URL")
+  .option("--network <network>", "Fast network (mainnet or testnet)")
+  .option("--keyfile <path>")
+  .option("--config <path>")
+  .action(async (options) => {
+    const result = await submitProviderService(
+      {
+        serviceRef: options.service,
+        apiUrl: options.apiUrl,
+        keyfilePath: options.keyfile,
+        configPath: options.config,
+        network: options.network,
+        rpcUrl: undefined
       },
       deps
     );

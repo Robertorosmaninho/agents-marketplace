@@ -10,7 +10,7 @@ Fast-native data marketplace using [`@fastxyz/sdk`](https://www.npmjs.com/packag
 - `apps/facilitator`: x402 facilitator service used for payment verification
 - `apps/tavily-service`: optional standalone Tavily-backed provider example that can be onboarded through the website like any other provider service. See [`apps/tavily-service/README.md`](./apps/tavily-service/README.md)
 - `packages/shared`: source of truth for shared contracts, route registry, catalog/docs generation, auth, billing, payout logic, and store behavior
-- `packages/cli`: buyer CLI for wallet setup, x402 calls, prepaid-credit flows, API sessions, and job retrieval
+- `packages/cli`: buyer and provider CLI for wallet setup, x402 calls, provider draft sync/verification/submission, prepaid-credit flows, API sessions, and job retrieval
 
 ## Billing Model
 
@@ -193,6 +193,22 @@ npm run cli -- auth api-session <provider> <operation>
 ```
 
 For provider-authored top-up routes, call the route with an amount in the request body. For prepaid-credit routes, fund credit first, then call the prepaid route with the same `invoke` command; the CLI will switch to wallet-session auth when needed.
+
+Provider-agent workflow:
+
+```bash
+cp .env.example .env
+```
+
+Set `AGENT_WALLET_KEY`, `MARKETPLACE_API_BASE_URL`, and `MARKETPLACE_FAST_NETWORK` in `.env`, then create a provider spec JSON and run:
+
+```bash
+npm run cli -- provider sync --spec ./provider-spec.json
+npm run cli -- provider verify --service <slug-or-id>
+npm run cli -- provider submit --service <slug-or-id>
+```
+
+`provider verify` always creates a fresh verification challenge and prompts before the marketplace attempts verification. For arbitrary external sites, host the token outside this repo first; the CLI will not mutate deploy, DNS, or cloud env settings on its own.
 
 9. Build runtime artifacts:
 

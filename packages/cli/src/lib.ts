@@ -1,7 +1,7 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, resolve } from "node:path";
-import { stdin as input, stdout as output } from "node:process";
+import { stderr, stdin as input } from "node:process";
 import { createInterface } from "node:readline/promises";
 
 import { getPublicKeyAsync } from "@noble/ed25519";
@@ -74,11 +74,20 @@ interface PublishedRouteCatalogEntry {
 const DEFAULT_CONFIG_PATH = "~/.fast-marketplace/config.json";
 const DEFAULT_KEYFILE_PATH = "~/.fast/keys/default.json";
 
+export function normalizePrivateKeyHex(privateKey: string): string {
+  const normalized = privateKey.startsWith("0x") ? privateKey.slice(2) : privateKey;
+  if (!/^[0-9a-fA-F]{64}$/.test(normalized)) {
+    throw new Error("Fast private key must be a 32-byte hex string.");
+  }
+
+  return normalized.toLowerCase();
+}
+
 export function defaultCliDependencies(): CliDependencies {
   return {
     fetchImpl: fetch,
     async confirm(message: string) {
-      const rl = createInterface({ input, output });
+      const rl = createInterface({ input, output: stderr });
       try {
         const answer = await rl.question(`${message} [y/N] `);
         return answer.trim().toLowerCase() === "y";
@@ -182,11 +191,8 @@ export async function loadWallet(input: {
 }): Promise<LoadedWallet> {
   const config = await readCliConfig(input.configPath);
   const keyfilePath = expandHome(input.keyfilePath ?? config.defaultKeyfile ?? DEFAULT_KEYFILE_PATH);
-  const network = resolveCliNetwork(input.network, config.defaultNetwork, input.rpcUrl);
   const keyfile = JSON.parse(await readFile(keyfilePath, "utf8")) as {
     privateKey: string;
-    publicKey?: string;
-    address?: string;
   };
 
   const privateKey = keyfile.privateKey;
@@ -194,8 +200,27 @@ export async function loadWallet(input: {
     throw new Error(`Keyfile is missing privateKey: ${keyfilePath}`);
   }
 
-  const publicKey = keyfile.publicKey ?? Buffer.from(await getPublicKeyAsync(Buffer.from(privateKey, "hex"))).toString("hex");
-  const address = keyfile.address ?? encodeFastAddress(Buffer.from(publicKey, "hex"));
+  return loadWalletFromPrivateKey({
+    privateKey,
+    sourceLabel: keyfilePath,
+    configPath: input.configPath,
+    network: input.network,
+    rpcUrl: input.rpcUrl
+  });
+}
+
+export async function loadWalletFromPrivateKey(input: {
+  privateKey: string;
+  sourceLabel?: string;
+  configPath?: string;
+  network?: MarketplaceDeploymentNetwork;
+  rpcUrl?: string;
+}): Promise<LoadedWallet> {
+  const config = await readCliConfig(input.configPath);
+  const network = resolveCliNetwork(input.network, config.defaultNetwork, input.rpcUrl);
+  const privateKey = normalizePrivateKeyHex(input.privateKey);
+  const publicKey = Buffer.from(await getPublicKeyAsync(Buffer.from(privateKey, "hex"))).toString("hex");
+  const address = encodeFastAddress(Buffer.from(publicKey, "hex"));
   const provider = createProvider({
     deploymentNetwork: network.deploymentNetwork,
     rpcUrl: network.rpcUrl
@@ -203,7 +228,7 @@ export async function loadWallet(input: {
   const wallet = await FastWallet.fromPrivateKey(privateKey, provider);
 
   return {
-    keyfilePath,
+    keyfilePath: input.sourceLabel ?? "env:private-key",
     wallet,
     paymentWallet: {
       type: "fast",

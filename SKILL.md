@@ -133,21 +133,20 @@ Important constraints:
 
 ## Provider workflow
 
-1. Sign into `https://marketplace.example.com` with the provider wallet and open `/providers` or `/providers/onboard`.
-2. Create or update the provider profile tied to that wallet session.
-3. If building from marketplace demand, review provider-visible request intake and claim the request you want to build.
-4. Open `/providers/services` and create or update the target service draft.
-5. Set the service metadata carefully: slug, API namespace, prompt intro, setup instructions, categories, website URL, and payout wallet.
-6. Add endpoint drafts with the exact request schema, response schema, examples, mode, and billing type.
-7. New provider services default to `community_direct`; providers cannot self-assign `verified_escrow` in v1.
-8. For `community_direct`, publish only sync HTTP `fixed_x402` routes and rotate a provider runtime key so the marketplace can forward signed buyer identity headers.
-9. For `verified_escrow`, `fixed_x402`, `topup_x402_variable`, and `prepaid_credit` are allowed once the service is promoted during review.
-10. For `topup_x402_variable` endpoints, set `minAmount` and `maxAmount`; the marketplace will own the top-up crediting flow.
-11. For `prepaid_credit` endpoints, rotate a provider runtime key from the service page, verify marketplace identity headers upstream, and use the provider runtime credit APIs to reserve, capture, and release buyer credit.
-12. If the service website host must be verified, create a verification challenge and publish the requested token at the expected URL.
-13. Verify website ownership from the provider review flow.
-14. Submit the service for marketplace review once the draft is complete and verified.
-15. After publish, use the public service page and paid proxy routes as the canonical execution surface.
+1. Prefer the CLI path for agent-driven provider onboarding: create a spec JSON and run `fast-marketplace provider sync --spec <path>`.
+2. The provider commands default to `AGENT_WALLET_KEY` from repo-root `.env`; use `--keyfile` only when you need to override that wallet.
+3. `provider sync` upserts the provider profile, creates or updates the owned service draft by slug, reconciles endpoint drafts, and creates a runtime key only when a `marketplace_proxy` service does not already have one.
+4. New provider services default to `community_direct`; providers cannot self-assign `verified_escrow` in v1.
+5. For `community_direct`, publish only sync HTTP `fixed_x402` routes and keep the provider runtime key available so the marketplace can forward signed buyer identity headers.
+6. For `verified_escrow`, `fixed_x402`, `topup_x402_variable`, and `prepaid_credit` are allowed only after review promotes the service.
+7. For `topup_x402_variable` endpoints, set `minAmount` and `maxAmount`; the marketplace owns the top-up crediting flow.
+8. For `prepaid_credit` endpoints, verify marketplace identity headers upstream and use the provider runtime credit APIs to reserve, capture, and release buyer credit.
+9. Run `fast-marketplace provider verify --service <slug-or-id>` to mint a fresh verification challenge and show the exact URL and token the website must serve.
+10. If verification requires touching deploy, DNS, or cloud env outside this repo, ask the user before taking that action. For arbitrary external sites, the agent should hand off the token and wait for confirmation rather than mutating infrastructure on its own.
+11. After the user confirms the verification token is live, continue the same `provider verify` flow so the marketplace performs the ownership check.
+12. Run `fast-marketplace provider submit --service <slug-or-id>` only after verification succeeds; this flow stops at `pending_review`, not admin publish.
+13. If building from marketplace demand, review provider-visible request intake and claim the request you want to build before syncing the draft.
+14. After admin publish, use the public service page and paid proxy routes as the canonical execution surface.
 
 Important provider constraints:
 
