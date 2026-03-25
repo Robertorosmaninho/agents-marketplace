@@ -16,6 +16,11 @@ if (!databaseUrl) {
   throw new Error("DATABASE_URL is required.");
 }
 
+const secretsKey = process.env.MARKETPLACE_SECRETS_KEY;
+if (!secretsKey) {
+  throw new Error("MARKETPLACE_SECRETS_KEY is required.");
+}
+
 const pool = new Pool({ connectionString: databaseUrl });
 const store = new PostgresMarketplaceStore(pool);
 await store.ensureSchema();
@@ -43,13 +48,14 @@ const timer = setInterval(() => {
   void runMarketplaceWorkerCycle({
     store,
     refundService,
-    payoutService
+    payoutService,
+    secretsKey
   }).catch((error) => {
     console.error("Worker cycle failed:", error);
   });
 }, intervalMs);
 
-void runMarketplaceWorkerCycle({ store, refundService, payoutService }).catch((error) => {
+void runMarketplaceWorkerCycle({ store, refundService, payoutService, secretsKey }).catch((error) => {
   console.error("Initial worker cycle failed:", error);
 });
 

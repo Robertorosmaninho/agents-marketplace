@@ -2939,6 +2939,7 @@ describe("marketplace api", () => {
 
     await runMarketplaceWorkerCycle({
       store,
+      secretsKey: "test-secrets-key",
       refundService: {
         async issueRefund() {
           return { txHash: "0xmanualrecoveryrefund" };

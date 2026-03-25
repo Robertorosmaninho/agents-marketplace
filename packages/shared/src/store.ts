@@ -17,6 +17,7 @@ import {
 } from "./seed.js";
 import type {
   AccessGrantRecord,
+  AsyncRouteStrategy,
   ClaimPaymentExecutionInput,
   ClaimPaymentExecutionResult,
   CompleteCreditTopupChargeInput,
@@ -52,6 +53,8 @@ import type {
   PublishedServiceVersionRecord,
   ResourceType,
   RefundRecord,
+  RouteAsyncConfig,
+  RouteMode,
   SaveAsyncAcceptanceInput,
   SaveSyncIdempotencyInput,
   ServiceAnalytics,
@@ -74,6 +77,67 @@ function quoteIdentifier(value: string): string {
 
 function clone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
+}
+
+function normalizeAsyncConfig(value: unknown): RouteAsyncConfig | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+
+  const candidate = value as Record<string, unknown>;
+  const strategy = candidate.strategy;
+  const timeoutMs = candidate.timeoutMs;
+
+  if ((strategy !== "poll" && strategy !== "webhook") || typeof timeoutMs !== "number" || !Number.isFinite(timeoutMs)) {
+    return null;
+  }
+
+  return {
+    strategy,
+    timeoutMs,
+    pollPath: typeof candidate.pollPath === "string"
+      ? candidate.pollPath
+      : candidate.pollPath === null
+      ? null
+      : undefined
+  };
+}
+
+function buildRouteAsyncConfig(input: {
+  mode: RouteMode;
+  asyncStrategy?: AsyncRouteStrategy | null;
+  asyncTimeoutMs?: number | null;
+  pollPath?: string | null;
+}, existing?: RouteAsyncConfig | null): RouteAsyncConfig | null {
+  if (input.mode !== "async") {
+    return null;
+  }
+
+  const strategy = input.asyncStrategy ?? existing?.strategy ?? null;
+  const timeoutMs = input.asyncTimeoutMs ?? existing?.timeoutMs ?? null;
+  const pollPath = input.pollPath === undefined ? (existing?.pollPath ?? null) : input.pollPath;
+
+  if (!strategy || typeof timeoutMs !== "number" || !Number.isFinite(timeoutMs)) {
+    throw new Error("Async endpoints require asyncStrategy and asyncTimeoutMs.");
+  }
+
+  if (strategy === "poll") {
+    if (!pollPath) {
+      throw new Error("Poll-based async endpoints require pollPath.");
+    }
+
+    return {
+      strategy,
+      timeoutMs,
+      pollPath
+    };
+  }
+
+  return {
+    strategy,
+    timeoutMs,
+    pollPath: null
+  };
 }
 
 function buildRouteId(apiNamespace: string, operation: string): string {
@@ -242,6 +306,7 @@ function mapPublishedEndpointVersionToProviderDraft(
     price: endpoint.price,
     billing: clone(endpoint.billing),
     mode: endpoint.mode,
+    asyncConfig: clone(endpoint.asyncConfig ?? null),
     requestSchemaJson: clone(endpoint.requestSchemaJson),
     responseSchemaJson: clone(endpoint.responseSchemaJson),
     requestExample: clone(endpoint.requestExample),
@@ -729,15 +794,19 @@ export class InMemoryMarketplaceStore implements MarketplaceStore {
       jobToken: idempotency.jobToken ?? input.jobToken,
       paymentId: input.paymentId,
       routeId: input.route.routeId,
+      serviceId: input.serviceId ?? ("serviceId" in input.route ? (input.route.serviceId as string) : null),
       provider: input.route.provider,
       operation: input.route.operation,
       buyerWallet: input.buyerWallet,
       quotedPrice: input.quotedPrice,
       payoutSplit: clone(input.payoutSplit),
+      requestId: input.requestId,
       providerJobId: input.providerJobId,
       requestBody: clone(input.requestBody),
       routeSnapshot: clone(input.route),
       providerState: clone(input.providerState ?? null),
+      nextPollAt: input.nextPollAt ?? null,
+      timeoutAt: input.timeoutAt ?? null,
       status: "pending",
       resultBody: null,
       errorMessage: null,
@@ -777,19 +846,24 @@ export class InMemoryMarketplaceStore implements MarketplaceStore {
     );
   }
 
-  async updateJobPending(jobToken: string, providerState?: Record<string, unknown>): Promise<JobRecord> {
-    const existing = this.jobsByToken.get(jobToken);
+  async updateJobPending(input: {
+    jobToken: string;
+    providerState?: Record<string, unknown> | null;
+    nextPollAt?: string | null;
+  }): Promise<JobRecord> {
+    const existing = this.jobsByToken.get(input.jobToken);
     if (!existing) {
-      throw new Error(`Job not found: ${jobToken}`);
+      throw new Error(`Job not found: ${input.jobToken}`);
     }
 
     const updated: JobRecord = {
       ...existing,
-      providerState: clone(providerState ?? existing.providerState),
+      providerState: input.providerState === undefined ? clone(existing.providerState) : clone(input.providerState),
+      nextPollAt: input.nextPollAt === undefined ? existing.nextPollAt : input.nextPollAt,
       updatedAt: timestamp()
     };
 
-    this.jobsByToken.set(jobToken, updated);
+    this.jobsByToken.set(input.jobToken, updated);
     return clone(updated);
   }
 
@@ -804,6 +878,7 @@ export class InMemoryMarketplaceStore implements MarketplaceStore {
       status: "completed",
       resultBody: clone(body),
       errorMessage: null,
+      nextPollAt: null,
       updatedAt: timestamp()
     };
 
@@ -821,6 +896,7 @@ export class InMemoryMarketplaceStore implements MarketplaceStore {
       ...existing,
       status: "failed",
       errorMessage: error,
+      nextPollAt: null,
       updatedAt: timestamp()
     };
 
@@ -864,7 +940,7 @@ export class InMemoryMarketplaceStore implements MarketplaceStore {
     routeId: string;
     requestId?: string | null;
     responseStatusCode?: number | null;
-    phase: "execute" | "poll" | "refund";
+    phase: "execute" | "poll" | "callback" | "refund";
     status: "pending" | "succeeded" | "failed";
     requestPayload?: unknown;
     responsePayload?: unknown;
@@ -1700,6 +1776,38 @@ export class InMemoryMarketplaceStore implements MarketplaceStore {
     return clone(this.creditReservationsById.get(reservationId) ?? null);
   }
 
+  async getCreditReservationByIdempotencyKey(serviceId: string, idempotencyKey: string): Promise<CreditReservationRecord | null> {
+    const reservationId = this.creditReservationIdByIdempotencyKey.get(creditReservationKey(serviceId, idempotencyKey));
+    return clone(reservationId ? this.creditReservationsById.get(reservationId) ?? null : null);
+  }
+
+  async extendCreditReservation(input: {
+    reservationId: string;
+    expiresAt: string;
+  }): Promise<{ account: CreditAccountRecord; reservation: CreditReservationRecord }> {
+    const reservation = this.creditReservationsById.get(input.reservationId);
+    if (!reservation) {
+      throw new Error(`Credit reservation not found: ${input.reservationId}`);
+    }
+
+    const account = this.creditAccountsById.get(reservation.accountId);
+    if (!account) {
+      throw new Error(`Credit account not found: ${reservation.accountId}`);
+    }
+
+    const updatedReservation: CreditReservationRecord = {
+      ...reservation,
+      expiresAt: input.expiresAt,
+      updatedAt: timestamp()
+    };
+    this.creditReservationsById.set(updatedReservation.id, updatedReservation);
+
+    return {
+      account: clone(account),
+      reservation: clone(updatedReservation)
+    };
+  }
+
   async rotateProviderRuntimeKey(serviceId: string, wallet: string, secretMaterial: {
     keyHash: string;
     keyPrefix: string;
@@ -2097,6 +2205,14 @@ export class InMemoryMarketplaceStore implements MarketplaceStore {
       price: billing.price,
       billing: billing.billing,
       mode: input.mode,
+      asyncConfig: billing.billing.type === "topup_x402_variable"
+        ? null
+        : buildRouteAsyncConfig({
+            mode: input.mode,
+            asyncStrategy: input.asyncStrategy ?? null,
+            asyncTimeoutMs: input.asyncTimeoutMs ?? null,
+            pollPath: input.pollPath ?? null
+          }),
       requestSchemaJson: clone(input.requestSchemaJson),
       responseSchemaJson: clone(input.responseSchemaJson),
       requestExample: clone(input.requestExample),
@@ -2219,6 +2335,17 @@ export class InMemoryMarketplaceStore implements MarketplaceStore {
       description: input.description ?? existing.description,
       price: billing.price,
       billing: billing.billing,
+      mode: input.mode ?? existing.mode,
+      asyncConfig: billing.billing.type === "topup_x402_variable"
+        ? null
+        : buildRouteAsyncConfig({
+            mode: input.mode ?? existing.mode,
+            asyncStrategy: input.asyncStrategy ?? existing.asyncConfig?.strategy ?? null,
+            asyncTimeoutMs: input.asyncTimeoutMs ?? existing.asyncConfig?.timeoutMs ?? null,
+            pollPath: input.pollPath === undefined
+              ? (existing.asyncConfig?.pollPath ?? null)
+              : input.pollPath
+          }, existing.asyncConfig),
       requestSchemaJson: input.requestSchemaJson ? clone(input.requestSchemaJson) : existing.requestSchemaJson,
       responseSchemaJson: input.responseSchemaJson ? clone(input.responseSchemaJson) : existing.responseSchemaJson,
       requestExample: input.requestExample === undefined ? existing.requestExample : clone(input.requestExample),
@@ -2980,15 +3107,19 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
         job_token TEXT PRIMARY KEY,
         payment_id TEXT NOT NULL REFERENCES idempotency_records(payment_id),
         route_id TEXT NOT NULL,
+        service_id TEXT,
         provider TEXT NOT NULL,
         operation TEXT NOT NULL,
         buyer_wallet TEXT NOT NULL,
         quoted_price TEXT NOT NULL,
         payout_split JSONB NOT NULL DEFAULT '{}'::jsonb,
+        request_id TEXT,
         provider_job_id TEXT NOT NULL,
         request_body JSONB NOT NULL,
         route_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb,
         provider_state JSONB,
+        next_poll_at TIMESTAMPTZ,
+        timeout_at TIMESTAMPTZ,
         status TEXT NOT NULL,
         result_body JSONB,
         error_message TEXT,
@@ -3135,6 +3266,7 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
         price TEXT NOT NULL,
         billing JSONB NOT NULL DEFAULT '{}'::jsonb,
         mode TEXT NOT NULL,
+        async_config JSONB,
         request_schema_json JSONB NOT NULL,
         response_schema_json JSONB NOT NULL,
         request_example JSONB NOT NULL,
@@ -3222,6 +3354,7 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
         network TEXT NOT NULL,
         price TEXT NOT NULL,
         billing JSONB NOT NULL DEFAULT '{}'::jsonb,
+        async_config JSONB,
         title TEXT NOT NULL,
         description TEXT NOT NULL,
         payout JSONB NOT NULL,
@@ -3422,6 +3555,18 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
       ALTER TABLE jobs
       ADD COLUMN IF NOT EXISTS route_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb;
 
+      ALTER TABLE jobs
+      ADD COLUMN IF NOT EXISTS service_id TEXT;
+
+      ALTER TABLE jobs
+      ADD COLUMN IF NOT EXISTS request_id TEXT;
+
+      ALTER TABLE jobs
+      ADD COLUMN IF NOT EXISTS next_poll_at TIMESTAMPTZ;
+
+      ALTER TABLE jobs
+      ADD COLUMN IF NOT EXISTS timeout_at TIMESTAMPTZ;
+
       ALTER TABLE service_suggestions
       ADD COLUMN IF NOT EXISTS claimed_provider_account_id TEXT;
 
@@ -3437,6 +3582,9 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
       ALTER TABLE provider_endpoint_drafts
       ADD COLUMN IF NOT EXISTS method TEXT NOT NULL DEFAULT 'POST';
 
+      ALTER TABLE provider_endpoint_drafts
+      ADD COLUMN IF NOT EXISTS async_config JSONB;
+
       ALTER TABLE provider_services
       ADD COLUMN IF NOT EXISTS service_type TEXT NOT NULL DEFAULT 'marketplace_proxy';
 
@@ -3457,6 +3605,9 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
 
       ALTER TABLE published_endpoint_versions
       ADD COLUMN IF NOT EXISTS billing JSONB NOT NULL DEFAULT '{}'::jsonb;
+
+      ALTER TABLE published_endpoint_versions
+      ADD COLUMN IF NOT EXISTS async_config JSONB;
 
       UPDATE provider_services
       SET service_type = 'marketplace_proxy'
@@ -3875,16 +4026,16 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
         );
       }
 
-      for (const endpoint of draftEndpoints) {
+      for (const endpoint of draftEndpoints.filter(isMarketplaceEndpointDraft)) {
         await client.query(
           `
           INSERT INTO provider_endpoint_drafts (
             id, service_id, route_id, operation, method, title, description, price, billing, mode, request_schema_json, response_schema_json,
-            request_example, response_example, usage_notes, executor_kind, upstream_base_url, upstream_path,
+            request_example, response_example, usage_notes, executor_kind, async_config, upstream_base_url, upstream_path,
             upstream_auth_mode, upstream_auth_header_name, upstream_secret_ref, payout, created_at, updated_at
           ) VALUES (
-            $1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11::jsonb, $12::jsonb, $13::jsonb, $14::jsonb, $15, $16, $17, $18,
-            $19, $20, $21, $22::jsonb, $23, $24
+            $1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11::jsonb, $12::jsonb, $13::jsonb, $14::jsonb, $15, $16, $17::jsonb, $18, $19,
+            $20, $21, $22, $23::jsonb, $24, $25
           )
           ON CONFLICT (id) DO UPDATE SET
             route_id = EXCLUDED.route_id,
@@ -3901,6 +4052,7 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
             response_example = EXCLUDED.response_example,
             usage_notes = EXCLUDED.usage_notes,
             executor_kind = EXCLUDED.executor_kind,
+            async_config = EXCLUDED.async_config,
             upstream_base_url = EXCLUDED.upstream_base_url,
             upstream_path = EXCLUDED.upstream_path,
             upstream_auth_mode = EXCLUDED.upstream_auth_mode,
@@ -3926,6 +4078,7 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
             JSON.stringify(endpoint.responseExample),
             endpoint.usageNotes,
             endpoint.executorKind,
+            JSON.stringify(endpoint.asyncConfig ?? null),
             endpoint.upstreamBaseUrl,
             endpoint.upstreamPath,
             endpoint.upstreamAuthMode,
@@ -4000,12 +4153,12 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
           `
           INSERT INTO published_endpoint_versions (
             endpoint_version_id, service_id, service_version_id, endpoint_draft_id, route_id, provider, operation,
-            version, method, settlement_mode, mode, network, price, billing, title, description, payout, request_example, response_example, usage_notes,
+            version, method, settlement_mode, mode, network, price, billing, async_config, title, description, payout, request_example, response_example, usage_notes,
             request_schema_json, response_schema_json, executor_kind, upstream_base_url, upstream_path, upstream_auth_mode,
             upstream_auth_header_name, upstream_secret_ref, created_at, updated_at
           ) VALUES (
-            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14::jsonb, $15, $16, $17::jsonb, $18::jsonb, $19::jsonb, $20,
-            $21::jsonb, $22::jsonb, $23, $24, $25, $26, $27, $28, $29, $30
+            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14::jsonb, $15::jsonb, $16, $17, $18::jsonb, $19::jsonb, $20::jsonb, $21,
+            $22::jsonb, $23::jsonb, $24, $25, $26, $27, $28, $29, $30, $31
           )
           ON CONFLICT (endpoint_version_id) DO UPDATE SET
             route_id = EXCLUDED.route_id,
@@ -4018,6 +4171,7 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
             network = EXCLUDED.network,
             price = EXCLUDED.price,
             billing = EXCLUDED.billing,
+            async_config = EXCLUDED.async_config,
             title = EXCLUDED.title,
             description = EXCLUDED.description,
             payout = EXCLUDED.payout,
@@ -4049,6 +4203,7 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
             endpoint.network,
             endpoint.price,
             JSON.stringify(endpoint.billing),
+            JSON.stringify(endpoint.asyncConfig ?? null),
             endpoint.title,
             endpoint.description,
             JSON.stringify(endpoint.payout),
@@ -4285,27 +4440,34 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
       const jobResult = await client.query(
         `
         INSERT INTO jobs (
-          job_token, payment_id, route_id, provider, operation, buyer_wallet, quoted_price,
-          payout_split, provider_job_id, request_body, route_snapshot, provider_state, status, result_body, error_message,
-          refund_status, refund_id
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10::jsonb, $11::jsonb, $12::jsonb, 'pending', NULL, NULL, 'not_required', NULL)
+          job_token, payment_id, route_id, service_id, provider, operation, buyer_wallet, quoted_price,
+          payout_split, request_id, provider_job_id, request_body, route_snapshot, provider_state, next_poll_at, timeout_at,
+          status, result_body, error_message, refund_status, refund_id
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11, $12::jsonb, $13::jsonb, $14::jsonb, $15, $16, 'pending', NULL, NULL, 'not_required', NULL)
         ON CONFLICT (job_token) DO UPDATE
-        SET updated_at = jobs.updated_at
+        SET
+          service_id = COALESCE(jobs.service_id, EXCLUDED.service_id),
+          request_id = COALESCE(jobs.request_id, EXCLUDED.request_id),
+          updated_at = jobs.updated_at
         RETURNING *
         `,
         [
           persistedIdempotency.jobToken ?? input.jobToken,
           input.paymentId,
           input.route.routeId,
+          input.serviceId ?? ("serviceId" in input.route ? (input.route.serviceId as string) : null),
           input.route.provider,
           input.route.operation,
           input.buyerWallet,
           input.quotedPrice,
           JSON.stringify(input.payoutSplit),
+          input.requestId,
           input.providerJobId,
           JSON.stringify(input.requestBody),
           JSON.stringify(input.route),
-          JSON.stringify(input.providerState ?? null)
+          JSON.stringify(input.providerState ?? null),
+          input.nextPollAt ?? null,
+          input.timeoutAt ?? null
         ]
       );
 
@@ -4352,15 +4514,34 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
     return result.rows.map(mapJobRow);
   }
 
-  async updateJobPending(jobToken: string, providerState?: Record<string, unknown>): Promise<JobRecord> {
+  async updateJobPending(input: {
+    jobToken: string;
+    providerState?: Record<string, unknown> | null;
+    nextPollAt?: string | null;
+  }): Promise<JobRecord> {
     const result = await this.pool.query(
       `
       UPDATE jobs
-      SET provider_state = $2::jsonb, updated_at = NOW()
+      SET
+        provider_state = CASE
+          WHEN $2::jsonb IS NULL AND $3::boolean THEN provider_state
+          ELSE $2::jsonb
+        END,
+        next_poll_at = CASE
+          WHEN $4::timestamptz IS NULL AND $5::boolean THEN next_poll_at
+          ELSE $4::timestamptz
+        END,
+        updated_at = NOW()
       WHERE job_token = $1
       RETURNING *
       `,
-      [jobToken, JSON.stringify(providerState ?? null)]
+      [
+        input.jobToken,
+        JSON.stringify(input.providerState ?? null),
+        input.providerState === undefined,
+        input.nextPollAt ?? null,
+        input.nextPollAt === undefined
+      ]
     );
 
     return mapJobRow(result.rows[0]);
@@ -4370,7 +4551,7 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
     const result = await this.pool.query(
       `
       UPDATE jobs
-      SET status = 'completed', result_body = $2::jsonb, error_message = NULL, updated_at = NOW()
+      SET status = 'completed', result_body = $2::jsonb, error_message = NULL, next_poll_at = NULL, updated_at = NOW()
       WHERE job_token = $1
       RETURNING *
       `,
@@ -4384,7 +4565,7 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
     const result = await this.pool.query(
       `
       UPDATE jobs
-      SET status = 'failed', error_message = $2, updated_at = NOW()
+      SET status = 'failed', error_message = $2, next_poll_at = NULL, updated_at = NOW()
       WHERE job_token = $1
       RETURNING *
       `,
@@ -4434,7 +4615,7 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
     routeId: string;
     requestId?: string | null;
     responseStatusCode?: number | null;
-    phase: "execute" | "poll" | "refund";
+    phase: "execute" | "poll" | "callback" | "refund";
     status: "pending" | "succeeded" | "failed";
     requestPayload?: unknown;
     responsePayload?: unknown;
@@ -5712,6 +5893,54 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
     return result.rowCount ? mapCreditReservationRow(result.rows[0]) : null;
   }
 
+  async getCreditReservationByIdempotencyKey(serviceId: string, idempotencyKey: string): Promise<CreditReservationRecord | null> {
+    const result = await this.pool.query(
+      "SELECT * FROM credit_reservations WHERE service_id = $1 AND idempotency_key = $2 LIMIT 1",
+      [serviceId, idempotencyKey]
+    );
+    return result.rowCount ? mapCreditReservationRow(result.rows[0]) : null;
+  }
+
+  async extendCreditReservation(input: {
+    reservationId: string;
+    expiresAt: string;
+  }): Promise<{ account: CreditAccountRecord; reservation: CreditReservationRecord }> {
+    const client = await this.pool.connect();
+
+    try {
+      await client.query("BEGIN");
+      const reservationResult = await client.query(
+        `
+        UPDATE credit_reservations
+        SET expires_at = $2, updated_at = NOW()
+        WHERE id = $1
+        RETURNING *
+        `,
+        [input.reservationId, input.expiresAt]
+      );
+      if (!reservationResult.rowCount) {
+        throw new Error(`Credit reservation not found: ${input.reservationId}`);
+      }
+
+      const reservation = mapCreditReservationRow(reservationResult.rows[0]);
+      const accountResult = await client.query("SELECT * FROM credit_accounts WHERE id = $1 LIMIT 1", [reservation.accountId]);
+      if (!accountResult.rowCount) {
+        throw new Error(`Credit account not found: ${reservation.accountId}`);
+      }
+
+      await client.query("COMMIT");
+      return {
+        account: mapCreditAccountRow(accountResult.rows[0]),
+        reservation
+      };
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
   async rotateProviderRuntimeKey(serviceId: string, wallet: string, secretMaterial: {
     keyHash: string;
     keyPrefix: string;
@@ -6204,11 +6433,11 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
       `
       INSERT INTO provider_endpoint_drafts (
         id, service_id, route_id, operation, method, title, description, price, billing, mode, request_schema_json, response_schema_json,
-        request_example, response_example, usage_notes, executor_kind, upstream_base_url, upstream_path,
+        request_example, response_example, usage_notes, executor_kind, async_config, upstream_base_url, upstream_path,
         upstream_auth_mode, upstream_auth_header_name, upstream_secret_ref, payout
       ) VALUES (
-        $1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11::jsonb, $12::jsonb, $13::jsonb, $14::jsonb, $15, $16, $17, $18,
-        $19, $20, $21, $22::jsonb
+        $1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11::jsonb, $12::jsonb, $13::jsonb, $14::jsonb, $15, $16, $17::jsonb, $18, $19,
+        $20, $21, $22, $23::jsonb
       )
       RETURNING *
       `,
@@ -6229,6 +6458,16 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
         JSON.stringify(input.responseExample),
         input.usageNotes ?? null,
         billing.billing.type === "topup_x402_variable" ? "marketplace" : "http",
+        JSON.stringify(
+          billing.billing.type === "topup_x402_variable"
+            ? null
+            : buildRouteAsyncConfig({
+                mode: input.mode,
+                asyncStrategy: input.asyncStrategy ?? null,
+                asyncTimeoutMs: input.asyncTimeoutMs ?? null,
+                pollPath: input.pollPath ?? null
+              })
+        ),
         billing.billing.type === "topup_x402_variable" ? null : input.upstreamBaseUrl ?? null,
         billing.billing.type === "topup_x402_variable" ? null : input.upstreamPath ?? null,
         billing.billing.type === "topup_x402_variable" ? null : input.upstreamAuthMode ?? null,
@@ -6386,18 +6625,20 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
         description = $7,
         price = $8,
         billing = $9::jsonb,
-        request_schema_json = $10::jsonb,
-        response_schema_json = $11::jsonb,
-        request_example = $12::jsonb,
-        response_example = $13::jsonb,
-        usage_notes = $14,
-        executor_kind = $15,
-        upstream_base_url = $16,
-        upstream_path = $17,
-        upstream_auth_mode = $18,
-        upstream_auth_header_name = $19,
-        upstream_secret_ref = $20,
-        payout = $21::jsonb,
+        mode = $10,
+        async_config = $11::jsonb,
+        request_schema_json = $12::jsonb,
+        response_schema_json = $13::jsonb,
+        request_example = $14::jsonb,
+        response_example = $15::jsonb,
+        usage_notes = $16,
+        executor_kind = $17,
+        upstream_base_url = $18,
+        upstream_path = $19,
+        upstream_auth_mode = $20,
+        upstream_auth_header_name = $21,
+        upstream_secret_ref = $22,
+        payout = $23::jsonb,
         updated_at = NOW()
       WHERE id = $1 AND service_id = $2
       RETURNING *
@@ -6412,6 +6653,19 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
         input.description ?? existing.description,
         billing.price,
         JSON.stringify(billing.billing),
+        input.mode ?? existing.mode,
+        JSON.stringify(
+          billing.billing.type === "topup_x402_variable"
+            ? null
+            : buildRouteAsyncConfig({
+                mode: input.mode ?? existing.mode,
+                asyncStrategy: input.asyncStrategy ?? existing.asyncConfig?.strategy ?? null,
+                asyncTimeoutMs: input.asyncTimeoutMs ?? existing.asyncConfig?.timeoutMs ?? null,
+                pollPath: input.pollPath === undefined
+                  ? (existing.asyncConfig?.pollPath ?? null)
+                  : input.pollPath
+              }, existing.asyncConfig)
+        ),
         JSON.stringify(input.requestSchemaJson ?? existing.requestSchemaJson),
         JSON.stringify(input.responseSchemaJson ?? existing.responseSchemaJson),
         JSON.stringify(input.requestExample === undefined ? existing.requestExample : input.requestExample),
@@ -6572,12 +6826,12 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
           `
           INSERT INTO published_endpoint_versions (
             endpoint_version_id, service_id, service_version_id, endpoint_draft_id, route_id, provider, operation,
-            version, method, settlement_mode, mode, network, price, billing, title, description, payout, request_example, response_example, usage_notes,
+            version, method, settlement_mode, mode, network, price, billing, async_config, title, description, payout, request_example, response_example, usage_notes,
             request_schema_json, response_schema_json, executor_kind, upstream_base_url, upstream_path,
             upstream_auth_mode, upstream_auth_header_name, upstream_secret_ref
           ) VALUES (
-            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14::jsonb, $15, $16, $17::jsonb, $18::jsonb, $19::jsonb, $20,
-            $21::jsonb, $22::jsonb, $23, $24, $25, $26, $27, $28
+            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14::jsonb, $15::jsonb, $16, $17, $18::jsonb, $19::jsonb, $20::jsonb, $21,
+            $22::jsonb, $23::jsonb, $24, $25, $26, $27, $28, $29
           )
           `,
           [
@@ -6595,6 +6849,7 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
             network.paymentNetwork,
             endpoint.price,
             JSON.stringify(endpoint.billing),
+            JSON.stringify(endpoint.asyncConfig ?? null),
             endpoint.title,
             endpoint.description,
             JSON.stringify(endpoint.payout),
@@ -7268,15 +7523,19 @@ function mapJobRow(row: Record<string, unknown>): JobRecord {
     jobToken: row.job_token as string,
     paymentId: row.payment_id as string,
     routeId: row.route_id as string,
+    serviceId: (row.service_id as string | null) ?? null,
     provider: row.provider as string,
     operation: row.operation as string,
     buyerWallet: row.buyer_wallet as string,
     quotedPrice: row.quoted_price as string,
     payoutSplit: normalizePersistedPayoutSplit(row.payout_split as JobRecord["payoutSplit"]),
+    requestId: row.request_id as string,
     providerJobId: row.provider_job_id as string,
     requestBody: row.request_body,
     routeSnapshot: row.route_snapshot as MarketplaceRoute,
     providerState: (row.provider_state as Record<string, unknown> | null) ?? null,
+    nextPollAt: row.next_poll_at ? new Date(row.next_poll_at as string | Date).toISOString() : null,
+    timeoutAt: row.timeout_at ? new Date(row.timeout_at as string | Date).toISOString() : null,
     status: row.status as JobRecord["status"],
     resultBody: row.result_body,
     errorMessage: (row.error_message as string | null) ?? null,
@@ -7402,6 +7661,7 @@ function mapProviderEndpointDraftRow(row: Record<string, unknown>): MarketplaceP
     price: row.price as string,
     billing,
     mode: row.mode as MarketplaceProviderEndpointDraftRecord["mode"],
+    asyncConfig: normalizeAsyncConfig(row.async_config),
     requestSchemaJson: row.request_schema_json as MarketplaceProviderEndpointDraftRecord["requestSchemaJson"],
     responseSchemaJson: row.response_schema_json as MarketplaceProviderEndpointDraftRecord["responseSchemaJson"],
     requestExample: row.request_example,
@@ -7529,6 +7789,7 @@ function mapPublishedEndpointVersionRow(row: Record<string, unknown>): Published
     network: row.network as PublishedEndpointVersionRecord["network"],
     price: row.price as string,
     billing,
+    asyncConfig: normalizeAsyncConfig(row.async_config),
     title: row.title as string,
     description: row.description as string,
     payout: row.payout as PublishedEndpointVersionRecord["payout"],

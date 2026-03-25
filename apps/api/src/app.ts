@@ -9,30 +9,37 @@ import {
   LEGACY_PAYMENT_HEADER,
   LEGACY_PAYMENT_IDENTIFIER_HEADER,
   LEGACY_PAYMENT_RESPONSE_HEADER,
+  MARKETPLACE_CALLBACK_AUTH_HEADER,
+  MARKETPLACE_CALLBACK_URL_HEADER,
+  MARKETPLACE_JOB_TOKEN_HEADER,
   buildLlmsTxt,
   buildMarketplaceCatalog,
-    buildOpenApiDocument,
-    buildPaymentRequiredHeaders,
-    buildPaymentRequiredResponse,
-    buildPaymentRequirementForRoute,
-    buildPaymentResponseHeaders,
+  buildOpenApiDocument,
+  buildPaymentRequiredHeaders,
+  buildPaymentRequiredResponse,
+  buildPaymentRequirementForRoute,
+  buildPaymentResponseHeaders,
   buildPayoutSplit,
   buildServiceDetail,
   buildServiceSummary,
+  computeNextPollAt,
+  computeTimeoutAt,
   createChallenge,
   createDefaultProviderRegistry,
   createOpaqueToken,
   createProviderRuntimeKeyMaterial,
   createSessionToken,
   decimalToRawString,
-    decryptProviderRuntimeKey,
-    decryptSecret,
-    encryptSecret,
-    coerceQueryInput,
-    getDefaultMarketplaceNetworkConfig,
-    getQuerySchemaProperties,
-    serializeQueryInput,
-    hashNormalizedRequest,
+  decryptProviderRuntimeKey,
+  decryptSecret,
+  encryptSecret,
+  coerceQueryInput,
+  getDefaultMarketplaceNetworkConfig,
+  getQuerySchemaProperties,
+  hashNormalizedRequest,
+  MAX_ASYNC_TIMEOUT_MS,
+  resolveAsyncJobFailure,
+  serializeQueryInput,
   isPrepaidCreditBilling,
   isTopupX402Billing,
   normalizeFastWalletAddress,
@@ -46,6 +53,7 @@ import {
   buildMarketplaceIdentityHeaders,
   usesMarketplaceTreasurySettlement,
   validateJsonSchema,
+  verifyMarketplaceCallbackHeaders,
   verifySessionToken,
   verifyWalletChallenge,
   CREDIT_RESERVATION_TTL_MS,
@@ -64,6 +72,7 @@ import {
   type MarketplaceRoute,
   type MarketplaceStore,
   type OpenApiImportPreview,
+  type PollResult,
   type ProviderEndpointDraftRecord,
   type ProviderExecuteContext,
   type ProviderRequestRecord,
@@ -77,6 +86,7 @@ import {
   type PublishedServiceVersionRecord,
   type RefundService,
   type RouteBillingType,
+  type RouteAsyncConfig,
   type SettlementMode,
   type SuggestionRecord,
   type UpdateProviderEndpointDraftInput,
@@ -99,6 +109,10 @@ export interface MarketplaceApiOptions {
 type PublishedCatalogService = {
   service: PublishedServiceVersionRecord;
   endpoints: PublishedServiceEndpointVersionRecord[];
+};
+
+type RawBodyRequest = Request & {
+  rawBody?: Buffer;
 };
 
 const suggestionCreateSchema = z
@@ -196,7 +210,10 @@ const marketplaceEndpointSchemaInput = z.object({
   minAmount: decimalAmountSchema.optional().nullable(),
   maxAmount: decimalAmountSchema.optional().nullable(),
   method: z.enum(["GET", "POST"]),
-  mode: z.literal("sync"),
+  mode: z.enum(["sync", "async"]),
+  asyncStrategy: z.enum(["poll", "webhook"]).optional().nullable(),
+  asyncTimeoutMs: z.number().int().min(1_000).max(MAX_ASYNC_TIMEOUT_MS).optional().nullable(),
+  pollPath: z.string().startsWith("/").optional().nullable(),
   requestSchemaJson: z.record(z.string(), z.any()),
   responseSchemaJson: z.record(z.string(), z.any()),
   requestExample: z.unknown(),
@@ -228,9 +245,6 @@ const endpointCreateSchema = z.discriminatedUnion("endpointType", [
 ]);
 
 const marketplaceEndpointUpdateSchema = marketplaceEndpointSchemaInput
-  .omit({
-    mode: true
-  })
   .partial()
   .extend({
     endpointType: z.literal("marketplace_proxy"),
@@ -276,12 +290,36 @@ const runtimeReserveSchema = z.object({
   buyerWallet: z.string().min(1),
   amount: decimalAmountSchema,
   idempotencyKey: z.string().min(1).max(200),
-  providerReference: z.string().max(500).optional().nullable()
+  providerReference: z.string().max(500).optional().nullable(),
+  expiresAt: z.string().datetime().optional().nullable()
 });
 
 const runtimeCaptureSchema = z.object({
   amount: decimalAmountSchema
 });
+
+const runtimeExtendSchema = z.object({
+  expiresAt: z.string().datetime()
+});
+
+const callbackCompletedSchema = z.object({
+  providerJobId: z.string().min(1),
+  status: z.literal("completed"),
+  result: z.unknown(),
+  providerState: z.record(z.string(), z.any()).optional().nullable()
+});
+
+const callbackFailedSchema = z.object({
+  providerJobId: z.string().min(1),
+  status: z.literal("failed"),
+  error: z.string().min(1),
+  providerState: z.record(z.string(), z.any()).optional().nullable()
+});
+
+const callbackBodySchema = z.discriminatedUnion("status", [
+  callbackCompletedSchema,
+  callbackFailedSchema
+]);
 
 export function createMarketplaceApi(options: MarketplaceApiOptions): Express {
   if (!options.sessionSecret) {
@@ -300,7 +338,12 @@ export function createMarketplaceApi(options: MarketplaceApiOptions): Express {
   const networkConfig = getDefaultMarketplaceNetworkConfig();
   const secretsKey = options.secretsKey;
 
-  app.use(express.json({ limit: "1mb" }));
+  app.use(express.json({
+    limit: "1mb",
+    verify(req, _res, buffer) {
+      (req as RawBodyRequest).rawBody = Buffer.from(buffer);
+    }
+  }));
   app.use((req, res, next) => {
     const origin = req.header("origin");
     if (origin && origin === allowedWebOrigin) {
@@ -1300,7 +1343,7 @@ export function createMarketplaceApi(options: MarketplaceApiOptions): Express {
         amount: decimalToRawString(parsed.data.amount, 6),
         idempotencyKey: parsed.data.idempotencyKey,
         providerReference: parsed.data.providerReference ?? null,
-        expiresAt: new Date(Date.now() + CREDIT_RESERVATION_TTL_MS).toISOString()
+        expiresAt: clampCreditReservationExpiry(parsed.data.expiresAt ?? null)
       });
 
       return res.json({
@@ -1370,6 +1413,119 @@ export function createMarketplaceApi(options: MarketplaceApiOptions): Express {
     } catch (error) {
       return handleProviderMutationError(res, error);
     }
+  });
+
+  app.post("/provider/runtime/credits/:reservationId/extend", async (req, res) => {
+    const runtimeKey = await requireProviderRuntimeKey(req, res, options.store);
+    if (!runtimeKey) {
+      return;
+    }
+
+    const reservation = await options.store.getCreditReservationById(req.params.reservationId);
+    if (!reservation || reservation.serviceId !== runtimeKey.serviceId) {
+      return res.status(404).json({ error: "Credit reservation not found." });
+    }
+
+    const parsed = runtimeExtendSchema.safeParse(req.body ?? {});
+    if (!parsed.success) {
+      return res.status(400).json({ error: "Extend request validation failed.", issues: parsed.error.issues });
+    }
+
+    if (reservation.status !== "reserved") {
+      return res.status(409).json({ error: "Only reserved credit reservations can be extended." });
+    }
+
+    const updated = await options.store.extendCreditReservation({
+      reservationId: reservation.id,
+      expiresAt: clampCreditReservationExpiry(parsed.data.expiresAt)
+    });
+
+    return res.json({
+      account: serializeCreditAccount(updated.account),
+      reservation: serializeCreditReservation(updated.reservation),
+    });
+  });
+
+  app.post("/provider/runtime/jobs/:jobToken/callback", async (req, res) => {
+    const bearerToken = parseBearerToken(req.header("authorization"));
+    if (!bearerToken) {
+      return res.status(401).json({ error: "Missing bearer token." });
+    }
+
+    const runtimeKey = await options.store.getProviderRuntimeKeyByPlaintext(bearerToken);
+    if (!runtimeKey) {
+      return res.status(401).json({ error: "Invalid runtime key." });
+    }
+
+    try {
+      verifyMarketplaceCallbackHeaders({
+        method: req.method,
+        path: req.path,
+        body: (req as RawBodyRequest).rawBody ?? Buffer.alloc(0),
+        headers: req.headers as Record<string, string | string[] | undefined>,
+        runtimeKey: bearerToken
+      });
+    } catch (error) {
+      return res.status(401).json({ error: error instanceof Error ? error.message : "Invalid callback signature." });
+    }
+
+    const parsed = callbackBodySchema.safeParse(req.body ?? {});
+    if (!parsed.success) {
+      return res.status(400).json({ error: "Callback validation failed.", issues: parsed.error.issues });
+    }
+
+    const job = await options.store.getJob(req.params.jobToken);
+    if (!job) {
+      return res.status(404).json({ error: "Job not found." });
+    }
+
+    if (job.serviceId !== runtimeKey.serviceId) {
+      return res.status(403).json({ error: "Callback runtime key does not match the job service." });
+    }
+
+    if (job.providerJobId !== parsed.data.providerJobId) {
+      return res.status(409).json({ error: "providerJobId does not match the pending job." });
+    }
+
+    if (job.status !== "pending") {
+      const refund = await options.store.getRefundByJobToken(job.jobToken);
+      return res.json(buildJobResponse(job, refund));
+    }
+
+    if (parsed.data.status === "completed") {
+      await options.store.recordProviderAttempt({
+        jobToken: job.jobToken,
+        routeId: job.routeId,
+        requestId: job.requestId,
+        phase: "callback",
+        status: "succeeded",
+        requestPayload: req.body ?? {},
+        responsePayload: parsed.data
+      });
+
+      const completed = await options.store.completeJob(job.jobToken, parsed.data.result);
+      return res.json(buildJobResponse(completed, await options.store.getRefundByJobToken(completed.jobToken)));
+    }
+
+    await options.store.recordProviderAttempt({
+      jobToken: job.jobToken,
+      routeId: job.routeId,
+      requestId: job.requestId,
+      phase: "callback",
+      status: "failed",
+      requestPayload: req.body ?? {},
+      responsePayload: parsed.data,
+      errorMessage: parsed.data.error
+    });
+
+    await expireAsyncPrepaidReservation(options.store, job);
+    const failed = await resolveAsyncJobFailure({
+      store: options.store,
+      refundService: options.refundService,
+      job,
+      error: parsed.data.error
+    });
+    return res.json(buildJobResponse(failed.job, failed.refund));
   });
 
   app.get("/internal/provider-services", async (req, res) => {
@@ -1455,7 +1611,8 @@ export function createMarketplaceApi(options: MarketplaceApiOptions): Express {
       const publishValidation = await validateProviderServiceForSettlement({
         detail: validationDetail,
         store: options.store,
-        settlementMode
+        settlementMode,
+        marketplaceBaseUrl: baseUrl
       });
       if (!publishValidation.ok) {
         return res.status(publishValidation.statusCode).json({ error: publishValidation.error });
@@ -1501,7 +1658,8 @@ export function createMarketplaceApi(options: MarketplaceApiOptions): Express {
     const validation = await validateProviderServiceForSettlement({
       detail: validationDetail,
       store: options.store,
-      settlementMode: parsed.data.settlementMode
+      settlementMode: parsed.data.settlementMode,
+      marketplaceBaseUrl: baseUrl
     });
     if (!validation.ok) {
       return res.status(validation.statusCode).json({ error: validation.error });
@@ -1594,11 +1752,13 @@ export function createMarketplaceApi(options: MarketplaceApiOptions): Express {
     }
 
     if (requiresWalletSession(route)) {
-      return handlePrepaidCreditRoute({
+      return handleWalletSessionRoute({
         req,
         res,
         route,
         requestInput,
+        payTo: options.payTo,
+        marketplaceBaseUrl: baseUrl,
         sessionSecret: options.sessionSecret,
         providers,
         store: options.store,
@@ -1623,6 +1783,7 @@ export function createMarketplaceApi(options: MarketplaceApiOptions): Express {
       route,
       requestInput,
       payTo: options.payTo,
+      marketplaceBaseUrl: baseUrl,
       facilitatorClient: options.facilitatorClient,
       refundService: options.refundService,
       providers,
@@ -1674,18 +1835,20 @@ function normalizeMarketplaceRouteInput(req: Request, route: MarketplaceRoute): 
   return requestBody;
 }
 
-async function handlePrepaidCreditRoute(input: {
+async function handleWalletSessionRoute(input: {
   req: Request;
   res: ExpressResponse;
   route: PublishedEndpointVersionRecord;
   requestInput: unknown;
+  payTo: string;
+  marketplaceBaseUrl: string;
   sessionSecret: string;
   providers: ProviderRegistry;
   store: MarketplaceStore;
   secretsKey: string;
 }) {
   if (input.route.settlementMode !== "verified_escrow") {
-    return input.res.status(500).json({ error: "Prepaid-credit routes require Verified escrow settlement." });
+    return input.res.status(500).json({ error: "Wallet-session routes require Verified escrow settlement." });
   }
 
   const session = requireApiSession(input.req, input.res, input.sessionSecret, input.route.routeId);
@@ -1693,25 +1856,137 @@ async function handlePrepaidCreditRoute(input: {
     return;
   }
 
-  const executeResult = await executeRoute({
-    route: input.route,
-    input: input.requestInput,
-    buyerWallet: session.wallet,
-    requestId: randomUUID(),
-    paymentId: null,
-    providers: input.providers,
-    store: input.store,
-    secretsKey: input.secretsKey
+  const requestId = randomUUID();
+  const jobToken = input.route.mode === "async" ? createOpaqueToken("job") : null;
+
+  await recordProviderAttemptSafely(input.store, {
+    routeId: input.route.routeId,
+    requestId,
+    phase: "execute",
+    status: "pending",
+    requestPayload: input.requestInput
   });
 
-  if (executeResult.kind !== "sync") {
-    return input.res.status(500).json({ error: "Prepaid-credit routes must be sync." });
+  let executeResult: Awaited<ReturnType<typeof executeRoute>>;
+  try {
+    executeResult = await executeRoute({
+      route: input.route,
+      input: input.requestInput,
+      buyerWallet: session.wallet,
+      requestId,
+      paymentId: null,
+      jobToken,
+      marketplaceBaseUrl: input.marketplaceBaseUrl,
+      providers: input.providers,
+      store: input.store,
+      secretsKey: input.secretsKey
+    });
+  } catch (error) {
+    await recordProviderAttemptSafely(input.store, {
+      routeId: input.route.routeId,
+      requestId,
+      responseStatusCode: 500,
+      phase: "execute",
+      status: "failed",
+      requestPayload: input.requestInput,
+      errorMessage: error instanceof Error ? error.message : "Wallet-session route execution failed."
+    });
+
+    return input.res.status(500).json({
+      error: error instanceof Error ? error.message : "Wallet-session route execution failed."
+    });
   }
 
-  return input.res
-    .status(executeResult.statusCode)
-    .set(executeResult.headers ?? {})
-    .json(executeResult.body);
+  if (executeResult.kind === "sync") {
+    await recordProviderAttemptSafely(input.store, {
+      routeId: input.route.routeId,
+      requestId,
+      responseStatusCode: executeResult.statusCode,
+      phase: "execute",
+      status: executeResult.statusCode >= 200 && executeResult.statusCode < 400 ? "succeeded" : "failed",
+      requestPayload: input.requestInput,
+      responsePayload: executeResult.body
+    });
+
+    return input.res
+      .status(executeResult.statusCode)
+      .set(executeResult.headers ?? {})
+      .json(executeResult.body);
+  }
+
+  let paymentDestinationWallet: string;
+  try {
+    paymentDestinationWallet = resolvePaymentDestinationWallet(input.route, input.payTo);
+  } catch (error) {
+    return input.res.status(500).json({
+      error: error instanceof Error ? error.message : "Route settlement configuration is invalid."
+    });
+  }
+
+  const acceptedBody = {
+    jobToken: jobToken ?? createOpaqueToken("job"),
+    status: "pending",
+    pollAfterMs: executeResult.pollAfterMs ?? 5_000
+  };
+
+  try {
+    const quotedPrice = "0";
+    const payoutSplit = buildPayoutSplit({
+      route: input.route,
+      treasuryWallet: input.payTo,
+      paymentDestinationWallet,
+      quotedPrice
+    });
+
+    await input.store.saveAsyncAcceptance({
+      paymentId: createOpaqueToken("wallet"),
+      normalizedRequestHash: hashNormalizedRequest(input.route, input.requestInput),
+      buyerWallet: session.wallet,
+      route: input.route,
+      quotedPrice,
+      payoutSplit,
+      paymentPayload: "",
+      facilitatorResponse: {
+        type: input.route.billing.type,
+        auth: "wallet_session"
+      },
+      jobToken: acceptedBody.jobToken,
+      serviceId: input.route.serviceId,
+      requestId,
+      providerJobId: executeResult.providerJobId,
+      requestBody: input.requestInput,
+      providerState: executeResult.providerState,
+      nextPollAt: computeNextPollAt(executeResult.pollAfterMs),
+      timeoutAt: computeTimeoutAt(input.route),
+      responseBody: acceptedBody
+    });
+  } catch (error) {
+    await recordProviderAttemptSafely(input.store, {
+      routeId: input.route.routeId,
+      requestId,
+      responseStatusCode: 500,
+      phase: "execute",
+      status: "failed",
+      requestPayload: input.requestInput,
+      errorMessage: error instanceof Error ? error.message : "Async acceptance persistence failed."
+    });
+
+    return input.res.status(500).json({
+      error: error instanceof Error ? error.message : "Async acceptance persistence failed."
+    });
+  }
+
+  await recordProviderAttemptSafely(input.store, {
+    jobToken: acceptedBody.jobToken,
+    routeId: input.route.routeId,
+    requestId,
+    phase: "execute",
+    status: "succeeded",
+    requestPayload: input.requestInput,
+    responsePayload: executeResult
+  });
+
+  return input.res.status(202).json(acceptedBody);
 }
 
 async function handleFreeRoute(input: {
@@ -1804,6 +2079,7 @@ async function handleX402Route(input: {
   route: PublishedEndpointVersionRecord;
   requestInput: unknown;
   payTo: string;
+  marketplaceBaseUrl: string;
   facilitatorClient: FacilitatorClient;
   refundService: RefundService;
   providers: ProviderRegistry;
@@ -2045,6 +2321,8 @@ async function handleX402Route(input: {
       buyerWallet,
       requestId,
       paymentId: paymentHeaders.paymentId,
+      jobToken: existing.jobToken ?? null,
+      marketplaceBaseUrl: input.marketplaceBaseUrl,
       providers: input.providers,
       store: input.store,
       secretsKey: input.secretsKey
@@ -2173,12 +2451,15 @@ async function handleX402Route(input: {
       paymentPayload: paymentHeaders.paymentPayload,
       facilitatorResponse: verifyResult,
       jobToken: acceptedBody.jobToken,
+      serviceId: input.route.serviceId,
+      requestId,
       providerJobId: executeResult.providerJobId,
       requestBody,
-      providerState: executeResult.state,
+      providerState: executeResult.providerState,
+      nextPollAt: computeNextPollAt(executeResult.pollAfterMs),
+      timeoutAt: computeTimeoutAt(input.route),
       responseBody: acceptedBody,
-      responseHeaders: paymentResponseHeaders,
-      requestId
+      responseHeaders: paymentResponseHeaders
     });
   } catch (error) {
     return input.res.status(500).json({
@@ -2238,6 +2519,8 @@ async function executeRoute(input: {
   buyerWallet: string;
   requestId: string;
   paymentId: string | null;
+  jobToken?: string | null;
+  marketplaceBaseUrl?: string;
   providers: ProviderRegistry;
   store: MarketplaceStore;
   secretsKey: string;
@@ -2259,6 +2542,8 @@ async function executeRoute(input: {
         buyerWallet: input.buyerWallet,
         requestId: input.requestId,
         paymentId: input.paymentId,
+        jobToken: input.jobToken,
+        marketplaceBaseUrl: input.marketplaceBaseUrl,
         store: input.store,
         secretsKey: input.secretsKey
       });
@@ -2273,15 +2558,17 @@ async function executeHttpRoute(input: {
   buyerWallet: string | null;
   requestId: string;
   paymentId: string | null;
+  jobToken?: string | null;
+  marketplaceBaseUrl?: string;
   store: MarketplaceStore;
   secretsKey: string;
 }) {
-  if (input.route.mode !== "sync") {
-    throw new Error("HTTP executor only supports sync routes in v1.");
-  }
-
   if (!input.route.upstreamBaseUrl || !input.route.upstreamPath || !input.route.upstreamAuthMode) {
     throw new Error("HTTP route is missing upstream configuration.");
+  }
+
+  if (input.route.mode === "async" && !input.route.asyncConfig) {
+    throw new Error("Async HTTP routes require asyncConfig.");
   }
 
   const headers: Record<string, string> = {
@@ -2329,7 +2616,7 @@ async function executeHttpRoute(input: {
         throw new Error("Buyer wallet is required for prepaid-credit routes.");
       }
 
-      const signingSecret = decryptProviderRuntimeKey({
+      const runtimeKey = decryptProviderRuntimeKey({
         ciphertext: runtimeKeyRecord.secretCiphertext,
         iv: runtimeKeyRecord.iv,
         authTag: runtimeKeyRecord.authTag,
@@ -2343,15 +2630,36 @@ async function executeHttpRoute(input: {
           serviceId: publishedRoute.serviceId,
           requestId: input.requestId,
           paymentId: input.paymentId,
-          signingSecret
+          signingSecret: runtimeKey
         })
       );
-    } else if (input.route.settlementMode === "community_direct" || isPrepaidCreditBilling(input.route)) {
+
+      if (input.route.mode === "async") {
+        if (!input.jobToken) {
+          throw new Error("Async HTTP routes require a marketplace job token.");
+        }
+
+        headers[MARKETPLACE_JOB_TOKEN_HEADER] = input.jobToken;
+
+        if (input.route.asyncConfig?.strategy === "webhook") {
+          if (!isHttpsUrl(input.marketplaceBaseUrl)) {
+            throw new Error("Webhook async routes require an HTTPS marketplace base URL.");
+          }
+
+          headers[MARKETPLACE_CALLBACK_URL_HEADER] = joinUrl(
+            input.marketplaceBaseUrl!,
+            `/provider/runtime/jobs/${input.jobToken}/callback`
+          );
+          headers[MARKETPLACE_CALLBACK_AUTH_HEADER] = `Bearer ${runtimeKey}`;
+        }
+      }
+    } else if (input.route.mode === "async" || input.route.settlementMode === "community_direct" || isPrepaidCreditBilling(input.route)) {
       throw new Error("Provider runtime key is required for this settlement flow.");
     }
   }
 
   return executeUpstreamHttpRequest({
+    mode: input.route.mode,
     method: input.route.method,
     upstreamBaseUrl: input.route.upstreamBaseUrl!,
     upstreamPath: input.route.upstreamPath!,
@@ -2361,6 +2669,7 @@ async function executeHttpRoute(input: {
 
 async function executeUpstreamHttpRequest(
   route: {
+    mode: MarketplaceRoute["mode"];
     method: MarketplaceRoute["method"];
     upstreamBaseUrl: string;
     upstreamPath: string;
@@ -2401,6 +2710,21 @@ async function executeUpstreamHttpRequest(
     };
   }
 
+  if (route.mode === "async") {
+    if (response.status !== 202) {
+      return {
+        kind: "sync" as const,
+        statusCode: response.status,
+        body: await safeResponseBody(response),
+        headers: {
+          "content-type": response.headers.get("content-type") ?? "application/json"
+        }
+      };
+    }
+
+    return parseAsyncExecuteResponse(response);
+  }
+
   return {
     kind: "sync" as const,
     statusCode: response.status,
@@ -2408,6 +2732,27 @@ async function executeUpstreamHttpRequest(
     headers: {
       "content-type": response.headers.get("content-type") ?? "application/json"
     }
+  };
+}
+
+async function parseAsyncExecuteResponse(response: globalThis.Response) {
+  const body = await safeResponseBody(response);
+  if (!body || typeof body !== "object") {
+    throw new Error("Async upstream acceptance body must be a JSON object.");
+  }
+
+  const accepted = body as Record<string, unknown>;
+  if (accepted.status !== "accepted" || typeof accepted.providerJobId !== "string" || accepted.providerJobId.length === 0) {
+    throw new Error("Async upstream acceptance body must include status=accepted and providerJobId.");
+  }
+
+  return {
+    kind: "async" as const,
+    providerJobId: accepted.providerJobId,
+    providerState: isJsonObject(accepted.providerState) ? accepted.providerState : undefined,
+    pollAfterMs: typeof accepted.pollAfterMs === "number" && Number.isFinite(accepted.pollAfterMs)
+      ? accepted.pollAfterMs
+      : undefined
   };
 }
 
@@ -2568,6 +2913,8 @@ async function validateProviderEndpointInput(input: {
   service: { websiteUrl: string | null };
   existingEndpoint: {
     method: MarketplaceRoute["method"];
+    mode: MarketplaceRoute["mode"];
+    asyncConfig: RouteAsyncConfig | null;
     billing: MarketplaceRoute["billing"];
     requestSchemaJson: MarketplaceRoute["requestSchemaJson"];
     upstreamBaseUrl: string | null;
@@ -2590,6 +2937,10 @@ async function validateProviderEndpointInput(input: {
   if (!nextMethod) {
     return { ok: false, statusCode: 400, error: "method is required." };
   }
+  const nextMode = (input.input.mode ?? input.existingEndpoint?.mode) as MarketplaceRoute["mode"] | undefined;
+  if (!nextMode) {
+    return { ok: false, statusCode: 400, error: "mode is required." };
+  }
 
   const nextBaseUrl = input.input.upstreamBaseUrl ?? input.existingEndpoint?.upstreamBaseUrl ?? null;
   const nextPath = input.input.upstreamPath ?? input.existingEndpoint?.upstreamPath ?? null;
@@ -2598,6 +2949,10 @@ async function validateProviderEndpointInput(input: {
     input.input.upstreamAuthHeaderName === undefined
       ? input.existingEndpoint?.upstreamAuthHeaderName ?? null
       : input.input.upstreamAuthHeaderName;
+  const existingAsyncConfig = input.existingEndpoint?.asyncConfig ?? null;
+  const nextAsyncStrategy = input.input.asyncStrategy ?? existingAsyncConfig?.strategy ?? null;
+  const nextAsyncTimeoutMs = input.input.asyncTimeoutMs ?? existingAsyncConfig?.timeoutMs ?? null;
+  const nextPollPath = input.input.pollPath === undefined ? (existingAsyncConfig?.pollPath ?? null) : input.input.pollPath;
   const hasStoredSecret = Boolean(input.existingEndpoint?.upstreamSecretRef) && !("clearUpstreamSecret" in input.input && input.input.clearUpstreamSecret);
   const nextWebsiteUrl = input.service.websiteUrl;
   const nextRequestSchemaJson = input.input.requestSchemaJson ?? input.existingEndpoint?.requestSchemaJson ?? {};
@@ -2615,6 +2970,9 @@ async function validateProviderEndpointInput(input: {
   if (billingType === "topup_x402_variable") {
     if (nextMethod !== "POST") {
       return { ok: false, statusCode: 400, error: "Marketplace top-up routes must use method=POST." };
+    }
+    if (nextMode !== "sync") {
+      return { ok: false, statusCode: 400, error: "Marketplace top-up routes must use mode=sync." };
     }
     if (!input.input.minAmount || !input.input.maxAmount) {
       return { ok: false, statusCode: 400, error: "minAmount and maxAmount are required when billingType=topup_x402_variable." };
@@ -2634,6 +2992,28 @@ async function validateProviderEndpointInput(input: {
     }
     if ((nextAuthMode === "bearer" || nextAuthMode === "header") && !input.input.upstreamSecret && !hasStoredSecret) {
       return { ok: false, statusCode: 400, error: "upstreamSecret is required for authenticated upstream routes." };
+    }
+  }
+
+  if (nextMode === "async") {
+    if (billingType === "topup_x402_variable") {
+      return { ok: false, statusCode: 400, error: "Marketplace top-up routes do not support async mode." };
+    }
+    if (!nextAsyncStrategy || typeof nextAsyncTimeoutMs !== "number" || !Number.isFinite(nextAsyncTimeoutMs)) {
+      return { ok: false, statusCode: 400, error: "asyncStrategy and asyncTimeoutMs are required for async routes." };
+    }
+    if (nextAsyncTimeoutMs < 1_000 || nextAsyncTimeoutMs > MAX_ASYNC_TIMEOUT_MS) {
+      return {
+        ok: false,
+        statusCode: 400,
+        error: `asyncTimeoutMs must be between 1000 and ${MAX_ASYNC_TIMEOUT_MS}.`
+      };
+    }
+    if (nextAsyncStrategy === "poll" && !nextPollPath) {
+      return { ok: false, statusCode: 400, error: "pollPath is required for poll-based async routes." };
+    }
+    if (nextAsyncStrategy === "webhook" && nextPollPath) {
+      return { ok: false, statusCode: 400, error: "pollPath is not used for webhook async routes." };
     }
   }
 
@@ -2781,12 +3161,12 @@ async function validateProviderServiceForSubmit(detail: ProviderServiceDetailRec
       };
     }
 
-    if (endpoint.mode !== "sync") {
-      return { ok: false as const, statusCode: 400, error: "Provider-authored endpoints must be sync-only in v1." };
-    }
-
     if (endpoint.executorKind === "marketplace") {
       continue;
+    }
+
+    if (endpoint.mode === "async" && !endpoint.asyncConfig) {
+      return { ok: false as const, statusCode: 400, error: `Endpoint ${endpoint.operation} is missing asyncConfig.` };
     }
 
     if (!endpoint.upstreamBaseUrl || !isSameOrSubdomain(serviceHost, new URL(endpoint.upstreamBaseUrl).hostname)) {
@@ -2814,6 +3194,7 @@ async function validateProviderServiceForSettlement(input: {
   detail: ProviderServiceDetailRecord;
   store: MarketplaceStore;
   settlementMode: SettlementMode | null;
+  marketplaceBaseUrl: string;
 }) {
   const baseValidation = await validateProviderServiceForSubmit(input.detail);
   if (!baseValidation.ok) {
@@ -2831,6 +3212,10 @@ async function validateProviderServiceForSettlement(input: {
   const runtimeKey = await input.store.getProviderRuntimeKeyForOwner(
     input.detail.service.id,
     input.detail.account.ownerWallet
+  );
+  const requiresRuntimeKey = input.detail.endpoints.some((endpoint) =>
+    endpoint.endpointType === "marketplace_proxy"
+    && (endpoint.mode === "async" || endpoint.billing.type === "prepaid_credit")
   );
 
   if (input.settlementMode === "community_direct") {
@@ -2852,14 +3237,26 @@ async function validateProviderServiceForSettlement(input: {
     }
   }
 
+  if (requiresRuntimeKey && !runtimeKey) {
+    return {
+      ok: false as const,
+      statusCode: 400,
+      error: "Async and prepaid-credit services require a provider runtime key before publish."
+    };
+  }
+
   if (
-    input.detail.endpoints.some((endpoint) => endpoint.endpointType === "marketplace_proxy" && endpoint.billing.type === "prepaid_credit")
-    && !runtimeKey
+    input.detail.endpoints.some((endpoint) =>
+      endpoint.endpointType === "marketplace_proxy"
+      && endpoint.mode === "async"
+      && endpoint.asyncConfig?.strategy === "webhook"
+    )
+    && !isHttpsUrl(input.marketplaceBaseUrl)
   ) {
     return {
       ok: false as const,
       statusCode: 400,
-      error: "Prepaid-credit services require a provider runtime key before publish."
+      error: "Webhook async routes require an HTTPS MARKETPLACE_BASE_URL before publish."
     };
   }
 
@@ -3219,6 +3616,49 @@ async function safeResponseBody(response: globalThis.Response): Promise<unknown>
   }
 
   return response.text();
+}
+
+function isJsonObject(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function isHttpsUrl(value: string | null | undefined): boolean {
+  if (!value) {
+    return false;
+  }
+
+  try {
+    return new URL(value).protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+function clampCreditReservationExpiry(expiresAt: string | null): string {
+  const latestAllowed = Date.now() + CREDIT_RESERVATION_TTL_MS;
+  if (!expiresAt) {
+    return new Date(latestAllowed).toISOString();
+  }
+
+  const parsed = Date.parse(expiresAt);
+  if (Number.isNaN(parsed)) {
+    throw new Error("expiresAt must be a valid ISO timestamp.");
+  }
+
+  return new Date(Math.min(parsed, latestAllowed)).toISOString();
+}
+
+async function expireAsyncPrepaidReservation(store: MarketplaceStore, job: Pick<JobRecord, "jobToken" | "serviceId" | "routeSnapshot">) {
+  if (!job.serviceId || !isPrepaidCreditBilling(job.routeSnapshot)) {
+    return;
+  }
+
+  const reservation = await store.getCreditReservationByIdempotencyKey(job.serviceId, job.jobToken);
+  if (!reservation || reservation.status !== "reserved") {
+    return;
+  }
+
+  await store.expireCreditReservation(reservation.id);
 }
 
 function joinUrl(baseUrl: string, path: string): string {

@@ -1,4 +1,5 @@
 export * from "./amounts.js";
+export * from "./async-jobs.js";
 export * from "./auth.js";
 export * from "./billing.js";
 export * from "./catalog.js";

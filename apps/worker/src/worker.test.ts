@@ -63,6 +63,7 @@ describe("marketplace worker", () => {
       paymentPayload: "payload",
       facilitatorResponse: { isValid: true },
       jobToken: "job_worker_1",
+      requestId: "request_worker_1",
       providerJobId: "provider_worker_1",
       requestBody: { topic: "failing report" },
       providerState: {
@@ -80,6 +81,7 @@ describe("marketplace worker", () => {
     await runMarketplaceWorkerCycle({
       store,
       providers: registry,
+      secretsKey: "test-secrets-key",
       refundService: {
         async issueRefund() {
           return { txHash: "0xrefund" };
@@ -133,6 +135,7 @@ describe("marketplace worker", () => {
       paymentPayload: "payload",
       facilitatorResponse: { isValid: true },
       jobToken: "job_worker_2",
+      requestId: "request_worker_2",
       providerJobId: "provider_worker_2",
       requestBody: { topic: "completed report" },
       providerState: {
@@ -160,6 +163,7 @@ describe("marketplace worker", () => {
     await runMarketplaceWorkerCycle({
       store,
       providers: registry,
+      secretsKey: "test-secrets-key",
       refundService: {
         async issueRefund() {
           return { txHash: "0xrefund" };
@@ -233,6 +237,7 @@ describe("marketplace worker", () => {
 
     await runMarketplaceWorkerCycle({
       store,
+      secretsKey: "test-secrets-key",
       refundService: {
         async issueRefund() {
           return { txHash: "0xrefund" };
@@ -296,6 +301,7 @@ describe("marketplace worker", () => {
 
     await runMarketplaceWorkerCycle({
       store,
+      secretsKey: "test-secrets-key",
       refundService: {
         async issueRefund({ wallet, amount }) {
           refunds.push({ wallet, amount });

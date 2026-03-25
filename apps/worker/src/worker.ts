@@ -1,10 +1,20 @@
 import {
+  MARKETPLACE_JOB_TOKEN_HEADER,
   PAYMENT_EXECUTION_RECOVERY_MS,
+  buildMarketplaceIdentityHeaders,
+  computeNextPollAt,
   createDefaultProviderRegistry,
+  decryptProviderRuntimeKey,
+  decryptSecret,
+  isPrepaidCreditBilling,
+  resolveAsyncJobFailure,
+  type JobRecord,
   type MarketplaceStore,
+  type PollResult,
   type PayoutService,
   type ProviderRegistry,
-  type RefundService
+  type RefundService,
+  type UpstreamAuthMode
 } from "@marketplace/shared";
 
 export interface MarketplaceWorkerOptions {
@@ -12,43 +22,126 @@ export interface MarketplaceWorkerOptions {
   refundService: RefundService;
   payoutService?: PayoutService;
   providers?: ProviderRegistry;
+  secretsKey: string;
   limit?: number;
 }
 
 export async function runMarketplaceWorkerCycle(options: MarketplaceWorkerOptions): Promise<void> {
   const providers = options.providers ?? createDefaultProviderRegistry();
   const jobs = await options.store.listPendingJobs(options.limit ?? 10);
+  const now = Date.now();
 
   for (const job of jobs) {
     const route = job.routeSnapshot;
 
-    if (route.executorKind !== "mock") {
-      await options.store.failJob(job.jobToken, `Unsupported async executor: ${route.executorKind}`);
+    if (job.timeoutAt && Date.parse(job.timeoutAt) <= now) {
+      await options.store.recordProviderAttempt({
+        jobToken: job.jobToken,
+        routeId: job.routeId,
+        requestId: job.requestId,
+        phase: "poll",
+        status: "failed",
+        requestPayload: {
+          providerJobId: job.providerJobId,
+          providerState: job.providerState
+        },
+        errorMessage: `Async job timed out: ${job.jobToken}`
+      });
+      await expireAsyncPrepaidReservation(options.store, job);
+      await resolveAsyncJobFailure({
+        store: options.store,
+        refundService: options.refundService,
+        job,
+        error: `Async job timed out for ${job.routeId}.`
+      });
       continue;
     }
 
-    const provider = providers[route.provider];
-    if (!provider) {
-      await options.store.failJob(job.jobToken, `Missing provider adapter: ${route.provider}`);
+    if (job.nextPollAt && Date.parse(job.nextPollAt) > now) {
       continue;
     }
 
-    const pollResult = await provider.poll({ route, job });
+    if (route.asyncConfig?.strategy === "webhook") {
+      continue;
+    }
+
+    let pollResult: PollResult;
+
+    if (route.executorKind === "mock") {
+      const provider = providers[route.provider];
+      if (!provider) {
+        await options.store.recordProviderAttempt({
+          jobToken: job.jobToken,
+          routeId: job.routeId,
+          requestId: job.requestId,
+          phase: "poll",
+          status: "failed",
+          requestPayload: {
+            providerJobId: job.providerJobId,
+            providerState: job.providerState
+          },
+          errorMessage: `Missing provider adapter: ${route.provider}`
+        });
+        await expireAsyncPrepaidReservation(options.store, job);
+        await resolveAsyncJobFailure({
+          store: options.store,
+          refundService: options.refundService,
+          job,
+          error: `Missing provider adapter: ${route.provider}`
+        });
+        continue;
+      }
+
+      pollResult = await provider.poll({ route, job });
+    } else if (route.executorKind === "http") {
+      pollResult = await pollHttpRoute({
+        job,
+        store: options.store,
+        secretsKey: options.secretsKey
+      });
+    } else {
+      await options.store.recordProviderAttempt({
+        jobToken: job.jobToken,
+        routeId: job.routeId,
+        requestId: job.requestId,
+        phase: "poll",
+        status: "failed",
+        requestPayload: {
+          providerJobId: job.providerJobId,
+          providerState: job.providerState
+        },
+        errorMessage: `Unsupported async executor: ${route.executorKind}`
+      });
+      await expireAsyncPrepaidReservation(options.store, job);
+      await resolveAsyncJobFailure({
+        store: options.store,
+        refundService: options.refundService,
+        job,
+        error: `Unsupported async executor: ${route.executorKind}`
+      });
+      continue;
+    }
+
     await options.store.recordProviderAttempt({
       jobToken: job.jobToken,
       routeId: job.routeId,
+      requestId: job.requestId,
       phase: "poll",
       status: pollResult.status === "failed" ? "failed" : "succeeded",
       requestPayload: {
         providerJobId: job.providerJobId,
-        state: job.providerState
+        providerState: job.providerState
       },
       responsePayload: pollResult,
       errorMessage: pollResult.status === "failed" ? pollResult.error : undefined
     });
 
     if (pollResult.status === "pending") {
-      await options.store.updateJobPending(job.jobToken, pollResult.state);
+      await options.store.updateJobPending({
+        jobToken: job.jobToken,
+        providerState: pollResult.providerState ?? job.providerState,
+        nextPollAt: computeNextPollAt(pollResult.pollAfterMs)
+      });
       continue;
     }
 
@@ -58,56 +151,21 @@ export async function runMarketplaceWorkerCycle(options: MarketplaceWorkerOption
     }
 
     if (!pollResult.permanent) {
-      await options.store.updateJobPending(job.jobToken, pollResult.state);
+      await options.store.updateJobPending({
+        jobToken: job.jobToken,
+        providerState: pollResult.providerState ?? job.providerState,
+        nextPollAt: computeNextPollAt()
+      });
       continue;
     }
 
-    await options.store.failJob(job.jobToken, pollResult.error);
-    if (!job.payoutSplit.usesTreasurySettlement) {
-      continue;
-    }
-
-    const refund = await options.store.createRefund({
-      jobToken: job.jobToken,
-      paymentId: job.paymentId,
-      wallet: job.buyerWallet,
-      amount: job.quotedPrice
+    await expireAsyncPrepaidReservation(options.store, job);
+    await resolveAsyncJobFailure({
+      store: options.store,
+      refundService: options.refundService,
+      job,
+      error: pollResult.error
     });
-
-    try {
-      const receipt = await options.refundService.issueRefund({
-        wallet: job.buyerWallet,
-        amount: job.quotedPrice,
-        reason: pollResult.error
-      });
-
-      await options.store.recordProviderAttempt({
-        jobToken: job.jobToken,
-        routeId: job.routeId,
-        phase: "refund",
-        status: "succeeded",
-        requestPayload: {
-          wallet: job.buyerWallet,
-          amount: job.quotedPrice
-        },
-        responsePayload: receipt
-      });
-      await options.store.markRefundSent(refund.id, receipt.txHash);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Unknown refund failure.";
-      await options.store.recordProviderAttempt({
-        jobToken: job.jobToken,
-        routeId: job.routeId,
-        phase: "refund",
-        status: "failed",
-        requestPayload: {
-          wallet: job.buyerWallet,
-          amount: job.quotedPrice
-        },
-        errorMessage: message
-      });
-      await options.store.markRefundFailed(refund.id, message);
-    }
   }
 
   await recoverStalePendingPayments({
@@ -128,6 +186,215 @@ export async function runMarketplaceWorkerCycle(options: MarketplaceWorkerOption
       limit: options.limit ?? 10
     });
   }
+}
+
+async function pollHttpRoute(input: {
+  job: JobRecord;
+  store: MarketplaceStore;
+  secretsKey: string;
+}): Promise<PollResult> {
+  const route = input.job.routeSnapshot;
+  if (!route.asyncConfig || route.asyncConfig.strategy !== "poll" || !route.asyncConfig.pollPath) {
+    return {
+      status: "failed",
+      permanent: true,
+      error: "HTTP async route is missing poll configuration.",
+      providerState: input.job.providerState ?? undefined
+    };
+  }
+
+  if (!route.upstreamBaseUrl || !route.upstreamAuthMode || !input.job.serviceId) {
+    return {
+      status: "failed",
+      permanent: true,
+      error: "HTTP async route is missing upstream or service configuration.",
+      providerState: input.job.providerState ?? undefined
+    };
+  }
+
+  const detail = await input.store.getAdminProviderService(input.job.serviceId);
+  if (!detail) {
+    return {
+      status: "failed",
+      permanent: true,
+      error: `Provider service not found: ${input.job.serviceId}`,
+      providerState: input.job.providerState ?? undefined
+    };
+  }
+
+  const runtimeKeyRecord = await input.store.getProviderRuntimeKeyForOwner(input.job.serviceId, detail.account.ownerWallet);
+  if (!runtimeKeyRecord) {
+    return {
+      status: "failed",
+      permanent: true,
+      error: "Provider runtime key is required for async HTTP polling.",
+      providerState: input.job.providerState ?? undefined
+    };
+  }
+
+  const headers: Record<string, string> = {
+    "content-type": "application/json",
+    [MARKETPLACE_JOB_TOKEN_HEADER]: input.job.jobToken,
+    ...buildMarketplaceIdentityHeaders({
+      buyerWallet: input.job.buyerWallet,
+      serviceId: input.job.serviceId,
+      requestId: input.job.requestId,
+      paymentId: input.job.paymentId,
+      signingSecret: decryptProviderRuntimeKey({
+        ciphertext: runtimeKeyRecord.secretCiphertext,
+        iv: runtimeKeyRecord.iv,
+        authTag: runtimeKeyRecord.authTag,
+        secret: input.secretsKey
+      })
+    })
+  };
+
+  if (route.upstreamAuthMode !== "none") {
+    if (!route.upstreamSecretRef) {
+      return {
+        status: "failed",
+        permanent: true,
+        error: "HTTP async poll route is missing upstream secret.",
+        providerState: input.job.providerState ?? undefined
+      };
+    }
+
+    const secret = await input.store.getProviderSecret(route.upstreamSecretRef);
+    if (!secret) {
+      return {
+        status: "failed",
+        permanent: true,
+        error: "Upstream secret not found.",
+        providerState: input.job.providerState ?? undefined
+      };
+    }
+
+    const decrypted = decryptSecret({
+      ciphertext: secret.secretCiphertext,
+      iv: secret.iv,
+      authTag: secret.authTag,
+      secret: input.secretsKey
+    });
+    applyUpstreamAuthHeaders(headers, route.upstreamAuthMode, decrypted, route.upstreamAuthHeaderName ?? null);
+  }
+
+  let response: globalThis.Response;
+  try {
+    response = await fetch(joinUrl(route.upstreamBaseUrl, route.asyncConfig.pollPath), {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        providerJobId: input.job.providerJobId,
+        providerState: input.job.providerState ?? null
+      })
+    });
+  } catch (error) {
+    return {
+      status: "failed",
+      permanent: false,
+      error: error instanceof Error ? error.message : "Upstream poll failed.",
+      providerState: input.job.providerState ?? undefined
+    };
+  }
+
+  if (!response.ok) {
+    return {
+      status: "failed",
+      permanent: response.status >= 400 && response.status < 500 && response.status !== 408 && response.status !== 429,
+      error: `Upstream poll failed with status ${response.status}.`,
+      providerState: input.job.providerState ?? undefined
+    };
+  }
+
+  return parseHttpPollResponse(await safeResponseBody(response));
+}
+
+function parseHttpPollResponse(body: unknown): PollResult {
+  if (!isJsonObject(body) || typeof body.status !== "string") {
+    throw new Error("HTTP async poll response must be a JSON object with a status field.");
+  }
+
+  if (body.status === "pending") {
+    return {
+      status: "pending",
+      providerState: isJsonObject(body.providerState) ? body.providerState : undefined,
+      pollAfterMs: typeof body.pollAfterMs === "number" && Number.isFinite(body.pollAfterMs)
+        ? body.pollAfterMs
+        : undefined
+    };
+  }
+
+  if (body.status === "completed") {
+    return {
+      status: "completed",
+      body: body.result
+    };
+  }
+
+  if (body.status === "failed" && typeof body.error === "string") {
+    return {
+      status: "failed",
+      error: body.error,
+      permanent: Boolean(body.permanent),
+      providerState: isJsonObject(body.providerState) ? body.providerState : undefined
+    };
+  }
+
+  throw new Error("HTTP async poll response did not match the marketplace protocol.");
+}
+
+async function expireAsyncPrepaidReservation(store: MarketplaceStore, job: {
+  jobToken: string;
+  serviceId: string | null;
+  routeSnapshot: { billing: { type: string } };
+}) {
+  if (!job.serviceId || !isPrepaidCreditBilling(job.routeSnapshot)) {
+    return;
+  }
+
+  const reservation = await store.getCreditReservationByIdempotencyKey(job.serviceId, job.jobToken);
+  if (!reservation || reservation.status !== "reserved") {
+    return;
+  }
+
+  await store.expireCreditReservation(reservation.id);
+}
+
+function applyUpstreamAuthHeaders(
+  headers: Record<string, string>,
+  mode: UpstreamAuthMode,
+  secret: string,
+  headerName: string | null
+) {
+  if (mode === "bearer") {
+    headers.authorization = `Bearer ${secret}`;
+    return;
+  }
+
+  if (mode === "header") {
+    if (!headerName) {
+      throw new Error("Custom header auth requires upstreamAuthHeaderName.");
+    }
+
+    headers[headerName] = secret;
+  }
+}
+
+async function safeResponseBody(response: globalThis.Response): Promise<unknown> {
+  const contentType = response.headers.get("content-type") ?? "";
+  if (contentType.includes("application/json")) {
+    return response.json();
+  }
+
+  return response.text();
+}
+
+function isJsonObject(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function joinUrl(baseUrl: string, path: string): string {
+  return `${baseUrl.replace(/\/$/, "")}${path.startsWith("/") ? path : `/${path}`}`;
 }
 
 async function recoverStalePendingPayments(input: {

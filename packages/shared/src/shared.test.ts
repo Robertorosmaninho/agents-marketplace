@@ -517,6 +517,7 @@ describe("shared marketplace helpers", () => {
       paymentPayload: "payload",
       facilitatorResponse: { isValid: true },
       jobToken: "job_catalog_1",
+      requestId: "request_catalog_1",
       providerJobId: "provider_catalog_1",
       requestBody: { topic: "catalog analytics" },
       responseBody: { jobToken: "job_catalog_1", status: "pending" },
