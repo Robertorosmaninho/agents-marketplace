@@ -483,7 +483,7 @@ describe("marketplace worker", () => {
     expect((await store.getRefundByPaymentId("stale_payment_refund_1"))?.txHash).toBe("0xstale-refund");
   });
 
-  it("recovers stale async webhook payments from placeholder jobs without issuing a refund", async () => {
+  it("recovers stale accepted async poll payments from placeholder jobs without issuing a refund", async () => {
     const networkConfig = resolveMarketplaceNetworkConfig({
       deploymentNetwork: "testnet"
     });
@@ -529,9 +529,9 @@ describe("marketplace worker", () => {
         ...asyncRoute,
         executorKind: "http",
         asyncConfig: {
-          strategy: "webhook",
+          strategy: "poll",
           timeoutMs: 60_000,
-          pollPath: null
+          pollPath: "/api/poll"
         }
       },
       quotedPrice: "150000",
@@ -545,9 +545,11 @@ describe("marketplace worker", () => {
       }),
       serviceId: "service_stale_async_recovery_1",
       requestId: "request-stale-async-1",
+      providerJobId: "provider_stale_async_recovery_1",
       requestBody: { topic: "recovery" },
+      providerState: { topic: "recovery" },
       nextPollAt: new Date(Date.now() + 60_000).toISOString(),
-      timeoutAt: null
+      timeoutAt: new Date(Date.now() + 120_000).toISOString()
     });
 
     const idempotencyByPaymentId = (store as unknown as {
@@ -590,6 +592,105 @@ describe("marketplace worker", () => {
       jobToken: "job_stale_async_recovery_1",
       status: "pending"
     }));
+  });
+
+  it("refunds stale webhook placeholders when the provider never accepted the job", async () => {
+    const networkConfig = resolveMarketplaceNetworkConfig({
+      deploymentNetwork: "testnet"
+    });
+    const store = new InMemoryMarketplaceStore(networkConfig);
+    const asyncRoute = buildMarketplaceRoutes(networkConfig).find((route) => route.routeId === "mock.async-report.v1");
+
+    if (!asyncRoute) {
+      throw new Error("Missing async seeded route.");
+    }
+
+    const buyerWallet = "fast1buyerwebhookstale000000000000000000000000000000000000000000";
+
+    await store.claimPaymentExecution({
+      paymentId: "stale_payment_webhook_placeholder_1",
+      normalizedRequestHash: "stale-webhook-placeholder-hash-1",
+      buyerWallet,
+      routeId: asyncRoute.routeId,
+      routeVersion: asyncRoute.version,
+      pendingRecoveryAction: "refund",
+      quotedPrice: "150000",
+      payoutSplit: buildEscrowSplit({
+        providerAccountId: "mock",
+        providerWallet: null,
+        marketplaceBps: 10000,
+        marketplaceAmount: "150000",
+        providerBps: 0,
+        providerAmount: "0"
+      }),
+      paymentPayload: "payload-stale-webhook-placeholder-1",
+      facilitatorResponse: { isValid: true },
+      responseKind: "job",
+      requestId: "request-stale-webhook-placeholder-1",
+      jobToken: "job_stale_webhook_placeholder_1",
+      responseBody: { status: "processing" },
+      responseHeaders: {}
+    });
+
+    await store.savePendingAsyncJob({
+      jobToken: "job_stale_webhook_placeholder_1",
+      paymentId: "stale_payment_webhook_placeholder_1",
+      buyerWallet,
+      route: {
+        ...asyncRoute,
+        executorKind: "http",
+        asyncConfig: {
+          strategy: "webhook",
+          timeoutMs: 60_000,
+          pollPath: null
+        }
+      },
+      quotedPrice: "150000",
+      payoutSplit: buildEscrowSplit({
+        providerAccountId: "mock",
+        providerWallet: null,
+        marketplaceBps: 10000,
+        marketplaceAmount: "150000",
+        providerBps: 0,
+        providerAmount: "0"
+      }),
+      serviceId: "service_stale_webhook_placeholder_1",
+      requestId: "request-stale-webhook-placeholder-1",
+      requestBody: { topic: "never accepted" },
+      nextPollAt: new Date(Date.now() + 60_000).toISOString(),
+      timeoutAt: null
+    });
+
+    const idempotencyByPaymentId = (store as unknown as {
+      idempotencyByPaymentId: Map<string, {
+        updatedAt: string;
+      }>;
+    }).idempotencyByPaymentId;
+    const pending = idempotencyByPaymentId.get("stale_payment_webhook_placeholder_1");
+    if (!pending) {
+      throw new Error("Missing stale webhook payment record.");
+    }
+
+    idempotencyByPaymentId.set("stale_payment_webhook_placeholder_1", {
+      ...pending,
+      updatedAt: new Date(Date.now() - PAYMENT_EXECUTION_RECOVERY_MS - 1_000).toISOString()
+    });
+
+    const refunds: Array<{ wallet: string; amount: string }> = [];
+
+    await runMarketplaceWorkerCycle({
+      store,
+      secretsKey: "test-secrets-key",
+      refundService: {
+        async issueRefund({ wallet, amount }) {
+          refunds.push({ wallet, amount });
+          return { txHash: "0xstale-webhook-refund" };
+        }
+      }
+    });
+
+    expect(refunds).toEqual([{ wallet: buyerWallet, amount: "150000" }]);
+    expect((await store.getRefundByPaymentId("stale_payment_webhook_placeholder_1"))?.txHash).toBe("0xstale-webhook-refund");
   });
 
   it("does not process pre-accept async placeholder jobs before a provider job id is stored", async () => {

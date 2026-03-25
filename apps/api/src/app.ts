@@ -1880,6 +1880,7 @@ async function handleWalletSessionRoute(input: {
 
   const requestId = randomUUID();
   const jobToken = input.route.mode === "async" ? createOpaqueToken("job") : null;
+  const asyncAccessPaymentId = jobToken ? createOpaqueToken("wallet") : null;
   const pendingAsyncNextPollAt = jobToken ? computeTimeoutAt(input.route) : null;
   let paymentDestinationWallet: string | null = null;
   let asyncPayoutSplit: ReturnType<typeof buildPayoutSplit> | null = null;
@@ -1895,6 +1896,7 @@ async function handleWalletSessionRoute(input: {
       });
       await input.store.savePendingAsyncJob({
         jobToken,
+        paymentId: asyncAccessPaymentId,
         buyerWallet: session.wallet,
         route: input.route,
         quotedPrice: "0",
@@ -1904,6 +1906,15 @@ async function handleWalletSessionRoute(input: {
         requestBody: input.requestInput,
         nextPollAt: pendingAsyncNextPollAt,
         timeoutAt: null
+      });
+      await input.store.createAccessGrant({
+        resourceType: "job",
+        resourceId: jobToken,
+        wallet: session.wallet,
+        paymentId: asyncAccessPaymentId!,
+        metadata: {
+          routeId: input.route.routeId
+        }
       });
     } catch (error) {
       return input.res.status(500).json({
@@ -1986,9 +1997,9 @@ async function handleWalletSessionRoute(input: {
   };
 
   try {
-    await input.store.saveAsyncAcceptance({
-      paymentId: createOpaqueToken("wallet"),
-      normalizedRequestHash: hashNormalizedRequest(input.route, input.requestInput),
+    await input.store.savePendingAsyncJob({
+      jobToken: acceptedBody.jobToken,
+      paymentId: asyncAccessPaymentId,
       buyerWallet: session.wallet,
       route: input.route,
       quotedPrice: "0",
@@ -1998,20 +2009,13 @@ async function handleWalletSessionRoute(input: {
         paymentDestinationWallet: paymentDestinationWallet ?? resolvePaymentDestinationWallet(input.route, input.payTo),
         quotedPrice: "0"
       }),
-      paymentPayload: "",
-      facilitatorResponse: {
-        type: input.route.billing.type,
-        auth: "wallet_session"
-      },
-      jobToken: acceptedBody.jobToken,
       serviceId: input.route.serviceId,
       requestId,
       providerJobId: executeResult.providerJobId,
       requestBody: input.requestInput,
       providerState: executeResult.providerState,
       nextPollAt: computeNextPollAt(executeResult.pollAfterMs),
-      timeoutAt: computeTimeoutAt(input.route),
-      responseBody: acceptedBody
+      timeoutAt: computeTimeoutAt(input.route)
     });
   } catch (error) {
     await recordProviderAttemptSafely(input.store, {
@@ -2560,6 +2564,21 @@ async function handleX402Route(input: {
   };
 
   try {
+    await input.store.savePendingAsyncJob({
+      jobToken: acceptedBody.jobToken,
+      paymentId: paymentHeaders.paymentId,
+      buyerWallet,
+      route: input.route,
+      quotedPrice,
+      payoutSplit,
+      serviceId: input.route.serviceId,
+      requestId,
+      providerJobId: executeResult.providerJobId,
+      requestBody,
+      providerState: executeResult.providerState,
+      nextPollAt: computeNextPollAt(executeResult.pollAfterMs),
+      timeoutAt: computeTimeoutAt(input.route)
+    });
     await input.store.saveAsyncAcceptance({
       paymentId: paymentHeaders.paymentId,
       normalizedRequestHash: requestHash,

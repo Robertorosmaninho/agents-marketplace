@@ -126,10 +126,12 @@ function buildPendingAsyncJobRecord(
   existing: JobRecord | null,
   now: string
 ): JobRecord {
-  const initialNextPollAt = input.nextPollAt ?? input.timeoutAt ?? null;
+  const nextStatus = existing?.status ?? "pending";
   return {
     jobToken: input.jobToken,
-    paymentId: existing?.paymentId ?? input.paymentId ?? null,
+    paymentId: input.paymentId === undefined
+      ? (existing?.paymentId ?? null)
+      : input.paymentId,
     routeId: input.route.routeId,
     serviceId: existing?.serviceId ?? resolveRouteServiceId(input.route, input.serviceId),
     provider: input.route.provider,
@@ -138,13 +140,25 @@ function buildPendingAsyncJobRecord(
     quotedPrice: input.quotedPrice,
     payoutSplit: clone(input.payoutSplit),
     requestId: existing?.requestId ?? input.requestId,
-    providerJobId: existing?.providerJobId ?? null,
+    providerJobId: input.providerJobId === undefined
+      ? (existing?.providerJobId ?? null)
+      : input.providerJobId,
     requestBody: clone(input.requestBody),
     routeSnapshot: clone(input.route),
-    providerState: clone(existing?.providerState ?? null),
-    nextPollAt: existing?.nextPollAt ?? initialNextPollAt,
-    timeoutAt: existing?.timeoutAt ?? input.timeoutAt ?? null,
-    status: existing?.status ?? "pending",
+    providerState: input.providerState === undefined
+      ? clone(existing?.providerState ?? null)
+      : clone(input.providerState),
+    nextPollAt: nextStatus === "pending"
+      ? (input.nextPollAt === undefined
+        ? (existing?.nextPollAt ?? null)
+        : input.nextPollAt)
+      : (existing?.nextPollAt ?? null),
+    timeoutAt: nextStatus === "pending"
+      ? (input.timeoutAt === undefined
+        ? (existing?.timeoutAt ?? null)
+        : input.timeoutAt)
+      : (existing?.timeoutAt ?? input.timeoutAt ?? null),
+    status: nextStatus,
     resultBody: clone(existing?.resultBody ?? null),
     errorMessage: existing?.errorMessage ?? null,
     refundStatus: existing?.refundStatus ?? "not_required",

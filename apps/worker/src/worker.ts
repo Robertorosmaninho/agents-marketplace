@@ -453,7 +453,6 @@ function buildRecoveredAsyncJobResponse(job: JobRecord, now: Date = new Date()):
 
 function canRecoverPendingJobExecution(job: JobRecord): boolean {
   return job.status !== "pending"
-    || job.routeSnapshot.asyncConfig?.strategy === "webhook"
     || Boolean(job.providerJobId);
 }
 

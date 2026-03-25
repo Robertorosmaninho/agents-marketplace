@@ -816,6 +816,63 @@ describe("shared marketplace helpers", () => {
     expect(job?.timeoutAt).toBe("2026-03-20T00:10:00.000Z");
   });
 
+  it("updates placeholder jobs with provider acceptance metadata before idempotency is completed", async () => {
+    const store = new InMemoryMarketplaceStore(TESTNET_NETWORK_CONFIG);
+    const asyncRoute = TESTNET_MARKETPLACE_ROUTES.find((route) => route.routeId === "mock.async-report.v1");
+
+    if (!asyncRoute) {
+      throw new Error("Missing async seeded route.");
+    }
+
+    await store.savePendingAsyncJob({
+      jobToken: "job_pending_acceptance_1",
+      paymentId: "payment_pending_acceptance_1",
+      buyerWallet: "fast1buyeraccept000000000000000000000000000000000000000000000000",
+      route: asyncRoute,
+      quotedPrice: "150000",
+      payoutSplit: buildEscrowSplit({
+        providerAccountId: "mock",
+        providerWallet: null,
+        marketplaceBps: 10000,
+        marketplaceAmount: "150000",
+        providerBps: 0,
+        providerAmount: "0"
+      }),
+      requestId: "request_pending_acceptance_1",
+      requestBody: { topic: "placeholder" },
+      nextPollAt: "2026-03-20T00:05:00.000Z",
+      timeoutAt: null
+    });
+
+    await store.savePendingAsyncJob({
+      jobToken: "job_pending_acceptance_1",
+      paymentId: "payment_pending_acceptance_1",
+      buyerWallet: "fast1buyeraccept000000000000000000000000000000000000000000000000",
+      route: asyncRoute,
+      quotedPrice: "150000",
+      payoutSplit: buildEscrowSplit({
+        providerAccountId: "mock",
+        providerWallet: null,
+        marketplaceBps: 10000,
+        marketplaceAmount: "150000",
+        providerBps: 0,
+        providerAmount: "0"
+      }),
+      requestId: "request_pending_acceptance_1",
+      providerJobId: "provider_pending_acceptance_1",
+      requestBody: { topic: "placeholder" },
+      providerState: { stage: "accepted" },
+      nextPollAt: "2026-03-20T00:06:00.000Z",
+      timeoutAt: "2026-03-20T00:10:00.000Z"
+    });
+
+    const job = await store.getJob("job_pending_acceptance_1");
+    expect(job?.providerJobId).toBe("provider_pending_acceptance_1");
+    expect(job?.providerState).toEqual({ stage: "accepted" });
+    expect(job?.nextPollAt).toBe("2026-03-20T00:06:00.000Z");
+    expect(job?.timeoutAt).toBe("2026-03-20T00:10:00.000Z");
+  });
+
   it("tracks prepaid credit balances across topup, reserve, capture, release, and expiry", async () => {
     const store = new InMemoryMarketplaceStore();
     const serviceId = "service_credit_1";

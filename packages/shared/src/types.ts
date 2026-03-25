@@ -948,7 +948,9 @@ export interface SavePendingAsyncJobInput {
   payoutSplit: PersistedPayoutSplit;
   serviceId?: string | null;
   requestId: string;
+  providerJobId?: string | null;
   requestBody: unknown;
+  providerState?: Record<string, unknown> | null;
   nextPollAt?: string | null;
   timeoutAt?: string | null;
 }
