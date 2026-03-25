@@ -21,10 +21,10 @@ Use this skill when a user wants to work with APIs listed on the Fast Marketplac
 - the user wants to sign into `https://marketplace.example.com` with a Fast browser wallet
 - the user wants to pay and execute a marketplace route directly from the website with the Fast browser extension
 - the user needs to call a fixed-price x402 route, a variable top-up route, or a prepaid-credit route with a local Fast wallet
-- the user needs to retrieve an async result from a previously paid job
+- the user needs to retrieve an async result from a previously accepted job
 - the user wants to suggest a missing endpoint or a new source/webservice for providers to build
 - the user wants to create or update a provider profile and manage service drafts
-- the user wants to create or rotate a provider runtime key for a prepaid-credit service
+- the user wants to create or rotate a provider runtime key for an async, prepaid-credit, or community-direct service
 - the user wants to claim provider-visible request intake and route it into a draft service
 - the user wants to verify provider website ownership and submit a service for review
 - the user wants to review, publish, or suspend provider supply from the admin surface
@@ -64,7 +64,7 @@ Before acting, identify:
 
 1. Open the marketplace UI at `https://marketplace.example.com` and locate the relevant service.
 2. Open the service page and identify the route billing type from the published endpoint docs, labels, pricing, and examples.
-3. If the user wants browser execution, use the endpoint's browser execution panel. Fixed-price and top-up routes pay through x402; prepaid-credit routes use the wallet session after the user is signed in.
+3. If the user wants browser execution, use the endpoint's browser execution panel. Fixed-price and top-up routes pay through x402; prepaid-credit routes and async free routes use the wallet session after the user is signed in.
 4. If the user is delegating the task to another agent, copy the service page's "Use this service" block or the canonical skill URL.
 5. For `fixed_x402` routes outside the browser panel, send the first request without payment proof, read the `402 Payment Required` response, pay from the funded wallet, and retry the same request with the payment proof headers.
 6. For `topup_x402_variable` routes, include the requested amount in the request body, expect a `402` quote for that exact amount, pay it, and persist the credited response details.
@@ -104,6 +104,13 @@ The marketplace is Fast-native and wallet-first.
 3. Invoke the `prepaid_credit` route with the bearer token.
 4. If using the CLI, `fast-marketplace invoke` will automatically switch to wallet-session auth when the route requires it.
 
+### Async free
+
+1. Create an API-scoped wallet session through `/auth/challenge` and `/auth/session`.
+2. Invoke the async free route with the bearer token.
+3. If the route returns `202`, persist the `jobToken`.
+4. Create the job-scoped wallet auth session and poll `GET /api/jobs/{jobToken}` until the job completes or fails.
+
 Important constraints:
 
 - paid routes do not use long-lived API keys
@@ -133,10 +140,10 @@ Important constraints:
 
 ## Async retrieval flow
 
-1. If a paid trigger returns `202`, persist the `jobToken`.
+1. If a trigger returns `202`, persist the `jobToken`.
 2. Create the job-scoped wallet auth session through `/auth/challenge` and `/auth/session`.
 3. Poll `GET /api/jobs/{jobToken}` until the job completes or fails.
-4. Use the same wallet that paid for the original trigger.
+4. Use the same wallet that authorized the original trigger.
 
 ## Refund flow
 
@@ -152,24 +159,28 @@ Important constraints:
 3. `provider sync` upserts the provider profile, creates or updates the owned service draft by slug, reconciles endpoint drafts, and creates a runtime key only when a `marketplace_proxy` service does not already have one.
 4. New provider services default to `community_direct`; providers cannot self-assign `verified_escrow` in v1.
 5. For `community_direct`, publish only sync HTTP `fixed_x402` routes and keep the provider runtime key available so the marketplace can forward signed buyer identity headers.
-6. For `verified_escrow`, `fixed_x402`, `topup_x402_variable`, and `prepaid_credit` are allowed only after review promotes the service.
+6. For `verified_escrow`, `fixed_x402`, `topup_x402_variable`, `prepaid_credit`, and async routes are allowed only after review promotes the service.
 7. For `topup_x402_variable` endpoints, set `minAmount` and `maxAmount`; the marketplace owns the top-up crediting flow.
-8. For `prepaid_credit` endpoints, verify marketplace identity headers upstream and use the provider runtime credit APIs to reserve, capture, and release buyer credit.
-9. Run `fast-marketplace provider verify --service <slug-or-id>` to mint a fresh verification challenge and show the exact URL and token the website must serve.
-10. If verification requires touching deploy, DNS, or cloud env outside this repo, ask the user before taking that action. For arbitrary external sites, the agent should hand off the token and wait for confirmation rather than mutating infrastructure on its own.
-11. After the user confirms the verification token is live, continue the same `provider verify` flow so the marketplace performs the ownership check.
-12. Run `fast-marketplace provider submit --service <slug-or-id>` only after verification succeeds; this flow stops at `pending_review`, not admin publish.
-13. If building from marketplace demand, review provider-visible request intake and claim the request you want to build before syncing the draft.
-14. After admin publish, use the public service page and paid proxy routes as the canonical execution surface.
+8. For async HTTP endpoints, require a provider runtime key and implement the marketplace async contract: execute returns `202` with `providerJobId`, poll routes expose `pollPath`, and webhook routes complete through the marketplace callback endpoint.
+9. For `prepaid_credit` endpoints, verify marketplace identity headers upstream and use the provider runtime credit APIs to reserve, capture, release, and when needed extend buyer credit reservations.
+10. Run `fast-marketplace provider verify --service <slug-or-id>` to mint a fresh verification challenge and show the exact URL and token the website must serve.
+11. If verification requires touching deploy, DNS, or cloud env outside this repo, ask the user before taking that action. For arbitrary external sites, the agent should hand off the token and wait for confirmation rather than mutating infrastructure on its own.
+12. After the user confirms the verification token is live, continue the same `provider verify` flow so the marketplace performs the ownership check.
+13. Run `fast-marketplace provider submit --service <slug-or-id>` only after verification succeeds; this flow stops at `pending_review`, not admin publish.
+14. If building from marketplace demand, review provider-visible request intake and claim the request you want to build before syncing the draft.
+15. After admin publish, use the public service page and paid proxy routes as the canonical execution surface.
 
 Important provider constraints:
 
 - provider drafts are scoped to the wallet that owns the provider profile
 - payout wallet validation happens at draft/update time
 - community-direct services need a provider runtime key before publish
+- async `marketplace_proxy` services need a provider runtime key before publish
 - top-up and prepaid-credit routes are Verified/escrow only
 - prepaid-credit services need a provider runtime key before they can debit marketplace-held credit
+- webhook async routes require an HTTPS marketplace base URL so the marketplace can inject a callback URL
 - prepaid-credit upstreams should verify the signed marketplace identity headers before reserving or capturing credit
+- async providers should trust the signed marketplace identity headers and `X-MARKETPLACE-JOB-TOKEN` when correlating work
 - changing the service website host requires re-verification before submission
 - request intake claiming is exclusive once another provider has claimed it
 
