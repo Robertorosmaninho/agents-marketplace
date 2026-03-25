@@ -1,0 +1,208 @@
+{
+  "profile": {
+    "displayName": "Tavily Proxy",
+    "bio": "Marketplace-hosted Tavily search and extraction endpoints for Fast buyers.",
+    "websiteUrl": "https://replace-with-your-mainnet-tavily-host.example.com",
+    "contactEmail": "replace-with-provider-email@example.com"
+  },
+  "service": {
+    "serviceType": "marketplace_proxy",
+    "slug": "tavily-mainnet",
+    "apiNamespace": "tavily",
+    "name": "Tavily Proxy",
+    "tagline": "Search, extract, crawl, and map the web through a Fast-native proxy.",
+    "about": "Tavily Proxy exposes thin marketplace-hosted endpoints for Tavily search, content extraction, crawling, and URL discovery. Buyers pay through the marketplace and the provider keeps the upstream Tavily API key server-side.",
+    "categories": [
+      "Search",
+      "Research",
+      "Developer Tools"
+    ],
+    "promptIntro": "I want to use the Tavily Proxy service on Fast Marketplace.",
+    "setupInstructions": [
+      "Fund a Fast wallet on mainnet.",
+      "Use the x402-paid routes below from the marketplace.",
+      "Choose the endpoint that matches the Tavily workflow you need."
+    ],
+    "websiteUrl": "https://replace-with-your-mainnet-tavily-host.example.com",
+    "payoutWallet": "replace-with-mainnet-fast-wallet"
+  },
+  "endpoints": [
+    {
+      "endpointType": "marketplace_proxy",
+      "operation": "search",
+      "title": "Search",
+      "description": "Run a Tavily search request with the provider-side Tavily API key.",
+      "billingType": "fixed_x402",
+      "price": "$0.05",
+      "method": "POST",
+      "mode": "sync",
+      "requestSchemaJson": {
+        "type": "object",
+        "required": [
+          "query"
+        ],
+        "properties": {
+          "query": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": true
+      },
+      "responseSchemaJson": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "requestExample": {
+        "query": "latest Fast blockchain news",
+        "topic": "news",
+        "max_results": 5
+      },
+      "responseExample": {
+        "query": "latest Fast blockchain news",
+        "results": [
+          {
+            "title": "Fast network update",
+            "url": "https://example.com/articles/fast-update",
+            "content": "Summary excerpt from the Tavily search response."
+          }
+        ]
+      },
+      "usageNotes": "Good default entry point for research lookups and link discovery.",
+      "upstreamBaseUrl": "https://replace-with-your-mainnet-tavily-host.example.com",
+      "upstreamPath": "/search",
+      "upstreamAuthMode": "none"
+    },
+    {
+      "endpointType": "marketplace_proxy",
+      "operation": "extract",
+      "title": "Extract",
+      "description": "Extract content from one or more URLs through Tavily.",
+      "billingType": "fixed_x402",
+      "price": "$0.08",
+      "method": "POST",
+      "mode": "sync",
+      "requestSchemaJson": {
+        "type": "object",
+        "required": [
+          "urls"
+        ],
+        "properties": {
+          "urls": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uri"
+            }
+          }
+        },
+        "additionalProperties": true
+      },
+      "responseSchemaJson": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "requestExample": {
+        "urls": [
+          "https://example.com/articles/fast-update"
+        ]
+      },
+      "responseExample": {
+        "results": [
+          {
+            "url": "https://example.com/articles/fast-update",
+            "raw_content": "Extracted page content."
+          }
+        ]
+      },
+      "usageNotes": "Use when you already know the target URLs and need page content returned in one response.",
+      "upstreamBaseUrl": "https://replace-with-your-mainnet-tavily-host.example.com",
+      "upstreamPath": "/extract",
+      "upstreamAuthMode": "none"
+    },
+    {
+      "endpointType": "marketplace_proxy",
+      "operation": "crawl",
+      "title": "Crawl",
+      "description": "Crawl a target website through Tavily.",
+      "billingType": "fixed_x402",
+      "price": "$0.15",
+      "method": "POST",
+      "mode": "sync",
+      "requestSchemaJson": {
+        "type": "object",
+        "required": [
+          "url"
+        ],
+        "properties": {
+          "url": {
+            "type": "string",
+            "format": "uri"
+          }
+        },
+        "additionalProperties": true
+      },
+      "responseSchemaJson": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "requestExample": {
+        "url": "https://example.com/docs",
+        "max_depth": 2
+      },
+      "responseExample": {
+        "base_url": "https://example.com/docs",
+        "results": [
+          {
+            "url": "https://example.com/docs/intro",
+            "title": "Docs intro"
+          }
+        ]
+      },
+      "usageNotes": "Best for deeper site traversal where a plain search is not enough.",
+      "upstreamBaseUrl": "https://replace-with-your-mainnet-tavily-host.example.com",
+      "upstreamPath": "/crawl",
+      "upstreamAuthMode": "none"
+    },
+    {
+      "endpointType": "marketplace_proxy",
+      "operation": "map",
+      "title": "Map",
+      "description": "Discover URLs from a target website through Tavily.",
+      "billingType": "fixed_x402",
+      "price": "$0.05",
+      "method": "POST",
+      "mode": "sync",
+      "requestSchemaJson": {
+        "type": "object",
+        "required": [
+          "url"
+        ],
+        "properties": {
+          "url": {
+            "type": "string",
+            "format": "uri"
+          }
+        },
+        "additionalProperties": true
+      },
+      "responseSchemaJson": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "requestExample": {
+        "url": "https://example.com/docs"
+      },
+      "responseExample": {
+        "base_url": "https://example.com/docs",
+        "results": [
+          "https://example.com/docs",
+          "https://example.com/docs/intro"
+        ]
+      },
+      "usageNotes": "Use when you need URL discovery without full extraction or crawl output.",
+      "upstreamBaseUrl": "https://replace-with-your-mainnet-tavily-host.example.com",
+      "upstreamPath": "/map",
+      "upstreamAuthMode": "none"
+    }
+  ]
+}
