@@ -52,8 +52,8 @@ export function MarketplaceHome({ services }: { services: ServiceSummary[] }) {
                 pricing and performance, and route demand toward the next supply providers should ship.
               </p>
 
-              <div className="grid gap-4 md:grid-cols-[1fr_auto]">
-                <label className="relative block">
+              <div className="grid gap-4 lg:grid-cols-[minmax(24rem,32rem)_1fr] lg:items-start">
+                <label className="relative block lg:min-w-[24rem]">
                   <span className="sr-only">Search services, owners, or categories</span>
                   <Search className="pointer-events-none absolute left-5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                   <Input
@@ -63,7 +63,7 @@ export function MarketplaceHome({ services }: { services: ServiceSummary[] }) {
                     className="pl-12"
                   />
                 </label>
-                <div className="flex flex-wrap gap-2">
+                <div className="flex flex-wrap gap-2 lg:justify-end">
                   {categories.map((item) => (
                     <button
                       key={item}

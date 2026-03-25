@@ -237,10 +237,20 @@ function startApp(appUuid) {
 
 const currentApps = getAppList();
 const byName = new Map(currentApps.map((app) => [app.name, app]));
+const byDomain = new Map();
+for (const app of currentApps) {
+  for (const domain of String(app.fqdn ?? "")
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean)) {
+    byDomain.set(domain, app);
+  }
+}
 const results = [];
 
 for (const entry of apps) {
-  const existing = byName.get(entry.name);
+  const targetDomain = `https://${entry.domain}`;
+  const existing = byName.get(entry.name) ?? byDomain.get(targetDomain);
   const appUuid = existing?.uuid ?? entry.existingUuid ?? createApp();
 
   updateApp(appUuid, entry);
@@ -262,7 +272,7 @@ for (const entry of apps) {
   results.push({
     name: entry.name,
     uuid: appUuid,
-    domain: `https://${entry.domain}`,
+    domain: targetDomain,
     actorId: entry.actorId,
   });
   console.log(JSON.stringify(results.at(-1)));
