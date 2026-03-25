@@ -508,6 +508,10 @@ function creditReservationKey(serviceId: string, idempotencyKey: string): string
   return `${serviceId}:${idempotencyKey}`;
 }
 
+function creditReservationJobTokenKey(serviceId: string, jobToken: string): string {
+  return `${serviceId}:${jobToken}`;
+}
+
 function creditTopupKey(serviceId: string, paymentId: string): string {
   return `${serviceId}:${paymentId}`;
 }
@@ -611,6 +615,7 @@ export class InMemoryMarketplaceStore implements MarketplaceStore {
   private readonly creditTopupEntryIdByPaymentKey = new Map<string, string>();
   private readonly creditReservationsById = new Map<string, CreditReservationRecord>();
   private readonly creditReservationIdByIdempotencyKey = new Map<string, string>();
+  private readonly creditReservationIdByJobToken = new Map<string, string>();
   private readonly providerRuntimeKeysByServiceId = new Map<string, ProviderRuntimeKeyRecord>();
   private readonly suggestionsById = new Map<string, SuggestionRecord>();
   private readonly attempts: ProviderAttemptRecord[] = [];
@@ -1476,13 +1481,26 @@ export class InMemoryMarketplaceStore implements MarketplaceStore {
     currency: "fastUSDC" | "testUSDC";
     amount: string;
     idempotencyKey: string;
+    jobToken?: string | null;
     providerReference?: string | null;
     expiresAt: string;
     metadata?: Record<string, unknown>;
   }): Promise<{ account: CreditAccountRecord; reservation: CreditReservationRecord; entry: CreditLedgerEntryRecord }> {
-    const existingReservationId = this.creditReservationIdByIdempotencyKey.get(
+    const existingReservationIdByIdempotency = this.creditReservationIdByIdempotencyKey.get(
       creditReservationKey(input.serviceId, input.idempotencyKey)
     );
+    const existingReservationIdByJobToken = input.jobToken
+      ? this.creditReservationIdByJobToken.get(creditReservationJobTokenKey(input.serviceId, input.jobToken))
+      : null;
+    if (
+      existingReservationIdByIdempotency
+      && existingReservationIdByJobToken
+      && existingReservationIdByIdempotency !== existingReservationIdByJobToken
+    ) {
+      throw new Error("Credit reservation idempotencyKey and jobToken reference different reservations.");
+    }
+
+    const existingReservationId = existingReservationIdByJobToken ?? existingReservationIdByIdempotency;
     if (existingReservationId) {
       const existingReservation = this.creditReservationsById.get(existingReservationId);
       if (!existingReservation) {
@@ -1535,6 +1553,7 @@ export class InMemoryMarketplaceStore implements MarketplaceStore {
       buyerWallet: input.buyerWallet,
       currency: input.currency,
       idempotencyKey: input.idempotencyKey,
+      jobToken: input.jobToken ?? null,
       providerReference: input.providerReference ?? null,
       status: "reserved",
       reservedAmount: input.amount,
@@ -1545,6 +1564,9 @@ export class InMemoryMarketplaceStore implements MarketplaceStore {
     };
     this.creditReservationsById.set(reservation.id, reservation);
     this.creditReservationIdByIdempotencyKey.set(creditReservationKey(input.serviceId, input.idempotencyKey), reservation.id);
+    if (reservation.jobToken) {
+      this.creditReservationIdByJobToken.set(creditReservationJobTokenKey(input.serviceId, reservation.jobToken), reservation.id);
+    }
 
     const entry: CreditLedgerEntryRecord = {
       id: randomUUID(),
@@ -1779,6 +1801,20 @@ export class InMemoryMarketplaceStore implements MarketplaceStore {
   async getCreditReservationByIdempotencyKey(serviceId: string, idempotencyKey: string): Promise<CreditReservationRecord | null> {
     const reservationId = this.creditReservationIdByIdempotencyKey.get(creditReservationKey(serviceId, idempotencyKey));
     return clone(reservationId ? this.creditReservationsById.get(reservationId) ?? null : null);
+  }
+
+  async getCreditReservationByJobToken(serviceId: string, jobToken: string): Promise<CreditReservationRecord | null> {
+    const reservationId = this.creditReservationIdByJobToken.get(creditReservationJobTokenKey(serviceId, jobToken));
+    return clone(reservationId ? this.creditReservationsById.get(reservationId) ?? null : null);
+  }
+
+  async listExpiredCreditReservations(limit: number, expiresBefore: string = new Date().toISOString()): Promise<CreditReservationRecord[]> {
+    const boundary = Date.parse(expiresBefore);
+    return Array.from(this.creditReservationsById.values())
+      .filter((reservation) => reservation.status === "reserved" && Date.parse(reservation.expiresAt) <= boundary)
+      .sort((left, right) => Date.parse(left.createdAt) - Date.parse(right.createdAt))
+      .slice(0, limit)
+      .map((reservation) => clone(reservation));
   }
 
   async extendCreditReservation(input: {
@@ -2501,6 +2537,7 @@ export class InMemoryMarketplaceStore implements MarketplaceStore {
       network: network.paymentNetwork,
       price: endpoint.price,
       billing: clone(endpoint.billing),
+      asyncConfig: clone(endpoint.asyncConfig ?? null),
       title: endpoint.title,
       description: endpoint.description,
       payout: clone(endpoint.payout),
@@ -3439,6 +3476,7 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
         buyer_wallet TEXT NOT NULL,
         currency TEXT NOT NULL,
         idempotency_key TEXT NOT NULL,
+        job_token TEXT,
         provider_reference TEXT,
         status TEXT NOT NULL,
         reserved_amount TEXT NOT NULL,
@@ -3608,6 +3646,13 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
 
       ALTER TABLE published_endpoint_versions
       ADD COLUMN IF NOT EXISTS async_config JSONB;
+
+      ALTER TABLE credit_reservations
+      ADD COLUMN IF NOT EXISTS job_token TEXT;
+
+      CREATE UNIQUE INDEX IF NOT EXISTS credit_reservations_service_job_token_idx
+      ON credit_reservations(service_id, job_token)
+      WHERE job_token IS NOT NULL;
 
       UPDATE provider_services
       SET service_type = 'marketplace_proxy'
@@ -5253,6 +5298,7 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
     currency: "fastUSDC" | "testUSDC";
     amount: string;
     idempotencyKey: string;
+    jobToken?: string | null;
     providerReference?: string | null;
     expiresAt: string;
     metadata?: Record<string, unknown>;
@@ -5261,7 +5307,7 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
     try {
       await client.query("BEGIN");
 
-      const existingReservationResult = await client.query(
+      const existingReservationByIdempotencyResult = await client.query(
         `
         SELECT *
         FROM credit_reservations
@@ -5272,8 +5318,33 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
         [input.serviceId, input.idempotencyKey]
       );
 
-      if (existingReservationResult.rowCount) {
-        let reservation = mapCreditReservationRow(existingReservationResult.rows[0]);
+      const existingReservationByJobTokenResult = input.jobToken
+        ? await client.query(
+            `
+            SELECT *
+            FROM credit_reservations
+            WHERE service_id = $1 AND job_token = $2
+            LIMIT 1
+            FOR UPDATE
+            `,
+            [input.serviceId, input.jobToken]
+          )
+        : { rowCount: 0, rows: [] as Record<string, unknown>[] };
+
+      if (
+        existingReservationByIdempotencyResult.rowCount
+        && existingReservationByJobTokenResult.rowCount
+        && existingReservationByIdempotencyResult.rows[0]?.id !== existingReservationByJobTokenResult.rows[0]?.id
+      ) {
+        throw new Error("Credit reservation idempotencyKey and jobToken reference different reservations.");
+      }
+
+      const existingReservationRow = existingReservationByJobTokenResult.rowCount
+        ? existingReservationByJobTokenResult.rows[0]
+        : existingReservationByIdempotencyResult.rows[0];
+
+      if (existingReservationRow) {
+        let reservation = mapCreditReservationRow(existingReservationRow);
         let account: CreditAccountRecord;
 
         const accountResult = await client.query(
@@ -5396,10 +5467,10 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
       const reservationResult = await client.query(
         `
         INSERT INTO credit_reservations (
-          id, account_id, service_id, buyer_wallet, currency, idempotency_key, provider_reference,
+          id, account_id, service_id, buyer_wallet, currency, idempotency_key, job_token, provider_reference,
           status, reserved_amount, captured_amount, expires_at
         ) VALUES (
-          $1, $2, $3, $4, $5, $6, $7, 'reserved', $8, '0', $9
+          $1, $2, $3, $4, $5, $6, $7, $8, 'reserved', $9, '0', $10
         )
         RETURNING *
         `,
@@ -5410,6 +5481,7 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
           input.buyerWallet,
           input.currency,
           input.idempotencyKey,
+          input.jobToken ?? null,
           input.providerReference ?? null,
           input.amount,
           input.expiresAt
@@ -5899,6 +5971,28 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
       [serviceId, idempotencyKey]
     );
     return result.rowCount ? mapCreditReservationRow(result.rows[0]) : null;
+  }
+
+  async getCreditReservationByJobToken(serviceId: string, jobToken: string): Promise<CreditReservationRecord | null> {
+    const result = await this.pool.query(
+      "SELECT * FROM credit_reservations WHERE service_id = $1 AND job_token = $2 LIMIT 1",
+      [serviceId, jobToken]
+    );
+    return result.rowCount ? mapCreditReservationRow(result.rows[0]) : null;
+  }
+
+  async listExpiredCreditReservations(limit: number, expiresBefore: string = new Date().toISOString()): Promise<CreditReservationRecord[]> {
+    const result = await this.pool.query(
+      `
+      SELECT *
+      FROM credit_reservations
+      WHERE status = 'reserved' AND expires_at <= $1::timestamptz
+      ORDER BY created_at ASC
+      LIMIT $2
+      `,
+      [expiresBefore, limit]
+    );
+    return result.rows.map(mapCreditReservationRow);
   }
 
   async extendCreditReservation(input: {
@@ -7917,6 +8011,7 @@ function mapCreditReservationRow(row: Record<string, unknown>): CreditReservatio
     buyerWallet: row.buyer_wallet as string,
     currency: row.currency as CreditReservationRecord["currency"],
     idempotencyKey: row.idempotency_key as string,
+    jobToken: (row.job_token as string | null) ?? null,
     providerReference: (row.provider_reference as string | null) ?? null,
     status: row.status as CreditReservationRecord["status"],
     reservedAmount: row.reserved_amount as string,

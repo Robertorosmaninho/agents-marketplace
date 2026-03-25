@@ -61,6 +61,35 @@ function callbackSignaturePayload(input: {
   ].join("\n");
 }
 
+export function createMarketplaceCallbackAuthToken(input: {
+  jobToken: string;
+  secret: string;
+}): string {
+  const digest = createHmac("sha256", input.secret)
+    .update(`marketplace-callback\n${input.jobToken}`)
+    .digest("base64url");
+  return `cbk_${digest}`;
+}
+
+export function verifyMarketplaceCallbackAuthToken(input: {
+  jobToken: string;
+  token: string;
+  secret: string;
+}): void {
+  const expected = createMarketplaceCallbackAuthToken({
+    jobToken: input.jobToken,
+    secret: input.secret
+  });
+
+  if (input.token.length !== expected.length) {
+    throw new Error("Invalid callback bearer token.");
+  }
+
+  if (!timingSafeEqual(Buffer.from(input.token, "utf8"), Buffer.from(expected, "utf8"))) {
+    throw new Error("Invalid callback bearer token.");
+  }
+}
+
 export function createProviderRuntimeKeyMaterial(secret: string): ProviderRuntimeKeyMaterial {
   const keyPrefix = randomBytes(4).toString("hex");
   const plaintextKey = `rtk_${keyPrefix}_${randomBytes(24).toString("hex")}`;
@@ -182,11 +211,11 @@ export function buildMarketplaceCallbackHeaders(input: {
   method: string;
   path: string;
   body: string | Buffer;
-  runtimeKey: string;
+  sharedSecret: string;
   now?: Date;
 }): Record<string, string> {
   const timestamp = (input.now ?? new Date()).toISOString();
-  const signature = createHmac("sha256", input.runtimeKey)
+  const signature = createHmac("sha256", input.sharedSecret)
     .update(callbackSignaturePayload({
       method: input.method,
       path: input.path,
@@ -196,7 +225,7 @@ export function buildMarketplaceCallbackHeaders(input: {
     .digest("base64url");
 
   return {
-    authorization: `Bearer ${input.runtimeKey}`,
+    authorization: `Bearer ${input.sharedSecret}`,
     [MARKETPLACE_IDENTITY_TIMESTAMP_HEADER]: timestamp,
     [MARKETPLACE_IDENTITY_SIGNATURE_HEADER]: signature
   };
@@ -207,7 +236,7 @@ export function verifyMarketplaceCallbackHeaders(input: {
   path: string;
   body: string | Buffer;
   headers: Record<string, string | string[] | undefined>;
-  runtimeKey: string;
+  sharedSecret: string;
   now?: Date;
   maxAgeMs?: number;
 }): void {
@@ -224,7 +253,7 @@ export function verifyMarketplaceCallbackHeaders(input: {
 
   const timestamp = read(MARKETPLACE_IDENTITY_TIMESTAMP_HEADER);
   const signature = read(MARKETPLACE_IDENTITY_SIGNATURE_HEADER);
-  const expected = createHmac("sha256", input.runtimeKey)
+  const expected = createHmac("sha256", input.sharedSecret)
     .update(callbackSignaturePayload({
       method: input.method,
       path: input.path,

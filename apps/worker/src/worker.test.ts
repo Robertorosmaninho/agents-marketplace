@@ -97,6 +97,174 @@ describe("marketplace worker", () => {
     expect(refund?.txHash).toBe("0xrefund");
   });
 
+  it("does not refund failed async free jobs", async () => {
+    const networkConfig = resolveMarketplaceNetworkConfig({
+      deploymentNetwork: "testnet"
+    });
+    const store = new InMemoryMarketplaceStore(networkConfig);
+    const registry = createDefaultProviderRegistry();
+    const asyncRoute = buildMarketplaceRoutes(networkConfig).find((route) => route.routeId === "mock.async-report.v1");
+
+    if (!asyncRoute) {
+      throw new Error("Missing async seeded route.");
+    }
+
+    const buyerWallet = "fast1x0g58phuf0pf32e9uvp3mv6hak4z37ytpqyfzjzhfsehua9kmegqwzv0td";
+    let refundCalls = 0;
+
+    await store.saveAsyncAcceptance({
+      paymentId: "worker_payment_free_1",
+      normalizedRequestHash: "hash-free",
+      buyerWallet,
+      route: {
+        ...asyncRoute,
+        billing: { type: "free" },
+        price: "Free"
+      },
+      quotedPrice: "0",
+      payoutSplit: buildEscrowSplit({
+        providerAccountId: "mock",
+        providerWallet: null,
+        marketplaceBps: 10000,
+        marketplaceAmount: "0",
+        providerBps: 0,
+        providerAmount: "0"
+      }),
+      paymentPayload: "payload",
+      facilitatorResponse: { auth: "wallet_session" },
+      jobToken: "job_worker_free_1",
+      requestId: "request_worker_free_1",
+      providerJobId: "provider_worker_free_1",
+      requestBody: { topic: "failing free report" },
+      providerState: {
+        topic: "failing free report",
+        shouldFail: true,
+        readyAt: Date.now() - 10
+      },
+      responseBody: {
+        jobToken: "job_worker_free_1",
+        status: "pending"
+      },
+      responseHeaders: {}
+    });
+
+    await runMarketplaceWorkerCycle({
+      store,
+      providers: registry,
+      secretsKey: "test-secrets-key",
+      refundService: {
+        async issueRefund() {
+          refundCalls += 1;
+          return { txHash: "0xrefund" };
+        }
+      }
+    });
+
+    const job = await store.getJob("job_worker_free_1");
+    const refund = await store.getRefundByJobToken("job_worker_free_1");
+
+    expect(job?.status).toBe("failed");
+    expect(job?.refundStatus).toBe("not_required");
+    expect(refund).toBeNull();
+    expect(refundCalls).toBe(0);
+  });
+
+  it("expires linked async prepaid reservations on timeout without a treasury refund", async () => {
+    const networkConfig = resolveMarketplaceNetworkConfig({
+      deploymentNetwork: "testnet"
+    });
+    const store = new InMemoryMarketplaceStore(networkConfig);
+    const asyncRoute = buildMarketplaceRoutes(networkConfig).find((route) => route.routeId === "mock.async-report.v1");
+
+    if (!asyncRoute) {
+      throw new Error("Missing async seeded route.");
+    }
+
+    const serviceId = "service_prepaid_async_1";
+    const buyerWallet = "fast1buyerprepaid000000000000000000000000000000000000000000000000";
+    let refundCalls = 0;
+
+    await store.createCreditTopup({
+      serviceId,
+      buyerWallet,
+      currency: "fastUSDC",
+      amount: "500000",
+      paymentId: "topup_payment_1"
+    });
+
+    await store.reserveCredit({
+      serviceId,
+      buyerWallet,
+      currency: "fastUSDC",
+      amount: "125000",
+      idempotencyKey: "reserve_request_1",
+      jobToken: "job_worker_prepaid_1",
+      providerReference: "order-123",
+      expiresAt: new Date(Date.now() + 60_000).toISOString()
+    });
+
+    await store.saveAsyncAcceptance({
+      paymentId: "worker_payment_prepaid_1",
+      normalizedRequestHash: "hash-prepaid",
+      buyerWallet,
+      route: {
+        ...asyncRoute,
+        billing: { type: "prepaid_credit" },
+        price: "Prepaid credit"
+      },
+      quotedPrice: "0",
+      payoutSplit: buildEscrowSplit({
+        providerAccountId: "mock",
+        providerWallet: null,
+        marketplaceBps: 10000,
+        marketplaceAmount: "0",
+        providerBps: 0,
+        providerAmount: "0"
+      }),
+      paymentPayload: "payload",
+      facilitatorResponse: { auth: "wallet_session" },
+      jobToken: "job_worker_prepaid_1",
+      serviceId,
+      requestId: "request_worker_prepaid_1",
+      providerJobId: "provider_worker_prepaid_1",
+      requestBody: { topic: "prepaid report" },
+      providerState: {
+        topic: "prepaid report",
+        readyAt: Date.now() + 60_000
+      },
+      timeoutAt: new Date(Date.now() - 1_000).toISOString(),
+      responseBody: {
+        jobToken: "job_worker_prepaid_1",
+        status: "pending"
+      },
+      responseHeaders: {}
+    });
+
+    await runMarketplaceWorkerCycle({
+      store,
+      secretsKey: "test-secrets-key",
+      refundService: {
+        async issueRefund() {
+          refundCalls += 1;
+          return { txHash: "0xrefund" };
+        }
+      }
+    });
+
+    const account = await store.getCreditAccount(serviceId, buyerWallet, "fastUSDC");
+    const reservation = await store.getCreditReservationByJobToken(serviceId, "job_worker_prepaid_1");
+    const job = await store.getJob("job_worker_prepaid_1");
+    const refund = await store.getRefundByJobToken("job_worker_prepaid_1");
+
+    expect(job?.status).toBe("failed");
+    expect(job?.refundStatus).toBe("not_required");
+    expect(refund).toBeNull();
+    expect(refundCalls).toBe(0);
+    expect(account?.availableAmount).toBe("500000");
+    expect(account?.reservedAmount).toBe("0");
+    expect(reservation?.status).toBe("expired");
+  });
+
   it("creates and settles grouped provider payouts for completed async jobs", async () => {
     const networkConfig = resolveMarketplaceNetworkConfig({
       deploymentNetwork: "testnet"

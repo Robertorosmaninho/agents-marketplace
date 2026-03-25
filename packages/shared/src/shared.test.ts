@@ -414,6 +414,76 @@ describe("shared marketplace helpers", () => {
     ]);
   });
 
+  it("describes async free routes with wallet-session auth and runtime callback docs", () => {
+    const seededService = TESTNET_SERVICE_DEFINITIONS.find((candidate) => candidate.slug === "mock-research-signals");
+    const seededRoute = TESTNET_MARKETPLACE_ROUTES.find((candidate) => candidate.routeId === "mock.async-report.v1");
+    if (!seededService || !seededRoute) {
+      throw new Error("Mock seeded service is missing.");
+    }
+
+    const freeAsyncRoute = {
+      ...seededRoute,
+      routeId: "mock.free-async-insight.v1",
+      operation: "free-async-insight",
+      billing: {
+        type: "free" as const
+      },
+      price: "Free",
+      asyncConfig: {
+        strategy: "webhook" as const,
+        timeoutMs: 300000,
+        pollPath: null
+      }
+    };
+    const freeAsyncService = {
+      ...seededService,
+      slug: "mock-free-async-signals",
+      routeIds: [freeAsyncRoute.routeId]
+    };
+
+    const document = buildOpenApiDocument({
+      baseUrl: "https://api.marketplace.example.com",
+      services: [freeAsyncService],
+      routes: [freeAsyncRoute]
+    });
+    const freeAsyncPath = document.paths["/api/mock/free-async-insight"] as {
+      post?: {
+        responses?: Record<string, unknown>;
+        parameters?: Array<{ name?: string; in?: string; required?: boolean }>;
+      };
+    };
+
+    expect(freeAsyncPath.post?.responses?.["202"]).toBeDefined();
+    expect(freeAsyncPath.post?.responses?.["401"]).toBeDefined();
+    expect(freeAsyncPath.post?.responses?.["403"]).toBeDefined();
+    expect(freeAsyncPath.post?.responses?.["402"]).toBeUndefined();
+    expect(freeAsyncPath.post?.parameters).toEqual([
+      expect.objectContaining({
+        name: "Authorization",
+        in: "header",
+        required: true
+      })
+    ]);
+    expect(document.paths["/provider/runtime/jobs/{jobToken}/callback"]).toBeDefined();
+    expect(document.paths["/provider/runtime/credits/{reservationId}/extend"]).toBeDefined();
+
+    const detail = buildServiceDetail({
+      service: freeAsyncService,
+      endpoints: [buildPublishedEndpointFromRoute(freeAsyncRoute)],
+      analytics: {
+        totalCalls: 0,
+        revenueRaw: "0",
+        successRate30d: 0,
+        volume30d: []
+      },
+      apiBaseUrl: "https://api.marketplace.example.com",
+      webBaseUrl: "https://marketplace.example.com"
+    });
+
+    expect(detail.useThisServicePrompt).toContain("route-scoped wallet session");
+    expect(detail.useThisServicePrompt).toContain("GET /api/jobs/{jobToken}");
+  });
+
   it("builds testnet routes when the deployment targets testnet", () => {
     const routes = buildMarketplaceRoutes(
       resolveMarketplaceNetworkConfig({

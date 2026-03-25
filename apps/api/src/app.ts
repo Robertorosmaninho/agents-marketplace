@@ -25,6 +25,7 @@ import {
   computeNextPollAt,
   computeTimeoutAt,
   createChallenge,
+  createMarketplaceCallbackAuthToken,
   createDefaultProviderRegistry,
   createOpaqueToken,
   createProviderRuntimeKeyMaterial,
@@ -53,6 +54,7 @@ import {
   buildMarketplaceIdentityHeaders,
   usesMarketplaceTreasurySettlement,
   validateJsonSchema,
+  verifyMarketplaceCallbackAuthToken,
   verifyMarketplaceCallbackHeaders,
   verifySessionToken,
   verifyWalletChallenge,
@@ -290,6 +292,7 @@ const runtimeReserveSchema = z.object({
   buyerWallet: z.string().min(1),
   amount: decimalAmountSchema,
   idempotencyKey: z.string().min(1).max(200),
+  jobToken: z.string().min(1).max(200).optional().nullable(),
   providerReference: z.string().max(500).optional().nullable(),
   expiresAt: z.string().datetime().optional().nullable()
 });
@@ -1336,12 +1339,30 @@ export function createMarketplaceApi(options: MarketplaceApiOptions): Express {
     }
 
     try {
+      const reserveJobToken = parsed.data.jobToken ?? req.header(MARKETPLACE_JOB_TOKEN_HEADER) ?? null;
+      if (reserveJobToken) {
+        const job = await options.store.getJob(reserveJobToken);
+        if (!job || job.serviceId !== runtimeKey.serviceId) {
+          return res.status(404).json({ error: "Async prepaid job not found." });
+        }
+        if (job.status !== "pending") {
+          return res.status(409).json({ error: "Async prepaid job is no longer pending." });
+        }
+        if (!isPrepaidCreditBilling(job.routeSnapshot) || job.routeSnapshot.mode !== "async") {
+          return res.status(400).json({ error: "jobToken is only valid for async prepaid-credit jobs." });
+        }
+        if (job.buyerWallet !== buyerWallet) {
+          return res.status(409).json({ error: "buyerWallet does not match the async prepaid job." });
+        }
+      }
+
       const result = await options.store.reserveCredit({
         serviceId: runtimeKey.serviceId,
         buyerWallet,
         currency: networkConfig.tokenSymbol,
         amount: decimalToRawString(parsed.data.amount, 6),
         idempotencyKey: parsed.data.idempotencyKey,
+        jobToken: parsed.data.jobToken ?? req.header(MARKETPLACE_JOB_TOKEN_HEADER) ?? null,
         providerReference: parsed.data.providerReference ?? null,
         expiresAt: clampCreditReservationExpiry(parsed.data.expiresAt ?? null)
       });
@@ -1452,9 +1473,19 @@ export function createMarketplaceApi(options: MarketplaceApiOptions): Express {
       return res.status(401).json({ error: "Missing bearer token." });
     }
 
-    const runtimeKey = await options.store.getProviderRuntimeKeyByPlaintext(bearerToken);
-    if (!runtimeKey) {
-      return res.status(401).json({ error: "Invalid runtime key." });
+    const job = await options.store.getJob(req.params.jobToken);
+    if (!job) {
+      return res.status(404).json({ error: "Job not found." });
+    }
+
+    try {
+      verifyMarketplaceCallbackAuthToken({
+        jobToken: job.jobToken,
+        token: bearerToken,
+        secret: options.secretsKey
+      });
+    } catch (error) {
+      return res.status(401).json({ error: error instanceof Error ? error.message : "Invalid callback bearer token." });
     }
 
     try {
@@ -1463,7 +1494,7 @@ export function createMarketplaceApi(options: MarketplaceApiOptions): Express {
         path: req.path,
         body: (req as RawBodyRequest).rawBody ?? Buffer.alloc(0),
         headers: req.headers as Record<string, string | string[] | undefined>,
-        runtimeKey: bearerToken
+        sharedSecret: bearerToken
       });
     } catch (error) {
       return res.status(401).json({ error: error instanceof Error ? error.message : "Invalid callback signature." });
@@ -1472,15 +1503,6 @@ export function createMarketplaceApi(options: MarketplaceApiOptions): Express {
     const parsed = callbackBodySchema.safeParse(req.body ?? {});
     if (!parsed.success) {
       return res.status(400).json({ error: "Callback validation failed.", issues: parsed.error.issues });
-    }
-
-    const job = await options.store.getJob(req.params.jobToken);
-    if (!job) {
-      return res.status(404).json({ error: "Job not found." });
-    }
-
-    if (job.serviceId !== runtimeKey.serviceId) {
-      return res.status(403).json({ error: "Callback runtime key does not match the job service." });
     }
 
     if (job.providerJobId !== parsed.data.providerJobId) {
@@ -2650,7 +2672,10 @@ async function executeHttpRoute(input: {
             input.marketplaceBaseUrl!,
             `/provider/runtime/jobs/${input.jobToken}/callback`
           );
-          headers[MARKETPLACE_CALLBACK_AUTH_HEADER] = `Bearer ${runtimeKey}`;
+          headers[MARKETPLACE_CALLBACK_AUTH_HEADER] = `Bearer ${createMarketplaceCallbackAuthToken({
+            jobToken: input.jobToken,
+            secret: input.secretsKey
+          })}`;
         }
       }
     } else if (input.route.mode === "async" || input.route.settlementMode === "community_direct" || isPrepaidCreditBilling(input.route)) {
@@ -3653,7 +3678,7 @@ async function expireAsyncPrepaidReservation(store: MarketplaceStore, job: Pick<
     return;
   }
 
-  const reservation = await store.getCreditReservationByIdempotencyKey(job.serviceId, job.jobToken);
+  const reservation = await store.getCreditReservationByJobToken(job.serviceId, job.jobToken);
   if (!reservation || reservation.status !== "reserved") {
     return;
   }

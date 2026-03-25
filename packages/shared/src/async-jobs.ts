@@ -1,4 +1,5 @@
 import { DEFAULT_JOB_POLL_INTERVAL_MS } from "./constants.js";
+import { requiresX402Payment } from "./billing.js";
 import type {
   JobRecord,
   MarketplaceRoute,
@@ -30,7 +31,7 @@ export async function resolveAsyncJobFailure(input: {
   error: string;
 }): Promise<{ job: JobRecord; refund: RefundRecord | null }> {
   const job = await input.store.failJob(input.job.jobToken, input.error);
-  if (!job.payoutSplit.usesTreasurySettlement) {
+  if (!job.payoutSplit.usesTreasurySettlement || !requiresX402Payment(job.routeSnapshot)) {
     return { job, refund: null };
   }
 

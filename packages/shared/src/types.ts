@@ -874,6 +874,7 @@ export interface CreditReservationRecord {
   buyerWallet: string;
   currency: MarketplaceTokenSymbol;
   idempotencyKey: string;
+  jobToken: string | null;
   providerReference: string | null;
   status: "reserved" | "captured" | "released" | "expired";
   reservedAmount: string;
@@ -1046,6 +1047,7 @@ export interface MarketplaceStore {
     currency: MarketplaceTokenSymbol;
     amount: string;
     idempotencyKey: string;
+    jobToken?: string | null;
     providerReference?: string | null;
     expiresAt: string;
     metadata?: Record<string, unknown>;
@@ -1071,6 +1073,8 @@ export interface MarketplaceStore {
   }>;
   getCreditReservationById(reservationId: string): Promise<CreditReservationRecord | null>;
   getCreditReservationByIdempotencyKey(serviceId: string, idempotencyKey: string): Promise<CreditReservationRecord | null>;
+  getCreditReservationByJobToken(serviceId: string, jobToken: string): Promise<CreditReservationRecord | null>;
+  listExpiredCreditReservations(limit: number, expiresBefore?: string): Promise<CreditReservationRecord[]>;
   extendCreditReservation(input: {
     reservationId: string;
     expiresAt: string;

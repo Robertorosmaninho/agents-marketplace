@@ -168,6 +168,12 @@ export async function runMarketplaceWorkerCycle(options: MarketplaceWorkerOption
     });
   }
 
+  await expireStaleCreditReservations({
+    store: options.store,
+    limit: options.limit ?? 10,
+    now: new Date(now).toISOString()
+  });
+
   await recoverStalePendingPayments({
     store: options.store,
     refundService: options.refundService,
@@ -352,12 +358,23 @@ async function expireAsyncPrepaidReservation(store: MarketplaceStore, job: {
     return;
   }
 
-  const reservation = await store.getCreditReservationByIdempotencyKey(job.serviceId, job.jobToken);
+  const reservation = await store.getCreditReservationByJobToken(job.serviceId, job.jobToken);
   if (!reservation || reservation.status !== "reserved") {
     return;
   }
 
   await store.expireCreditReservation(reservation.id);
+}
+
+async function expireStaleCreditReservations(input: {
+  store: MarketplaceStore;
+  limit: number;
+  now?: string;
+}) {
+  const reservations = await input.store.listExpiredCreditReservations(input.limit, input.now);
+  for (const reservation of reservations) {
+    await input.store.expireCreditReservation(reservation.id);
+  }
 }
 
 function applyUpstreamAuthHeaders(

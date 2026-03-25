@@ -1,5 +1,5 @@
 import { buildServiceSummary } from "./catalog.js";
-import { requiresX402Payment, routePriceLabel } from "./billing.js";
+import { requiresWalletSession, requiresX402Payment, routePriceLabel } from "./billing.js";
 import {
   MARKETPLACE_NAME,
   MARKETPLACE_VERSION,
@@ -78,7 +78,7 @@ export function buildOpenApiDocument(input: {
     },
     "/api/jobs/{jobToken}": {
       get: {
-        summary: "Retrieve a previously paid async job using a wallet-bound session."
+        summary: "Retrieve a previously authorized async job using a wallet-bound session."
       }
     },
     "/catalog/services": {
@@ -171,6 +171,31 @@ export function buildOpenApiDocument(input: {
         summary: "Submit the current provider service draft for review."
       }
     },
+    "/provider/runtime/credits/reserve": {
+      post: {
+        summary: "Reserve prepaid credit from a provider runtime."
+      }
+    },
+    "/provider/runtime/credits/{reservationId}/capture": {
+      post: {
+        summary: "Capture a reserved prepaid credit balance."
+      }
+    },
+    "/provider/runtime/credits/{reservationId}/release": {
+      post: {
+        summary: "Release a reserved prepaid credit balance."
+      }
+    },
+    "/provider/runtime/credits/{reservationId}/extend": {
+      post: {
+        summary: "Extend the expiry for a reserved prepaid credit balance."
+      }
+    },
+    "/provider/runtime/jobs/{jobToken}/callback": {
+      post: {
+        summary: "Complete or fail an async provider job by marketplace callback."
+      }
+    },
     "/internal/suggestions": {
       get: {
         summary: "List private marketplace suggestions for operator review."
@@ -259,7 +284,7 @@ export function buildOpenApiDocument(input: {
 
     const parameters: Array<Record<string, unknown>> = [];
 
-    if (route.billing.type === "prepaid_credit") {
+    if (requiresWalletSession(route)) {
       responses["401"] = {
         description: "Wallet session bearer token required."
       };
