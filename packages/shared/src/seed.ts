@@ -109,6 +109,7 @@ function buildQuickInsightRoute(config: MarketplaceNetworkConfig): MarketplaceRo
       providerBps: 0
     },
     executorKind: "mock",
+    asyncConfig: null,
     upstreamBaseUrl: null,
     upstreamPath: null,
     upstreamAuthMode: "none",
@@ -185,6 +186,11 @@ function buildAsyncReportRoute(config: MarketplaceNetworkConfig): MarketplaceRou
       providerBps: 0
     },
     executorKind: "mock",
+    asyncConfig: {
+      strategy: "poll",
+      timeoutMs: 60_000,
+      pollPath: "/mock/poll"
+    },
     upstreamBaseUrl: null,
     upstreamPath: null,
     upstreamAuthMode: "none",
@@ -210,6 +216,7 @@ function buildProviderEndpointDraft(serviceId: string, route: MarketplaceRoute):
     price: route.price,
     billing: structuredClone(route.billing),
     mode: route.mode,
+    asyncConfig: structuredClone(route.asyncConfig ?? null),
     requestSchemaJson: structuredClone(route.requestSchemaJson),
     responseSchemaJson: structuredClone(route.responseSchemaJson),
     requestExample: structuredClone(route.requestExample),
@@ -336,6 +343,7 @@ export function buildSeededPublishedEndpointVersions(
         billing: structuredClone(draft.billing),
         title: draft.title,
         description: draft.description,
+        asyncConfig: structuredClone(draft.asyncConfig),
         payout: {
           ...draft.payout
         },

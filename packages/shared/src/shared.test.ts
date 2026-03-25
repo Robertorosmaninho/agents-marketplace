@@ -414,6 +414,76 @@ describe("shared marketplace helpers", () => {
     ]);
   });
 
+  it("describes async free routes with wallet-session auth and runtime callback docs", () => {
+    const seededService = TESTNET_SERVICE_DEFINITIONS.find((candidate) => candidate.slug === "mock-research-signals");
+    const seededRoute = TESTNET_MARKETPLACE_ROUTES.find((candidate) => candidate.routeId === "mock.async-report.v1");
+    if (!seededService || !seededRoute) {
+      throw new Error("Mock seeded service is missing.");
+    }
+
+    const freeAsyncRoute = {
+      ...seededRoute,
+      routeId: "mock.free-async-insight.v1",
+      operation: "free-async-insight",
+      billing: {
+        type: "free" as const
+      },
+      price: "Free",
+      asyncConfig: {
+        strategy: "webhook" as const,
+        timeoutMs: 300000,
+        pollPath: null
+      }
+    };
+    const freeAsyncService = {
+      ...seededService,
+      slug: "mock-free-async-signals",
+      routeIds: [freeAsyncRoute.routeId]
+    };
+
+    const document = buildOpenApiDocument({
+      baseUrl: "https://api.marketplace.example.com",
+      services: [freeAsyncService],
+      routes: [freeAsyncRoute]
+    });
+    const freeAsyncPath = document.paths["/api/mock/free-async-insight"] as {
+      post?: {
+        responses?: Record<string, unknown>;
+        parameters?: Array<{ name?: string; in?: string; required?: boolean }>;
+      };
+    };
+
+    expect(freeAsyncPath.post?.responses?.["202"]).toBeDefined();
+    expect(freeAsyncPath.post?.responses?.["401"]).toBeDefined();
+    expect(freeAsyncPath.post?.responses?.["403"]).toBeDefined();
+    expect(freeAsyncPath.post?.responses?.["402"]).toBeUndefined();
+    expect(freeAsyncPath.post?.parameters).toEqual([
+      expect.objectContaining({
+        name: "Authorization",
+        in: "header",
+        required: true
+      })
+    ]);
+    expect(document.paths["/provider/runtime/jobs/{jobToken}/callback"]).toBeDefined();
+    expect(document.paths["/provider/runtime/credits/{reservationId}/extend"]).toBeDefined();
+
+    const detail = buildServiceDetail({
+      service: freeAsyncService,
+      endpoints: [buildPublishedEndpointFromRoute(freeAsyncRoute)],
+      analytics: {
+        totalCalls: 0,
+        revenueRaw: "0",
+        successRate30d: 0,
+        volume30d: []
+      },
+      apiBaseUrl: "https://api.marketplace.example.com",
+      webBaseUrl: "https://marketplace.example.com"
+    });
+
+    expect(detail.useThisServicePrompt).toContain("route-scoped wallet session");
+    expect(detail.useThisServicePrompt).toContain("GET /api/jobs/{jobToken}");
+  });
+
   it("builds testnet routes when the deployment targets testnet", () => {
     const routes = buildMarketplaceRoutes(
       resolveMarketplaceNetworkConfig({
@@ -517,6 +587,7 @@ describe("shared marketplace helpers", () => {
       paymentPayload: "payload",
       facilitatorResponse: { isValid: true },
       jobToken: "job_catalog_1",
+      requestId: "request_catalog_1",
       providerJobId: "provider_catalog_1",
       requestBody: { topic: "catalog analytics" },
       responseBody: { jobToken: "job_catalog_1", status: "pending" },
@@ -681,6 +752,125 @@ describe("shared marketplace helpers", () => {
     expect(second.id).toBe(first.id);
     expect(second.paymentId).toBe(first.paymentId);
     expect(second.jobToken).toBeNull();
+  });
+
+  it("resets async job timeout metadata when acceptance is persisted after a placeholder", async () => {
+    const store = new InMemoryMarketplaceStore(TESTNET_NETWORK_CONFIG);
+    const asyncRoute = TESTNET_MARKETPLACE_ROUTES.find((route) => route.routeId === "mock.async-report.v1");
+
+    if (!asyncRoute) {
+      throw new Error("Missing async seeded route.");
+    }
+
+    await store.savePendingAsyncJob({
+      jobToken: "job_timeout_reset_1",
+      paymentId: "payment_timeout_reset_1",
+      buyerWallet: "fast1buyertimeout000000000000000000000000000000000000000000000000",
+      route: asyncRoute,
+      quotedPrice: "150000",
+      payoutSplit: buildEscrowSplit({
+        providerAccountId: "mock",
+        providerWallet: null,
+        marketplaceBps: 10000,
+        marketplaceAmount: "150000",
+        providerBps: 0,
+        providerAmount: "0"
+      }),
+      requestId: "request_timeout_reset_1",
+      requestBody: { topic: "timeout reset" },
+      nextPollAt: "2026-03-20T00:05:00.000Z",
+      timeoutAt: null
+    });
+
+    await store.saveAsyncAcceptance({
+      paymentId: "payment_timeout_reset_1",
+      normalizedRequestHash: "hash_timeout_reset_1",
+      buyerWallet: "fast1buyertimeout000000000000000000000000000000000000000000000000",
+      route: asyncRoute,
+      quotedPrice: "150000",
+      payoutSplit: buildEscrowSplit({
+        providerAccountId: "mock",
+        providerWallet: null,
+        marketplaceBps: 10000,
+        marketplaceAmount: "150000",
+        providerBps: 0,
+        providerAmount: "0"
+      }),
+      paymentPayload: "payload-timeout-reset-1",
+      facilitatorResponse: { isValid: true },
+      jobToken: "job_timeout_reset_1",
+      requestId: "request_timeout_reset_1",
+      providerJobId: "provider_timeout_reset_1",
+      requestBody: { topic: "timeout reset" },
+      nextPollAt: "2026-03-20T00:06:00.000Z",
+      timeoutAt: "2026-03-20T00:10:00.000Z",
+      responseBody: {
+        jobToken: "job_timeout_reset_1",
+        status: "pending"
+      },
+      responseHeaders: {}
+    });
+
+    const job = await store.getJob("job_timeout_reset_1");
+    expect(job?.nextPollAt).toBe("2026-03-20T00:06:00.000Z");
+    expect(job?.timeoutAt).toBe("2026-03-20T00:10:00.000Z");
+  });
+
+  it("updates placeholder jobs with provider acceptance metadata before idempotency is completed", async () => {
+    const store = new InMemoryMarketplaceStore(TESTNET_NETWORK_CONFIG);
+    const asyncRoute = TESTNET_MARKETPLACE_ROUTES.find((route) => route.routeId === "mock.async-report.v1");
+
+    if (!asyncRoute) {
+      throw new Error("Missing async seeded route.");
+    }
+
+    await store.savePendingAsyncJob({
+      jobToken: "job_pending_acceptance_1",
+      paymentId: "payment_pending_acceptance_1",
+      buyerWallet: "fast1buyeraccept000000000000000000000000000000000000000000000000",
+      route: asyncRoute,
+      quotedPrice: "150000",
+      payoutSplit: buildEscrowSplit({
+        providerAccountId: "mock",
+        providerWallet: null,
+        marketplaceBps: 10000,
+        marketplaceAmount: "150000",
+        providerBps: 0,
+        providerAmount: "0"
+      }),
+      requestId: "request_pending_acceptance_1",
+      requestBody: { topic: "placeholder" },
+      nextPollAt: "2026-03-20T00:05:00.000Z",
+      timeoutAt: null
+    });
+
+    await store.savePendingAsyncJob({
+      jobToken: "job_pending_acceptance_1",
+      paymentId: "payment_pending_acceptance_1",
+      buyerWallet: "fast1buyeraccept000000000000000000000000000000000000000000000000",
+      route: asyncRoute,
+      quotedPrice: "150000",
+      payoutSplit: buildEscrowSplit({
+        providerAccountId: "mock",
+        providerWallet: null,
+        marketplaceBps: 10000,
+        marketplaceAmount: "150000",
+        providerBps: 0,
+        providerAmount: "0"
+      }),
+      requestId: "request_pending_acceptance_1",
+      providerJobId: "provider_pending_acceptance_1",
+      requestBody: { topic: "placeholder" },
+      providerState: { stage: "accepted" },
+      nextPollAt: "2026-03-20T00:06:00.000Z",
+      timeoutAt: "2026-03-20T00:10:00.000Z"
+    });
+
+    const job = await store.getJob("job_pending_acceptance_1");
+    expect(job?.providerJobId).toBe("provider_pending_acceptance_1");
+    expect(job?.providerState).toEqual({ stage: "accepted" });
+    expect(job?.nextPollAt).toBe("2026-03-20T00:06:00.000Z");
+    expect(job?.timeoutAt).toBe("2026-03-20T00:10:00.000Z");
   });
 
   it("tracks prepaid credit balances across topup, reserve, capture, release, and expiry", async () => {

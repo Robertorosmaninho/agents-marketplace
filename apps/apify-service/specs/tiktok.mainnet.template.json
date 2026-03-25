@@ -1,0 +1,67 @@
+{
+  "profile": {
+    "displayName": "TikTok Scraper",
+    "bio": "Marketplace-hosted TikTok scraping powered by Apify.",
+    "websiteUrl": "https://fastmainnetapifytiktok.8o.vc",
+    "contactEmail": "replace-with-provider-email@example.com"
+  },
+  "service": {
+    "serviceType": "marketplace_proxy",
+    "slug": "apify-tiktok-scraper",
+    "apiNamespace": "apify-tiktok",
+    "name": "TikTok Scraper",
+    "tagline": "Run Apify TikTok scraping through a Fast-native async proxy.",
+    "about": "TikTok Scraper starts the Apify TikTok actor through a marketplace-hosted async wrapper. Buyers pay on Fast and retrieve the completed dataset through the marketplace job flow.",
+    "categories": ["Social", "Research", "Marketing"],
+    "promptIntro": "I want to use the TikTok Scraper service on Fast Marketplace.",
+    "setupInstructions": [
+      "Fund a Fast wallet on mainnet.",
+      "Call the paid run route with your actor input.",
+      "Keep the returned job token and poll the marketplace job route for completion."
+    ],
+    "websiteUrl": "https://fastmainnetapifytiktok.8o.vc",
+    "payoutWallet": "replace-with-mainnet-fast-wallet"
+  },
+  "endpoints": [
+    {
+      "endpointType": "marketplace_proxy",
+      "operation": "run",
+      "title": "Run Scraper",
+      "description": "Start an async TikTok scraping job through the Apify wrapper.",
+      "billingType": "fixed_x402",
+      "price": "$0.25",
+      "method": "POST",
+      "mode": "async",
+      "asyncStrategy": "poll",
+      "asyncTimeoutMs": 1800000,
+      "pollPath": "/runs/poll",
+      "requestSchemaJson": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "responseSchemaJson": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "requestExample": {
+        "profiles": ["https://www.tiktok.com/@example"],
+        "resultsPerPage": 25
+      },
+      "responseExample": {
+        "runId": "apify_run_123",
+        "status": "SUCCEEDED",
+        "items": [
+          {
+            "authorMeta": {
+              "name": "example"
+            }
+          }
+        ]
+      },
+      "usageNotes": "The marketplace returns a job token immediately and stores the completed actor output on the job record.",
+      "upstreamBaseUrl": "https://fastmainnetapifytiktok.8o.vc",
+      "upstreamPath": "/run",
+      "upstreamAuthMode": "none"
+    }
+  ]
+}

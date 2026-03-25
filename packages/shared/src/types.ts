@@ -2,6 +2,7 @@ import type { MarketplacePaymentNetwork, MarketplaceTokenSymbol } from "./networ
 
 export type JsonSchema = Record<string, unknown>;
 export type RouteMode = "sync" | "async";
+export type AsyncRouteStrategy = "poll" | "webhook";
 export type ResourceType = "job" | "site" | "api";
 export type JobStatus = "pending" | "completed" | "failed";
 export type RefundStatus = "not_required" | "pending" | "sent" | "failed";
@@ -67,6 +68,12 @@ export interface FreeBilling {
 
 export type RouteBilling = FixedX402Billing | TopupX402VariableBilling | PrepaidCreditBilling | FreeBilling;
 
+export interface RouteAsyncConfig {
+  strategy: AsyncRouteStrategy;
+  timeoutMs: number;
+  pollPath?: string | null;
+}
+
 export interface MarketplaceRoute {
   routeId: string;
   provider: string;
@@ -87,6 +94,7 @@ export interface MarketplaceRoute {
   requestSchemaJson: JsonSchema;
   responseSchemaJson: JsonSchema;
   executorKind: RouteExecutorKind;
+  asyncConfig?: RouteAsyncConfig | null;
   upstreamBaseUrl?: string | null;
   upstreamPath?: string | null;
   upstreamAuthMode?: UpstreamAuthMode | null;
@@ -402,6 +410,7 @@ export interface MarketplaceProviderEndpointDraftRecord {
   responseExample: unknown;
   usageNotes: string | null;
   executorKind: RouteExecutorKind;
+  asyncConfig: RouteAsyncConfig | null;
   upstreamBaseUrl: string | null;
   upstreamPath: string | null;
   upstreamAuthMode: UpstreamAuthMode | null;
@@ -527,7 +536,10 @@ export interface CreateMarketplaceProviderEndpointDraftInput {
   billingType: RouteBillingType;
   minAmount?: string | null;
   maxAmount?: string | null;
-  mode: "sync";
+  mode: RouteMode;
+  asyncStrategy?: AsyncRouteStrategy | null;
+  asyncTimeoutMs?: number | null;
+  pollPath?: string | null;
   requestSchemaJson: JsonSchema;
   responseSchemaJson: JsonSchema;
   requestExample: unknown;
@@ -567,6 +579,10 @@ export interface UpdateMarketplaceProviderEndpointDraftInput {
   billingType?: RouteBillingType;
   minAmount?: string | null;
   maxAmount?: string | null;
+  mode?: RouteMode;
+  asyncStrategy?: AsyncRouteStrategy | null;
+  asyncTimeoutMs?: number | null;
+  pollPath?: string | null;
   requestSchemaJson?: JsonSchema;
   responseSchemaJson?: JsonSchema;
   requestExample?: unknown;
@@ -636,7 +652,7 @@ export interface SyncExecuteResult {
 export interface AsyncExecuteResult {
   kind: "async";
   providerJobId: string;
-  state?: Record<string, unknown>;
+  providerState?: Record<string, unknown>;
   pollAfterMs?: number;
 }
 
@@ -644,7 +660,7 @@ export type ExecuteResult = SyncExecuteResult | AsyncExecuteResult;
 
 export interface PollPendingResult {
   status: "pending";
-  state?: Record<string, unknown>;
+  providerState?: Record<string, unknown>;
   pollAfterMs?: number;
 }
 
@@ -657,7 +673,7 @@ export interface PollFailedResult {
   status: "failed";
   error: string;
   permanent: boolean;
-  state?: Record<string, unknown>;
+  providerState?: Record<string, unknown>;
 }
 
 export type PollResult = PollPendingResult | PollCompletedResult | PollFailedResult;
@@ -748,17 +764,21 @@ export interface IdempotencyRecord {
 
 export interface JobRecord {
   jobToken: string;
-  paymentId: string;
+  paymentId: string | null;
   routeId: string;
+  serviceId: string | null;
   provider: string;
   operation: string;
   buyerWallet: string;
   quotedPrice: string;
   payoutSplit: PersistedPayoutSplit;
-  providerJobId: string;
+  requestId: string;
+  providerJobId: string | null;
   requestBody: unknown;
   routeSnapshot: MarketplaceRoute;
   providerState: Record<string, unknown> | null;
+  nextPollAt: string | null;
+  timeoutAt: string | null;
   status: JobStatus;
   resultBody: unknown;
   errorMessage: string | null;
@@ -774,7 +794,7 @@ export interface ProviderAttemptRecord {
   routeId: string;
   requestId: string | null;
   responseStatusCode: number | null;
-  phase: "execute" | "poll" | "refund";
+  phase: "execute" | "poll" | "callback" | "refund";
   status: "pending" | "succeeded" | "failed";
   requestPayload: unknown;
   responsePayload: unknown;
@@ -854,6 +874,7 @@ export interface CreditReservationRecord {
   buyerWallet: string;
   currency: MarketplaceTokenSymbol;
   idempotencyKey: string;
+  jobToken: string | null;
   providerReference: string | null;
   status: "reserved" | "captured" | "released" | "expired";
   reservedAmount: string;
@@ -907,12 +928,31 @@ export interface SaveAsyncAcceptanceInput {
   paymentPayload: string;
   facilitatorResponse: unknown;
   jobToken: string;
+  serviceId?: string | null;
+  requestId: string;
   providerJobId: string;
   requestBody: unknown;
   providerState?: Record<string, unknown>;
+  nextPollAt?: string | null;
+  timeoutAt?: string | null;
   responseBody: unknown;
   responseHeaders?: Record<string, string>;
-  requestId?: string | null;
+}
+
+export interface SavePendingAsyncJobInput {
+  jobToken: string;
+  paymentId?: string | null;
+  buyerWallet: string;
+  route: MarketplaceRoute;
+  quotedPrice: string;
+  payoutSplit: PersistedPayoutSplit;
+  serviceId?: string | null;
+  requestId: string;
+  providerJobId?: string | null;
+  requestBody: unknown;
+  providerState?: Record<string, unknown> | null;
+  nextPollAt?: string | null;
+  timeoutAt?: string | null;
 }
 
 export interface ClaimPaymentExecutionInput {
@@ -959,12 +999,19 @@ export interface MarketplaceStore {
   getIdempotencyByPaymentId(paymentId: string): Promise<IdempotencyRecord | null>;
   claimPaymentExecution(input: ClaimPaymentExecutionInput): Promise<ClaimPaymentExecutionResult>;
   touchPendingPaymentExecution(paymentId: string): Promise<IdempotencyRecord | null>;
+  completePendingJobExecution(input: {
+    paymentId: string;
+    jobToken: string;
+    responseBody: unknown;
+    responseHeaders?: Record<string, string>;
+  }): Promise<IdempotencyRecord | null>;
   listStalePendingPaymentExecutions(updatedBefore: string, limit: number): Promise<IdempotencyRecord[]>;
   saveSyncIdempotency(input: SaveSyncIdempotencyInput): Promise<IdempotencyRecord>;
   saveAsyncAcceptance(input: SaveAsyncAcceptanceInput): Promise<{ idempotency: IdempotencyRecord; job: JobRecord }>;
+  savePendingAsyncJob(input: SavePendingAsyncJobInput): Promise<JobRecord>;
   getJob(jobToken: string): Promise<JobRecord | null>;
-  listPendingJobs(limit: number): Promise<JobRecord[]>;
-  updateJobPending(jobToken: string, providerState?: Record<string, unknown>): Promise<JobRecord>;
+  listPendingJobs(input: { limit: number; now?: string }): Promise<JobRecord[]>;
+  updateJobPending(input: { jobToken: string; providerState?: Record<string, unknown> | null; nextPollAt?: string | null }): Promise<JobRecord>;
   completeJob(jobToken: string, body: unknown): Promise<JobRecord>;
   failJob(jobToken: string, error: string): Promise<JobRecord>;
   createAccessGrant(input: {
@@ -980,12 +1027,13 @@ export interface MarketplaceStore {
     routeId: string;
     requestId?: string | null;
     responseStatusCode?: number | null;
-    phase: "execute" | "poll" | "refund";
+    phase: "execute" | "poll" | "callback" | "refund";
     status: "pending" | "succeeded" | "failed";
     requestPayload?: unknown;
     responsePayload?: unknown;
     errorMessage?: string;
   }): Promise<ProviderAttemptRecord>;
+  getLatestSuccessfulProviderExecuteAttempt(jobToken: string): Promise<ProviderAttemptRecord | null>;
   createRefund(input: {
     jobToken?: string | null;
     paymentId: string;
@@ -1023,6 +1071,7 @@ export interface MarketplaceStore {
     currency: MarketplaceTokenSymbol;
     amount: string;
     idempotencyKey: string;
+    jobToken?: string | null;
     providerReference?: string | null;
     expiresAt: string;
     metadata?: Record<string, unknown>;
@@ -1047,6 +1096,13 @@ export interface MarketplaceStore {
     entry: CreditLedgerEntryRecord | null;
   }>;
   getCreditReservationById(reservationId: string): Promise<CreditReservationRecord | null>;
+  getCreditReservationByIdempotencyKey(serviceId: string, idempotencyKey: string): Promise<CreditReservationRecord | null>;
+  getCreditReservationByJobToken(serviceId: string, jobToken: string): Promise<CreditReservationRecord | null>;
+  listExpiredCreditReservations(limit: number, expiresBefore?: string): Promise<CreditReservationRecord[]>;
+  extendCreditReservation(input: {
+    reservationId: string;
+    expiresAt: string;
+  }): Promise<{ account: CreditAccountRecord; reservation: CreditReservationRecord }>;
   rotateProviderRuntimeKey(serviceId: string, wallet: string, secretMaterial: {
     keyHash: string;
     keyPrefix: string;

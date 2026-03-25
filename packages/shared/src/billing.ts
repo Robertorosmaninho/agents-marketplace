@@ -70,7 +70,7 @@ export function isFreeBilling(route: MarketplaceRoute | { billing: { type: strin
 }
 
 export function requiresWalletSession(route: MarketplaceRoute): boolean {
-  return isPrepaidCreditBilling(route);
+  return isPrepaidCreditBilling(route) || (isFreeBilling(route) && route.mode === "async");
 }
 
 export function requiresX402Payment(route: MarketplaceRoute): boolean {

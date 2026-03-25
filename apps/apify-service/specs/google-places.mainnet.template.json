@@ -1,0 +1,66 @@
+{
+  "profile": {
+    "displayName": "Google Places Scraper",
+    "bio": "Marketplace-hosted Google Places scraping powered by Apify.",
+    "websiteUrl": "https://fastmainnetapifygoogleplaces.8o.vc",
+    "contactEmail": "replace-with-provider-email@example.com"
+  },
+  "service": {
+    "serviceType": "marketplace_proxy",
+    "slug": "apify-google-places-scraper",
+    "apiNamespace": "apify-google-places",
+    "name": "Google Places Scraper",
+    "tagline": "Run Apify Google Places scraping through a Fast-native async proxy.",
+    "about": "Google Places Scraper starts the Apify Google Places actor through a marketplace-hosted async wrapper. Buyers pay on Fast and retrieve the completed dataset through the marketplace job flow.",
+    "categories": ["Research", "Sales", "Lead Generation"],
+    "promptIntro": "I want to use the Google Places Scraper service on Fast Marketplace.",
+    "setupInstructions": [
+      "Fund a Fast wallet on mainnet.",
+      "Call the paid run route with your actor input.",
+      "Keep the returned job token and poll the marketplace job route for completion."
+    ],
+    "websiteUrl": "https://fastmainnetapifygoogleplaces.8o.vc",
+    "payoutWallet": "replace-with-mainnet-fast-wallet"
+  },
+  "endpoints": [
+    {
+      "endpointType": "marketplace_proxy",
+      "operation": "run",
+      "title": "Run Scraper",
+      "description": "Start an async Google Places scraping job through the Apify wrapper.",
+      "billingType": "fixed_x402",
+      "price": "$0.25",
+      "method": "POST",
+      "mode": "async",
+      "asyncStrategy": "poll",
+      "asyncTimeoutMs": 1800000,
+      "pollPath": "/runs/poll",
+      "requestSchemaJson": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "responseSchemaJson": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "requestExample": {
+        "searchStringsArray": ["coffee shops in san francisco"],
+        "maxCrawledPlacesPerSearch": 20
+      },
+      "responseExample": {
+        "runId": "apify_run_123",
+        "status": "SUCCEEDED",
+        "items": [
+          {
+            "title": "Example Cafe",
+            "address": "San Francisco, CA"
+          }
+        ]
+      },
+      "usageNotes": "The marketplace returns a job token immediately and stores the completed actor output on the job record.",
+      "upstreamBaseUrl": "https://fastmainnetapifygoogleplaces.8o.vc",
+      "upstreamPath": "/run",
+      "upstreamAuthMode": "none"
+    }
+  ]
+}

@@ -4,7 +4,9 @@ import request from "supertest";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  buildMarketplaceCallbackHeaders,
   InMemoryMarketplaceStore,
+  MARKETPLACE_JOB_TOKEN_HEADER,
   resolveMarketplaceNetworkConfig,
   verifyMarketplaceIdentityHeaders,
   type ProviderExecuteContext
@@ -65,6 +67,7 @@ async function createTestApp(
     store?: InMemoryMarketplaceStore;
     providers?: Parameters<typeof createMarketplaceApi>[0]["providers"];
     refundService?: Parameters<typeof createMarketplaceApi>[0]["refundService"];
+    baseUrl?: string;
   } = {}
 ) {
   const buyer = await createTestWallet();
@@ -99,6 +102,7 @@ async function createTestApp(
         }
       },
     providers: input.providers,
+    baseUrl: input.baseUrl,
     webBaseUrl: "https://marketplace.example.com"
   });
 
@@ -531,7 +535,7 @@ describe("marketplace api", () => {
     expect(job?.payoutSplit.providerAccountId).toBe("provider_marketplace");
   });
 
-  it("recovers a stale pending async acceptance without changing the marketplace request id", async () => {
+  it("keeps accepted async payments replayable when saveAsyncAcceptance fails after upstream acceptance", async () => {
     class FlakyAsyncStore extends InMemoryMarketplaceStore {
       private failNextAcceptanceWrite = true;
 
@@ -562,7 +566,7 @@ describe("marketplace api", () => {
               kind: "async" as const,
               providerJobId: `provider_${context.requestId}`,
               pollAfterMs: 5_000,
-              state: {
+              providerState: {
                 requestId: context.requestId
               }
             };
@@ -571,7 +575,7 @@ describe("marketplace api", () => {
             return {
               status: "pending" as const,
               pollAfterMs: 5_000,
-              state: {}
+              providerState: {}
             };
           }
         }
@@ -584,7 +588,8 @@ describe("marketplace api", () => {
       .set("PAYMENT-IDENTIFIER", "payment_async_recovery_1")
       .send({ topic: "market depth", delayMs: 60_000 });
 
-    expect(first.status).toBe(500);
+    expect(first.status).toBe(202);
+    expect(first.body.jobToken).toBeDefined();
     expect(requestIds).toHaveLength(1);
 
     const second = await request(app)
@@ -594,40 +599,15 @@ describe("marketplace api", () => {
       .send({ topic: "market depth", delayMs: 60_000 });
 
     expect(second.status).toBe(202);
-    expect(second.body.status).toBe("processing");
+    expect(second.body).toEqual(first.body);
     expect(requestIds).toHaveLength(1);
-
-    const idempotencyByPaymentId = (store as unknown as {
-      idempotencyByPaymentId: Map<string, {
-        updatedAt: string;
-      }>;
-    }).idempotencyByPaymentId;
-    const pending = idempotencyByPaymentId.get("payment_async_recovery_1");
-    if (!pending) {
-      throw new Error("Missing pending async idempotency record.");
-    }
-    idempotencyByPaymentId.set("payment_async_recovery_1", {
-      ...pending,
-      updatedAt: new Date(Date.now() - 20_000).toISOString()
-    });
-
-    const recovered = await request(app)
-      .post("/api/mock/async-report")
-      .set("X-PAYMENT", Buffer.from(JSON.stringify({ paid: true })).toString("base64"))
-      .set("PAYMENT-IDENTIFIER", "payment_async_recovery_1")
-      .send({ topic: "market depth", delayMs: 60_000 });
-
-    expect(recovered.status).toBe(202);
-    expect(recovered.body.jobToken).toBeDefined();
-    expect(requestIds).toHaveLength(2);
-    expect(new Set(requestIds).size).toBe(1);
 
     const challenge = await request(app)
       .post("/auth/challenge")
       .send({
         wallet: buyer.address,
         resourceType: "job",
-        resourceId: recovered.body.jobToken
+        resourceId: first.body.jobToken
       });
 
     expect(challenge.status).toBe(200);
@@ -635,7 +615,7 @@ describe("marketplace api", () => {
     const record = await store.getIdempotencyByPaymentId("payment_async_recovery_1");
     expect(record?.executionStatus).toBe("completed");
     expect(record?.requestId).toBe(requestIds[0]);
-    expect(record?.jobToken).toBe(recovered.body.jobToken);
+    expect(record?.jobToken).toBe(first.body.jobToken);
   });
 
   it("repairs a missing async job access grant when replaying an existing payment", async () => {
@@ -1144,6 +1124,990 @@ describe("marketplace api", () => {
     expect(analytics.totalCalls).toBe(2);
     expect(analytics.revenueRaw).toBe("0");
     expect(analytics.successRate30d).toBe(50);
+  });
+
+  it("accepts webhook callbacks for async free routes after runtime-key rotation", async () => {
+    const providerWallet = await createTestWallet(PROVIDER_PRIVATE_KEY);
+    const { app } = await createTestApp({
+      baseUrl: "https://marketplace.example.com"
+    });
+    const providerToken = await createSiteSession(app, providerWallet);
+
+    await request(app)
+      .post("/provider/me")
+      .set("Authorization", `Bearer ${providerToken}`)
+      .send({
+        displayName: "Signal Labs",
+        websiteUrl: "https://provider.example.com"
+      });
+
+    const createdService = await request(app)
+      .post("/provider/services")
+      .set("Authorization", `Bearer ${providerToken}`)
+      .send({
+        serviceType: "marketplace_proxy",
+        slug: "signal-labs-free-async",
+        apiNamespace: "signals-free-async",
+        name: "Signal Labs Free Async",
+        tagline: "Free async signal snapshots",
+        about: "Provider-authored async free signal endpoints.",
+        categories: ["Research"],
+        promptIntro: 'I want to use the "Signal Labs Free Async" service on Fast Marketplace.',
+        setupInstructions: ["Call the marketplace proxy route."],
+        websiteUrl: "https://provider.example.com",
+        payoutWallet: providerWallet.address
+      });
+
+    expect(createdService.status).toBe(201);
+    const serviceId = createdService.body.service.id as string;
+
+    const runtimeKeyResponse = await request(app)
+      .post(`/provider/services/${serviceId}/runtime-key`)
+      .set("Authorization", `Bearer ${providerToken}`)
+      .send({});
+
+    expect(runtimeKeyResponse.status).toBe(201);
+    const runtimeKey = runtimeKeyResponse.body.plaintextKey as string;
+
+    const createdEndpoint = await request(app)
+      .post(`/provider/services/${serviceId}/endpoints`)
+      .set("Authorization", `Bearer ${providerToken}`)
+      .send({
+        endpointType: "marketplace_proxy",
+        operation: "search",
+        method: "POST",
+        title: "Search",
+        description: "Return a free async signal snapshot.",
+        billingType: "free",
+        mode: "async",
+        asyncStrategy: "webhook",
+        asyncTimeoutMs: 300000,
+        requestSchemaJson: {
+          type: "object",
+          properties: {
+            query: { type: "string", minLength: 1 }
+          },
+          required: ["query"],
+          additionalProperties: false
+        },
+        responseSchemaJson: {
+          type: "object",
+          properties: {
+            items: {
+              type: "array",
+              items: { type: "string" }
+            }
+          },
+          required: ["items"],
+          additionalProperties: false
+        },
+        requestExample: {
+          query: "FAST"
+        },
+        responseExample: {
+          items: ["alpha"]
+        },
+        upstreamBaseUrl: "https://provider.example.com",
+        upstreamPath: "/api/search",
+        upstreamAuthMode: "none"
+      });
+
+    expect(createdEndpoint.status).toBe(201);
+
+    const verificationChallenge = await request(app)
+      .post(`/provider/services/${serviceId}/verification-challenge`)
+      .set("Authorization", `Bearer ${providerToken}`);
+
+    let callbackUrl = "";
+    let callbackAuth = "";
+
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url === verificationChallenge.body.expectedUrl) {
+        return new Response(verificationChallenge.body.token, { status: 200 });
+      }
+
+      if (url === "https://provider.example.com/api/search") {
+        const headers = Object.fromEntries(new Headers(init?.headers).entries());
+        const identity = verifyMarketplaceIdentityHeaders({
+          headers,
+          signingSecret: runtimeKey
+        });
+
+        expect(identity.serviceId).toBe(serviceId);
+        expect(identity.buyerWallet).toBe(providerWallet.address);
+
+        callbackUrl = headers["x-marketplace-callback-url"] ?? "";
+        callbackAuth = headers["x-marketplace-callback-auth"] ?? "";
+        expect(headers["x-marketplace-job-token"]).toBeTruthy();
+
+        return new Response(JSON.stringify({
+          status: "accepted",
+          providerJobId: "provider_job_1"
+        }), {
+          status: 202,
+          headers: {
+            "content-type": "application/json"
+          }
+        });
+      }
+
+      return new Response("not found", { status: 404 });
+    });
+
+    const verified = await request(app)
+      .post(`/provider/services/${serviceId}/verify`)
+      .set("Authorization", `Bearer ${providerToken}`);
+
+    expect(verified.status).toBe(200);
+
+    const submitted = await request(app)
+      .post(`/provider/services/${serviceId}/submit`)
+      .set("Authorization", `Bearer ${providerToken}`);
+
+    expect(submitted.status).toBe(202);
+
+    const published = await request(app)
+      .post(`/internal/provider-services/${serviceId}/publish`)
+      .set("Authorization", "Bearer test-admin-token")
+      .send({
+        reviewerIdentity: "ops@test",
+        settlementMode: "verified_escrow"
+      });
+
+    expect(published.status).toBe(200);
+
+    const challenge = await request(app)
+      .post("/auth/challenge")
+      .send({
+        wallet: providerWallet.address,
+        resourceType: "api",
+        resourceId: "signals-free-async.search.v1"
+      });
+
+    expect(challenge.status).toBe(200);
+
+    const signed = await providerWallet.wallet.sign({ message: challenge.body.message });
+    const apiSession = await request(app)
+      .post("/auth/session")
+      .send({
+        wallet: providerWallet.address,
+        resourceType: "api",
+        resourceId: "signals-free-async.search.v1",
+        nonce: challenge.body.nonce,
+        expiresAt: challenge.body.expiresAt,
+        signature: signed.signature
+      });
+
+    expect(apiSession.status).toBe(200);
+
+    const accepted = await request(app)
+      .post("/api/signals-free-async/search")
+      .set("Authorization", `Bearer ${apiSession.body.accessToken}`)
+      .send({ query: "FAST" });
+
+    expect(accepted.status).toBe(202);
+    expect(callbackUrl).toContain(`/provider/runtime/jobs/${accepted.body.jobToken}/callback`);
+    expect(callbackAuth.startsWith("Bearer ")).toBe(true);
+
+    const rotatedRuntimeKey = await request(app)
+      .post(`/provider/services/${serviceId}/runtime-key`)
+      .set("Authorization", `Bearer ${providerToken}`)
+      .send({});
+
+    expect(rotatedRuntimeKey.status).toBe(201);
+    expect(rotatedRuntimeKey.body.plaintextKey).not.toBe(runtimeKey);
+
+    const callbackBody = {
+      providerJobId: "provider_job_1",
+      status: "completed",
+      result: { items: ["alpha"] }
+    };
+    const callbackPath = new URL(callbackUrl).pathname;
+    const callbackHeaders = buildMarketplaceCallbackHeaders({
+      method: "POST",
+      path: callbackPath,
+      body: JSON.stringify(callbackBody),
+      sharedSecret: callbackAuth.replace(/^Bearer\s+/u, "")
+    });
+
+    const callbackResponse = await request(app)
+      .post(callbackPath)
+      .set("Authorization", callbackHeaders.authorization)
+      .set("X-Marketplace-Timestamp", callbackHeaders["X-MARKETPLACE-TIMESTAMP"])
+      .set("X-Marketplace-Signature", callbackHeaders["X-MARKETPLACE-SIGNATURE"])
+      .send(callbackBody);
+
+    expect(callbackResponse.status).toBe(200);
+    expect(callbackResponse.body.status).toBe("completed");
+    expect(callbackResponse.body.result).toEqual({ items: ["alpha"] });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://provider.example.com/api/search",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ query: "FAST" })
+      })
+    );
+  });
+
+  it("accepts webhook callbacks that arrive before async acceptance is persisted", async () => {
+    const providerWallet = await createTestWallet(PROVIDER_PRIVATE_KEY);
+    const { app } = await createTestApp({
+      baseUrl: "https://marketplace.example.com"
+    });
+    const providerToken = await createSiteSession(app, providerWallet);
+
+    await request(app)
+      .post("/provider/me")
+      .set("Authorization", `Bearer ${providerToken}`)
+      .send({
+        displayName: "Signal Labs",
+        websiteUrl: "https://provider.example.com"
+      });
+
+    const createdService = await request(app)
+      .post("/provider/services")
+      .set("Authorization", `Bearer ${providerToken}`)
+      .send({
+        serviceType: "marketplace_proxy",
+        slug: "signals-free-async-early-callback",
+        apiNamespace: "signals-free-async-early",
+        name: "Signal Labs Free Async Early",
+        tagline: "Async callbacks can arrive immediately",
+        about: "Provider-authored signal endpoints.",
+        categories: ["Research"],
+        promptIntro: 'I want to use the "Signal Labs Free Async Early" service on Fast Marketplace.',
+        setupInstructions: ["Use a funded Fast wallet."],
+        websiteUrl: "https://provider.example.com",
+        payoutWallet: providerWallet.address
+      });
+
+    expect(createdService.status).toBe(201);
+    const serviceId = createdService.body.service.id as string;
+
+    const runtimeKeyResponse = await request(app)
+      .post(`/provider/services/${serviceId}/runtime-key`)
+      .set("Authorization", `Bearer ${providerToken}`)
+      .send({});
+
+    expect(runtimeKeyResponse.status).toBe(201);
+    const runtimeKey = runtimeKeyResponse.body.plaintextKey as string;
+
+    const createdEndpoint = await request(app)
+      .post(`/provider/services/${serviceId}/endpoints`)
+      .set("Authorization", `Bearer ${providerToken}`)
+      .send({
+        endpointType: "marketplace_proxy",
+        operation: "search",
+        method: "POST",
+        title: "Search",
+        description: "Return a free async signal snapshot.",
+        billingType: "free",
+        mode: "async",
+        asyncStrategy: "webhook",
+        asyncTimeoutMs: 300000,
+        requestSchemaJson: {
+          type: "object",
+          properties: {
+            query: { type: "string", minLength: 1 }
+          },
+          required: ["query"],
+          additionalProperties: false
+        },
+        responseSchemaJson: {
+          type: "object",
+          properties: {
+            items: {
+              type: "array",
+              items: { type: "string" }
+            }
+          },
+          required: ["items"],
+          additionalProperties: false
+        },
+        requestExample: {
+          query: "FAST"
+        },
+        responseExample: {
+          items: ["alpha"]
+        },
+        upstreamBaseUrl: "https://provider.example.com",
+        upstreamPath: "/api/search",
+        upstreamAuthMode: "none"
+      });
+
+    expect(createdEndpoint.status).toBe(201);
+
+    const verificationChallenge = await request(app)
+      .post(`/provider/services/${serviceId}/verification-challenge`)
+      .set("Authorization", `Bearer ${providerToken}`);
+
+    let earlyCallbackStatus = 0;
+
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url === verificationChallenge.body.expectedUrl) {
+        return new Response(verificationChallenge.body.token, { status: 200 });
+      }
+
+      if (url === "https://provider.example.com/api/search") {
+        const headers = Object.fromEntries(new Headers(init?.headers).entries());
+        const identity = verifyMarketplaceIdentityHeaders({
+          headers,
+          signingSecret: runtimeKey
+        });
+
+        expect(identity.serviceId).toBe(serviceId);
+        expect(identity.buyerWallet).toBe(providerWallet.address);
+
+        const callbackUrl = headers["x-marketplace-callback-url"] ?? "";
+        const callbackAuth = headers["x-marketplace-callback-auth"] ?? "";
+        const callbackPath = new URL(callbackUrl).pathname;
+        const callbackBody = {
+          providerJobId: "provider_job_early_1",
+          status: "completed",
+          result: { items: ["alpha"] }
+        };
+        const callbackHeaders = buildMarketplaceCallbackHeaders({
+          method: "POST",
+          path: callbackPath,
+          body: JSON.stringify(callbackBody),
+          sharedSecret: callbackAuth.replace(/^Bearer\s+/u, "")
+        });
+
+        const callbackResponse = await request(app)
+          .post(callbackPath)
+          .set("Authorization", callbackHeaders.authorization)
+          .set("X-Marketplace-Timestamp", callbackHeaders["X-MARKETPLACE-TIMESTAMP"])
+          .set("X-Marketplace-Signature", callbackHeaders["X-MARKETPLACE-SIGNATURE"])
+          .send(callbackBody);
+
+        earlyCallbackStatus = callbackResponse.status;
+        expect(callbackResponse.body.status).toBe("completed");
+
+        return new Response(JSON.stringify({
+          status: "accepted",
+          providerJobId: "provider_job_early_1"
+        }), {
+          status: 202,
+          headers: {
+            "content-type": "application/json"
+          }
+        });
+      }
+
+      return new Response("not found", { status: 404 });
+    });
+
+    const verified = await request(app)
+      .post(`/provider/services/${serviceId}/verify`)
+      .set("Authorization", `Bearer ${providerToken}`);
+
+    expect(verified.status).toBe(200);
+
+    const submitted = await request(app)
+      .post(`/provider/services/${serviceId}/submit`)
+      .set("Authorization", `Bearer ${providerToken}`);
+
+    expect(submitted.status).toBe(202);
+
+    const published = await request(app)
+      .post(`/internal/provider-services/${serviceId}/publish`)
+      .set("Authorization", "Bearer test-admin-token")
+      .send({
+        reviewerIdentity: "ops@test",
+        settlementMode: "verified_escrow"
+      });
+
+    expect(published.status).toBe(200);
+
+    const challenge = await request(app)
+      .post("/auth/challenge")
+      .send({
+        wallet: providerWallet.address,
+        resourceType: "api",
+        resourceId: "signals-free-async-early.search.v1"
+      });
+
+    expect(challenge.status).toBe(200);
+
+    const signed = await providerWallet.wallet.sign({ message: challenge.body.message });
+    const apiSession = await request(app)
+      .post("/auth/session")
+      .send({
+        wallet: providerWallet.address,
+        resourceType: "api",
+        resourceId: "signals-free-async-early.search.v1",
+        nonce: challenge.body.nonce,
+        expiresAt: challenge.body.expiresAt,
+        signature: signed.signature
+      });
+
+    expect(apiSession.status).toBe(200);
+
+    const accepted = await request(app)
+      .post("/api/signals-free-async-early/search")
+      .set("Authorization", `Bearer ${apiSession.body.accessToken}`)
+      .send({ query: "FAST" });
+
+    expect(accepted.status).toBe(202);
+    expect(earlyCallbackStatus).toBe(200);
+
+    const jobChallenge = await request(app)
+      .post("/auth/challenge")
+      .send({
+        wallet: providerWallet.address,
+        resourceType: "job",
+        resourceId: accepted.body.jobToken
+      });
+
+    expect(jobChallenge.status).toBe(200);
+
+    const signedJob = await providerWallet.wallet.sign({ message: jobChallenge.body.message });
+    const jobSession = await request(app)
+      .post("/auth/session")
+      .send({
+        wallet: providerWallet.address,
+        resourceType: "job",
+        resourceId: accepted.body.jobToken,
+        nonce: jobChallenge.body.nonce,
+        expiresAt: jobChallenge.body.expiresAt,
+        signature: signedJob.signature
+      });
+
+    expect(jobSession.status).toBe(200);
+
+    const retrieved = await request(app)
+      .get(`/api/jobs/${accepted.body.jobToken}`)
+      .set("Authorization", `Bearer ${jobSession.body.accessToken}`);
+
+    expect(retrieved.status).toBe(200);
+    expect(retrieved.body.status).toBe("completed");
+    expect(retrieved.body.result).toEqual({ items: ["alpha"] });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://provider.example.com/api/search",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ query: "FAST" })
+      })
+    );
+  });
+
+  it("keeps wallet-session async jobs reachable without saveAsyncAcceptance", async () => {
+    class WalletSessionAsyncStore extends InMemoryMarketplaceStore {
+      override async saveAsyncAcceptance(): Promise<never> {
+        throw new Error("wallet-session async routes should not call saveAsyncAcceptance");
+      }
+    }
+
+    const providerWallet = await createTestWallet(PROVIDER_PRIVATE_KEY);
+    const store = new WalletSessionAsyncStore(
+      resolveMarketplaceNetworkConfig({
+        deploymentNetwork: "mainnet"
+      })
+    );
+    const { app } = await createTestApp({
+      baseUrl: "https://marketplace.example.com",
+      store
+    });
+    const providerToken = await createSiteSession(app, providerWallet);
+
+    await request(app)
+      .post("/provider/me")
+      .set("Authorization", `Bearer ${providerToken}`)
+      .send({
+        displayName: "Signal Labs Wallet Session",
+        websiteUrl: "https://provider.example.com"
+      });
+
+    const createdService = await request(app)
+      .post("/provider/services")
+      .set("Authorization", `Bearer ${providerToken}`)
+      .send({
+        serviceType: "marketplace_proxy",
+        slug: "signals-free-async-wallet-safe",
+        apiNamespace: "signals-free-async-wallet-safe",
+        name: "Signal Labs Wallet Session Safe",
+        tagline: "Wallet-session async does not rely on saveAsyncAcceptance",
+        about: "Provider-authored signal endpoints.",
+        categories: ["Research"],
+        promptIntro: 'I want to use the "Signal Labs Wallet Session Safe" service on Fast Marketplace.',
+        setupInstructions: ["Use a funded Fast wallet."],
+        websiteUrl: "https://provider.example.com",
+        payoutWallet: providerWallet.address
+      });
+
+    expect(createdService.status).toBe(201);
+    const serviceId = createdService.body.service.id as string;
+
+    const runtimeKeyResponse = await request(app)
+      .post(`/provider/services/${serviceId}/runtime-key`)
+      .set("Authorization", `Bearer ${providerToken}`)
+      .send({});
+
+    expect(runtimeKeyResponse.status).toBe(201);
+    const runtimeKey = runtimeKeyResponse.body.plaintextKey as string;
+
+    const createdEndpoint = await request(app)
+      .post(`/provider/services/${serviceId}/endpoints`)
+      .set("Authorization", `Bearer ${providerToken}`)
+      .send({
+        endpointType: "marketplace_proxy",
+        operation: "search",
+        method: "POST",
+        title: "Search",
+        description: "Return a free async signal snapshot.",
+        billingType: "free",
+        mode: "async",
+        asyncStrategy: "webhook",
+        asyncTimeoutMs: 300000,
+        requestSchemaJson: {
+          type: "object",
+          properties: {
+            query: { type: "string", minLength: 1 }
+          },
+          required: ["query"],
+          additionalProperties: false
+        },
+        responseSchemaJson: {
+          type: "object",
+          properties: {
+            items: {
+              type: "array",
+              items: { type: "string" }
+            }
+          },
+          required: ["items"],
+          additionalProperties: false
+        },
+        requestExample: {
+          query: "FAST"
+        },
+        responseExample: {
+          items: ["alpha"]
+        },
+        upstreamBaseUrl: "https://provider.example.com",
+        upstreamPath: "/api/search",
+        upstreamAuthMode: "none"
+      });
+
+    expect(createdEndpoint.status).toBe(201);
+
+    const verificationChallenge = await request(app)
+      .post(`/provider/services/${serviceId}/verification-challenge`)
+      .set("Authorization", `Bearer ${providerToken}`);
+
+    let earlyCallbackStatus = 0;
+
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url === verificationChallenge.body.expectedUrl) {
+        return new Response(verificationChallenge.body.token, { status: 200 });
+      }
+
+      if (url === "https://provider.example.com/api/search") {
+        const headers = Object.fromEntries(new Headers(init?.headers).entries());
+        const identity = verifyMarketplaceIdentityHeaders({
+          headers,
+          signingSecret: runtimeKey
+        });
+
+        expect(identity.serviceId).toBe(serviceId);
+        expect(identity.buyerWallet).toBe(providerWallet.address);
+
+        const callbackUrl = headers["x-marketplace-callback-url"] ?? "";
+        const callbackAuth = headers["x-marketplace-callback-auth"] ?? "";
+        const callbackPath = new URL(callbackUrl).pathname;
+        const callbackBody = {
+          providerJobId: "provider_job_wallet_safe_1",
+          status: "completed",
+          result: { items: ["alpha"] }
+        };
+        const callbackHeaders = buildMarketplaceCallbackHeaders({
+          method: "POST",
+          path: callbackPath,
+          body: JSON.stringify(callbackBody),
+          sharedSecret: callbackAuth.replace(/^Bearer\s+/u, "")
+        });
+
+        const callbackResponse = await request(app)
+          .post(callbackPath)
+          .set("Authorization", callbackHeaders.authorization)
+          .set("X-Marketplace-Timestamp", callbackHeaders["X-MARKETPLACE-TIMESTAMP"])
+          .set("X-Marketplace-Signature", callbackHeaders["X-MARKETPLACE-SIGNATURE"])
+          .send(callbackBody);
+
+        earlyCallbackStatus = callbackResponse.status;
+
+        return new Response(JSON.stringify({
+          status: "accepted",
+          providerJobId: "provider_job_wallet_safe_1"
+        }), {
+          status: 202,
+          headers: {
+            "content-type": "application/json"
+          }
+        });
+      }
+
+      return new Response("not found", { status: 404 });
+    });
+
+    expect(
+      await request(app)
+        .post(`/provider/services/${serviceId}/verify`)
+        .set("Authorization", `Bearer ${providerToken}`)
+    ).toMatchObject({ status: 200 });
+    expect(
+      await request(app)
+        .post(`/provider/services/${serviceId}/submit`)
+        .set("Authorization", `Bearer ${providerToken}`)
+    ).toMatchObject({ status: 202 });
+    expect(
+      await request(app)
+        .post(`/internal/provider-services/${serviceId}/publish`)
+        .set("Authorization", "Bearer test-admin-token")
+        .send({
+          reviewerIdentity: "ops@test",
+          settlementMode: "verified_escrow"
+        })
+    ).toMatchObject({ status: 200 });
+
+    const challenge = await request(app)
+      .post("/auth/challenge")
+      .send({
+        wallet: providerWallet.address,
+        resourceType: "api",
+        resourceId: "signals-free-async-wallet-safe.search.v1"
+      });
+
+    expect(challenge.status).toBe(200);
+
+    const signed = await providerWallet.wallet.sign({ message: challenge.body.message });
+    const apiSession = await request(app)
+      .post("/auth/session")
+      .send({
+        wallet: providerWallet.address,
+        resourceType: "api",
+        resourceId: "signals-free-async-wallet-safe.search.v1",
+        nonce: challenge.body.nonce,
+        expiresAt: challenge.body.expiresAt,
+        signature: signed.signature
+      });
+
+    expect(apiSession.status).toBe(200);
+
+    const accepted = await request(app)
+      .post("/api/signals-free-async-wallet-safe/search")
+      .set("Authorization", `Bearer ${apiSession.body.accessToken}`)
+      .send({ query: "FAST" });
+
+    expect(accepted.status).toBe(202);
+    expect(earlyCallbackStatus).toBe(200);
+
+    const jobChallenge = await request(app)
+      .post("/auth/challenge")
+      .send({
+        wallet: providerWallet.address,
+        resourceType: "job",
+        resourceId: accepted.body.jobToken
+      });
+
+    expect(jobChallenge.status).toBe(200);
+
+    const signedJob = await providerWallet.wallet.sign({ message: jobChallenge.body.message });
+    const jobSession = await request(app)
+      .post("/auth/session")
+      .send({
+        wallet: providerWallet.address,
+        resourceType: "job",
+        resourceId: accepted.body.jobToken,
+        nonce: jobChallenge.body.nonce,
+        expiresAt: jobChallenge.body.expiresAt,
+        signature: signedJob.signature
+      });
+
+    expect(jobSession.status).toBe(200);
+
+    const retrieved = await request(app)
+      .get(`/api/jobs/${accepted.body.jobToken}`)
+      .set("Authorization", `Bearer ${jobSession.body.accessToken}`);
+
+    expect(retrieved.status).toBe(200);
+    expect(retrieved.body.status).toBe("completed");
+    expect(retrieved.body.result).toEqual({ items: ["alpha"] });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://provider.example.com/api/search",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ query: "FAST" })
+      })
+    );
+  });
+
+  it("returns the wallet-session job token and lets the worker repair poll metadata when the accepted placeholder update fails", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+
+    class WalletSessionPendingStore extends InMemoryMarketplaceStore {
+      private failAcceptedPlaceholderWrite = true;
+
+      override async savePendingAsyncJob(input: Parameters<InMemoryMarketplaceStore["savePendingAsyncJob"]>[0]) {
+        if (this.failAcceptedPlaceholderWrite && input.providerJobId) {
+          this.failAcceptedPlaceholderWrite = false;
+          throw new Error("accepted wallet-session placeholder write failed");
+        }
+
+        return super.savePendingAsyncJob(input);
+      }
+    }
+
+    const providerWallet = await createTestWallet(PROVIDER_PRIVATE_KEY);
+    const store = new WalletSessionPendingStore(
+      resolveMarketplaceNetworkConfig({
+        deploymentNetwork: "mainnet"
+      })
+    );
+    const { app } = await createTestApp({
+      baseUrl: "https://marketplace.example.com",
+      store
+    });
+    const providerToken = await createSiteSession(app, providerWallet);
+
+    expect(
+      await request(app)
+        .post("/provider/me")
+        .set("Authorization", `Bearer ${providerToken}`)
+        .send({
+          displayName: "Signal Labs Wallet Pending Repair",
+          websiteUrl: "https://provider.example.com"
+        })
+    ).toMatchObject({ status: 201 });
+
+    const createdService = await request(app)
+      .post("/provider/services")
+      .set("Authorization", `Bearer ${providerToken}`)
+      .send({
+        serviceType: "marketplace_proxy",
+        slug: "signals-free-async-wallet-repair",
+        apiNamespace: "signals-free-async-wallet-repair",
+        name: "Signal Labs Wallet Pending Repair",
+        tagline: "Wallet-session async survives accepted placeholder write failures",
+        about: "Provider-authored signal endpoints.",
+        categories: ["Research"],
+        promptIntro: 'I want to use the "Signal Labs Wallet Pending Repair" service on Fast Marketplace.',
+        setupInstructions: ["Use a funded Fast wallet."],
+        websiteUrl: "https://provider.example.com",
+        payoutWallet: providerWallet.address
+      });
+
+    expect(createdService.status).toBe(201);
+    const serviceId = createdService.body.service.id as string;
+
+    const runtimeKeyResponse = await request(app)
+      .post(`/provider/services/${serviceId}/runtime-key`)
+      .set("Authorization", `Bearer ${providerToken}`)
+      .send({});
+
+    expect(runtimeKeyResponse.status).toBe(201);
+    const runtimeKey = runtimeKeyResponse.body.plaintextKey as string;
+
+    expect(
+      await request(app)
+        .post(`/provider/services/${serviceId}/endpoints`)
+        .set("Authorization", `Bearer ${providerToken}`)
+        .send({
+          endpointType: "marketplace_proxy",
+          operation: "search",
+          method: "POST",
+          title: "Search",
+          description: "Return a free async signal snapshot.",
+          billingType: "free",
+          mode: "async",
+          asyncStrategy: "poll",
+          asyncTimeoutMs: 300000,
+          pollPath: "/api/poll",
+          requestSchemaJson: {
+            type: "object",
+            properties: {
+              query: { type: "string", minLength: 1 }
+            },
+            required: ["query"],
+            additionalProperties: false
+          },
+          responseSchemaJson: {
+            type: "object",
+            properties: {
+              items: {
+                type: "array",
+                items: { type: "string" }
+              }
+            },
+            required: ["items"],
+            additionalProperties: false
+          },
+          requestExample: {
+            query: "FAST"
+          },
+          responseExample: {
+            items: ["alpha"]
+          },
+          upstreamBaseUrl: "https://provider.example.com",
+          upstreamPath: "/api/search",
+          upstreamAuthMode: "none"
+        })
+    ).toMatchObject({ status: 201 });
+
+    const verificationChallenge = await request(app)
+      .post(`/provider/services/${serviceId}/verification-challenge`)
+      .set("Authorization", `Bearer ${providerToken}`);
+
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url === verificationChallenge.body.expectedUrl) {
+        return new Response(verificationChallenge.body.token, { status: 200 });
+      }
+
+      if (url === "https://provider.example.com/api/search") {
+        const headers = Object.fromEntries(new Headers(init?.headers).entries());
+        const identity = verifyMarketplaceIdentityHeaders({
+          headers,
+          signingSecret: runtimeKey
+        });
+
+        expect(identity.serviceId).toBe(serviceId);
+        expect(identity.buyerWallet).toBe(providerWallet.address);
+
+        return new Response(JSON.stringify({
+          status: "accepted",
+          providerJobId: "provider_job_wallet_repair_1",
+          pollAfterMs: 5_000,
+          providerState: {
+            query: "FAST",
+            readyAt: Date.now() + 60_000
+          }
+        }), {
+          status: 202,
+          headers: {
+            "content-type": "application/json"
+          }
+        });
+      }
+
+      return new Response("not found", { status: 404 });
+    });
+
+    expect(
+      await request(app)
+        .post(`/provider/services/${serviceId}/verify`)
+        .set("Authorization", `Bearer ${providerToken}`)
+    ).toMatchObject({ status: 200 });
+    expect(
+      await request(app)
+        .post(`/provider/services/${serviceId}/submit`)
+        .set("Authorization", `Bearer ${providerToken}`)
+    ).toMatchObject({ status: 202 });
+    expect(
+      await request(app)
+        .post(`/internal/provider-services/${serviceId}/publish`)
+        .set("Authorization", "Bearer test-admin-token")
+        .send({
+          reviewerIdentity: "ops@test",
+          settlementMode: "verified_escrow"
+        })
+    ).toMatchObject({ status: 200 });
+
+    const challenge = await request(app)
+      .post("/auth/challenge")
+      .send({
+        wallet: providerWallet.address,
+        resourceType: "api",
+        resourceId: "signals-free-async-wallet-repair.search.v1"
+      });
+
+    expect(challenge.status).toBe(200);
+
+    const signed = await providerWallet.wallet.sign({ message: challenge.body.message });
+    const apiSession = await request(app)
+      .post("/auth/session")
+      .send({
+        wallet: providerWallet.address,
+        resourceType: "api",
+        resourceId: "signals-free-async-wallet-repair.search.v1",
+        nonce: challenge.body.nonce,
+        expiresAt: challenge.body.expiresAt,
+        signature: signed.signature
+      });
+
+    expect(apiSession.status).toBe(200);
+
+    const accepted = await request(app)
+      .post("/api/signals-free-async-wallet-repair/search")
+      .set("Authorization", `Bearer ${apiSession.body.accessToken}`)
+      .send({ query: "FAST" });
+
+    expect(accepted.status).toBe(202);
+    expect(accepted.body.jobToken).toBeDefined();
+
+    const challengeJob = await request(app)
+      .post("/auth/challenge")
+      .send({
+        wallet: providerWallet.address,
+        resourceType: "job",
+        resourceId: accepted.body.jobToken
+      });
+
+    expect(challengeJob.status).toBe(200);
+
+    const signedJob = await providerWallet.wallet.sign({ message: challengeJob.body.message });
+    const jobSession = await request(app)
+      .post("/auth/session")
+      .send({
+        wallet: providerWallet.address,
+        resourceType: "job",
+        resourceId: accepted.body.jobToken,
+        nonce: challengeJob.body.nonce,
+        expiresAt: challengeJob.body.expiresAt,
+        signature: signedJob.signature
+      });
+
+    expect(jobSession.status).toBe(200);
+
+    const pendingJob = await request(app)
+      .get(`/api/jobs/${accepted.body.jobToken}`)
+      .set("Authorization", `Bearer ${jobSession.body.accessToken}`);
+
+    expect(pendingJob.status).toBe(200);
+    expect(pendingJob.body.status).toBe("pending");
+
+    expect((await store.getJob(accepted.body.jobToken))?.providerJobId).toBeNull();
+    await store.updateJobPending({
+      jobToken: accepted.body.jobToken,
+      nextPollAt: new Date(Date.now() - 1_000).toISOString()
+    });
+
+    await runMarketplaceWorkerCycle({
+      store,
+      secretsKey: "test-secrets-key",
+      refundService: {
+        async issueRefund() {
+          return { txHash: "0xwallet-repair-refund" };
+        }
+      }
+    });
+
+    const repairedJob = await store.getJob(accepted.body.jobToken);
+    expect(repairedJob?.providerJobId).toBe("provider_job_wallet_repair_1");
+    expect(repairedJob?.providerState).toEqual({
+      query: "FAST",
+      readyAt: expect.any(Number)
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://provider.example.com/api/search",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ query: "FAST" })
+      })
+    );
   });
 
   it("supports fixed-price GET routes with x402 preflight and wrong-method 405", async () => {
@@ -1709,6 +2673,266 @@ describe("marketplace api", () => {
     const creditAccount = await store.getCreditAccount(serviceId, buyer.address, "fastUSDC");
     expect(creditAccount?.availableAmount).toBe("12500000");
     expect(creditAccount?.reservedAmount).toBe("0");
+  });
+
+  it("supports async prepaid-credit reservation during execute with the injected marketplace job token", async () => {
+    const providerWallet = await createTestWallet(PROVIDER_PRIVATE_KEY);
+    const { app, buyer, store } = await createTestApp();
+    const providerToken = await createSiteSession(app, providerWallet);
+
+    await request(app)
+      .post("/provider/me")
+      .set("Authorization", `Bearer ${providerToken}`)
+      .send({
+        displayName: "Order Desk",
+        websiteUrl: "https://orders.example.com"
+      });
+
+    const createdService = await request(app)
+      .post("/provider/services")
+      .set("Authorization", `Bearer ${providerToken}`)
+      .send({
+        serviceType: "marketplace_proxy",
+        slug: "order-desk-async-prepaid",
+        apiNamespace: "orders-async",
+        name: "Order Desk Async",
+        tagline: "Async prepaid orders",
+        about: "Provider-authored async prepaid order routes.",
+        categories: ["Shopping"],
+        promptIntro: "Use this async order desk.",
+        setupInstructions: ["Use a funded Fast wallet."],
+        websiteUrl: "https://orders.example.com",
+        payoutWallet: providerWallet.address
+      });
+
+    expect(createdService.status).toBe(201);
+    const serviceId = createdService.body.service.id as string;
+
+    const runtimeKeyResponse = await request(app)
+      .post(`/provider/services/${serviceId}/runtime-key`)
+      .set("Authorization", `Bearer ${providerToken}`)
+      .send({});
+
+    expect(runtimeKeyResponse.status).toBe(201);
+    const runtimeKey = runtimeKeyResponse.body.plaintextKey as string;
+
+    const topupEndpoint = await request(app)
+      .post(`/provider/services/${serviceId}/endpoints`)
+      .set("Authorization", `Bearer ${providerToken}`)
+      .send({
+        endpointType: "marketplace_proxy",
+        operation: "topup",
+        method: "POST",
+        title: "Top Up",
+        description: "Top up a prepaid order balance.",
+        billingType: "topup_x402_variable",
+        minAmount: "5",
+        maxAmount: "100",
+        mode: "sync",
+        requestSchemaJson: {
+          type: "object",
+          properties: {
+            amount: { type: "string" }
+          },
+          required: ["amount"],
+          additionalProperties: false
+        },
+        responseSchemaJson: {
+          type: "object",
+          properties: {
+            topupAmount: { type: "string" }
+          },
+          required: ["topupAmount"],
+          additionalProperties: true
+        },
+        requestExample: { amount: "25" },
+        responseExample: { topupAmount: "25" }
+      });
+
+    expect(topupEndpoint.status).toBe(201);
+
+    const prepaidEndpoint = await request(app)
+      .post(`/provider/services/${serviceId}/endpoints`)
+      .set("Authorization", `Bearer ${providerToken}`)
+      .send({
+        endpointType: "marketplace_proxy",
+        operation: "place-order",
+        method: "POST",
+        title: "Place Order",
+        description: "Reserve prepaid credit and place an async order.",
+        billingType: "prepaid_credit",
+        mode: "async",
+        asyncStrategy: "poll",
+        asyncTimeoutMs: 300000,
+        pollPath: "/api/jobs/poll",
+        requestSchemaJson: {
+          type: "object",
+          properties: {
+            item: { type: "string" }
+          },
+          required: ["item"],
+          additionalProperties: false
+        },
+        responseSchemaJson: {
+          type: "object",
+          properties: {
+            orderId: { type: "string" }
+          },
+          required: ["orderId"],
+          additionalProperties: false
+        },
+        requestExample: {
+          item: "notebook"
+        },
+        responseExample: {
+          orderId: "ord_123"
+        },
+        upstreamBaseUrl: "https://orders.example.com",
+        upstreamPath: "/api/place-order-async",
+        upstreamAuthMode: "none"
+      });
+
+    expect(prepaidEndpoint.status).toBe(201);
+
+    const verificationChallenge = await request(app)
+      .post(`/provider/services/${serviceId}/verification-challenge`)
+      .set("Authorization", `Bearer ${providerToken}`);
+
+    let reserveStatus = 0;
+    let reservedJobToken = "";
+
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (fetchInput, init) => {
+      const url = String(fetchInput);
+      if (url === verificationChallenge.body.expectedUrl) {
+        return new Response(verificationChallenge.body.token, { status: 200 });
+      }
+
+      if (url === "https://orders.example.com/api/place-order-async") {
+        const headers = Object.fromEntries(new Headers(init?.headers).entries());
+        const identity = verifyMarketplaceIdentityHeaders({
+          headers,
+          signingSecret: runtimeKey
+        });
+        if (!identity.buyerWallet) {
+          throw new Error("Async prepaid route execution must include a buyer wallet.");
+        }
+
+        reservedJobToken = headers[MARKETPLACE_JOB_TOKEN_HEADER.toLowerCase()] ?? "";
+        expect(reservedJobToken).toBeTruthy();
+
+        const reserveResponse = await request(app)
+          .post("/provider/runtime/credits/reserve")
+          .set("Authorization", `Bearer ${runtimeKey}`)
+          .set(MARKETPLACE_JOB_TOKEN_HEADER, reservedJobToken)
+          .send({
+            buyerWallet: identity.buyerWallet,
+            amount: "12.5",
+            idempotencyKey: `reserve_${identity.requestId}`,
+            providerReference: "order-async-123"
+          });
+
+        reserveStatus = reserveResponse.status;
+        if (reserveResponse.status !== 200) {
+          return new Response(JSON.stringify(reserveResponse.body), {
+            status: reserveResponse.status,
+            headers: {
+              "content-type": "application/json"
+            }
+          });
+        }
+
+        return new Response(JSON.stringify({
+          status: "accepted",
+          providerJobId: "provider_async_prepaid_1",
+          pollAfterMs: 5000
+        }), {
+          status: 202,
+          headers: {
+            "content-type": "application/json"
+          }
+        });
+      }
+
+      return new Response("not found", { status: 404 });
+    });
+
+    expect(
+      await request(app)
+        .post(`/provider/services/${serviceId}/verify`)
+        .set("Authorization", `Bearer ${providerToken}`)
+    ).toMatchObject({ status: 200 });
+    expect(
+      await request(app)
+        .post(`/provider/services/${serviceId}/submit`)
+        .set("Authorization", `Bearer ${providerToken}`)
+    ).toMatchObject({ status: 202 });
+    expect(
+      await request(app)
+        .post(`/internal/provider-services/${serviceId}/publish`)
+        .set("Authorization", "Bearer test-admin-token")
+        .send({
+          reviewerIdentity: "ops@test",
+          settlementMode: "verified_escrow"
+        })
+    ).toMatchObject({ status: 200 });
+
+    const toppedUp = await request(app)
+      .post("/api/orders-async/topup")
+      .set("X-PAYMENT", Buffer.from(JSON.stringify({ paid: true })).toString("base64"))
+      .set("PAYMENT-IDENTIFIER", "payment_orders_async_topup_1")
+      .send({ amount: "25" });
+
+    expect(toppedUp.status).toBe(200);
+
+    const challenge = await request(app)
+      .post("/auth/challenge")
+      .send({
+        wallet: buyer.address,
+        resourceType: "api",
+        resourceId: "orders-async.place-order.v1"
+      });
+
+    expect(challenge.status).toBe(200);
+
+    const signed = await buyer.wallet.sign({ message: challenge.body.message });
+    const apiSession = await request(app)
+      .post("/auth/session")
+      .send({
+        wallet: buyer.address,
+        resourceType: "api",
+        resourceId: "orders-async.place-order.v1",
+        nonce: challenge.body.nonce,
+        expiresAt: challenge.body.expiresAt,
+        signature: signed.signature
+      });
+
+    expect(apiSession.status).toBe(200);
+
+    const accepted = await request(app)
+      .post("/api/orders-async/place-order")
+      .set("Authorization", `Bearer ${apiSession.body.accessToken}`)
+      .send({ item: "notebook" });
+
+    expect(accepted.status).toBe(202);
+    expect(reserveStatus).toBe(200);
+    expect(reservedJobToken).toBe(accepted.body.jobToken);
+
+    const reservation = await store.getCreditReservationByJobToken(serviceId, accepted.body.jobToken);
+    const creditAccount = await store.getCreditAccount(serviceId, buyer.address, "fastUSDC");
+    const job = await store.getJob(accepted.body.jobToken);
+
+    expect(reservation?.status).toBe("reserved");
+    expect(creditAccount?.availableAmount).toBe("12500000");
+    expect(creditAccount?.reservedAmount).toBe("12500000");
+    expect(job?.status).toBe("pending");
+    expect(job?.providerJobId).toBe("provider_async_prepaid_1");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://orders.example.com/api/place-order-async",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ item: "notebook" })
+      })
+    );
   });
 
   it("rejects invalid GET endpoint drafts for topups and nested request schemas", async () => {
@@ -2939,6 +4163,7 @@ describe("marketplace api", () => {
 
     await runMarketplaceWorkerCycle({
       store,
+      secretsKey: "test-secrets-key",
       refundService: {
         async issueRefund() {
           return { txHash: "0xmanualrecoveryrefund" };

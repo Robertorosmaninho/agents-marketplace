@@ -1,6 +1,7 @@
 import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 
 import {
+  CALLBACK_SIGNATURE_MAX_AGE_MS,
   MARKETPLACE_IDENTITY_PAYMENT_HEADER,
   MARKETPLACE_IDENTITY_REQUEST_HEADER,
   MARKETPLACE_IDENTITY_SERVICE_HEADER,
@@ -32,6 +33,10 @@ function hashValue(value: string): string {
   return createHash("sha256").update(value).digest("hex");
 }
 
+function hashBuffer(value: string | Buffer): string {
+  return createHash("sha256").update(value).digest("hex");
+}
+
 function signaturePayload(input: MarketplaceIdentityPayload): string {
   return [
     input.buyerWallet ?? "",
@@ -40,6 +45,49 @@ function signaturePayload(input: MarketplaceIdentityPayload): string {
     input.paymentId ?? "",
     input.timestamp
   ].join("\n");
+}
+
+function callbackSignaturePayload(input: {
+  method: string;
+  path: string;
+  timestamp: string;
+  bodyHash: string;
+}): string {
+  return [
+    input.method.toUpperCase(),
+    input.path,
+    input.timestamp,
+    input.bodyHash
+  ].join("\n");
+}
+
+export function createMarketplaceCallbackAuthToken(input: {
+  jobToken: string;
+  secret: string;
+}): string {
+  const digest = createHmac("sha256", input.secret)
+    .update(`marketplace-callback\n${input.jobToken}`)
+    .digest("base64url");
+  return `cbk_${digest}`;
+}
+
+export function verifyMarketplaceCallbackAuthToken(input: {
+  jobToken: string;
+  token: string;
+  secret: string;
+}): void {
+  const expected = createMarketplaceCallbackAuthToken({
+    jobToken: input.jobToken,
+    secret: input.secret
+  });
+
+  if (input.token.length !== expected.length) {
+    throw new Error("Invalid callback bearer token.");
+  }
+
+  if (!timingSafeEqual(Buffer.from(input.token, "utf8"), Buffer.from(expected, "utf8"))) {
+    throw new Error("Invalid callback bearer token.");
+  }
 }
 
 export function createProviderRuntimeKeyMaterial(secret: string): ProviderRuntimeKeyMaterial {
@@ -157,4 +205,73 @@ export function verifyMarketplaceIdentityHeaders(input: {
   }
 
   return payload;
+}
+
+export function buildMarketplaceCallbackHeaders(input: {
+  method: string;
+  path: string;
+  body: string | Buffer;
+  sharedSecret: string;
+  now?: Date;
+}): Record<string, string> {
+  const timestamp = (input.now ?? new Date()).toISOString();
+  const signature = createHmac("sha256", input.sharedSecret)
+    .update(callbackSignaturePayload({
+      method: input.method,
+      path: input.path,
+      timestamp,
+      bodyHash: hashBuffer(input.body)
+    }))
+    .digest("base64url");
+
+  return {
+    authorization: `Bearer ${input.sharedSecret}`,
+    [MARKETPLACE_IDENTITY_TIMESTAMP_HEADER]: timestamp,
+    [MARKETPLACE_IDENTITY_SIGNATURE_HEADER]: signature
+  };
+}
+
+export function verifyMarketplaceCallbackHeaders(input: {
+  method: string;
+  path: string;
+  body: string | Buffer;
+  headers: Record<string, string | string[] | undefined>;
+  sharedSecret: string;
+  now?: Date;
+  maxAgeMs?: number;
+}): void {
+  const now = input.now ?? new Date();
+  const maxAgeMs = input.maxAgeMs ?? CALLBACK_SIGNATURE_MAX_AGE_MS;
+  const read = (name: string): string => {
+    const match = Object.entries(input.headers).find(([candidate]) => candidate.toLowerCase() === name.toLowerCase());
+    const value = match ? (Array.isArray(match[1]) ? match[1][0] : match[1]) : null;
+    if (!value) {
+      throw new Error(`Missing callback header: ${name}`);
+    }
+    return value;
+  };
+
+  const timestamp = read(MARKETPLACE_IDENTITY_TIMESTAMP_HEADER);
+  const signature = read(MARKETPLACE_IDENTITY_SIGNATURE_HEADER);
+  const expected = createHmac("sha256", input.sharedSecret)
+    .update(callbackSignaturePayload({
+      method: input.method,
+      path: input.path,
+      timestamp,
+      bodyHash: hashBuffer(input.body)
+    }))
+    .digest("base64url");
+
+  if (signature.length !== expected.length) {
+    throw new Error("Invalid callback signature.");
+  }
+
+  if (!timingSafeEqual(Buffer.from(signature, "utf8"), Buffer.from(expected, "utf8"))) {
+    throw new Error("Invalid callback signature.");
+  }
+
+  const ageMs = Math.abs(now.getTime() - Date.parse(timestamp));
+  if (Number.isNaN(ageMs) || ageMs > maxAgeMs) {
+    throw new Error("Callback signature has expired.");
+  }
 }

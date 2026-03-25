@@ -51,6 +51,10 @@ function supportsGetMethod(billingType: RouteBillingType): boolean {
   return billingType === "fixed_x402" || billingType === "free" || billingType === "prepaid_credit";
 }
 
+function supportsAsyncMode(billingType: RouteBillingType): boolean {
+  return billingType !== "topup_x402_variable";
+}
+
 function usesUpstreamSecret(authMode: EndpointFormState["upstreamAuthMode"]): boolean {
   return authMode === "bearer" || authMode === "header";
 }
@@ -793,7 +797,8 @@ function EndpointDraftFields({
               return {
                 ...current,
                 billingType: nextBilling,
-                method: supportsGetMethod(nextBilling) ? current.method : "POST"
+                method: supportsGetMethod(nextBilling) ? current.method : "POST",
+                mode: supportsAsyncMode(nextBilling) ? current.mode : "sync"
               };
             })}
           >
@@ -815,6 +820,62 @@ function EndpointDraftFields({
           <option value="POST">POST</option>
         </select>
       </label>
+      <div className="grid gap-4 md:grid-cols-3">
+        <label className="grid gap-2 text-sm font-medium">
+          Mode
+          <select
+            value={state.mode}
+            className={SELECT_CLASS_NAME}
+            onChange={(event) =>
+              onChange((current) => ({
+                ...current,
+                mode: event.target.value as EndpointFormState["mode"]
+              }))}
+          >
+            <option value="sync">Sync</option>
+            {supportsAsyncMode(state.billingType) ? <option value="async">Async</option> : null}
+          </select>
+        </label>
+        {state.mode === "async" ? (
+          <>
+            <label className="grid gap-2 text-sm font-medium">
+              Async strategy
+              <select
+                value={state.asyncStrategy}
+                className={SELECT_CLASS_NAME}
+                onChange={(event) =>
+                  onChange((current) => ({
+                    ...current,
+                    asyncStrategy: event.target.value as EndpointFormState["asyncStrategy"]
+                  }))}
+              >
+                <option value="poll">Poll</option>
+                <option value="webhook">Webhook</option>
+              </select>
+            </label>
+            <label className="grid gap-2 text-sm font-medium">
+              Timeout (ms)
+              <Input
+                value={state.asyncTimeoutMs}
+                placeholder="300000"
+                required
+                onChange={(event) => onChange((current) => ({ ...current, asyncTimeoutMs: event.target.value }))}
+              />
+            </label>
+          </>
+        ) : null}
+      </div>
+      {state.mode === "async" && state.asyncStrategy === "poll" ? (
+        <label className="grid gap-2 text-sm font-medium">
+          Poll path
+          <Input
+            value={state.pollPath}
+            placeholder="/v1/jobs/poll"
+            required
+            onChange={(event) => onChange((current) => ({ ...current, pollPath: event.target.value }))}
+          />
+        </label>
+      ) : null}
       {usesFixedPrice(state.billingType) ? (
         <label className="grid gap-2 text-sm font-medium">
           Price
@@ -992,6 +1053,10 @@ function EndpointDraftFields({
 interface EndpointFormState {
   operation: string;
   method: HttpMethod;
+  mode: "sync" | "async";
+  asyncStrategy: "poll" | "webhook";
+  asyncTimeoutMs: string;
+  pollPath: string;
   title: string;
   description: string;
   billingType: RouteBillingType;
@@ -1014,6 +1079,10 @@ function defaultEndpointFormState(): EndpointFormState {
   return {
     operation: "",
     method: "POST",
+    mode: "sync",
+    asyncStrategy: "poll",
+    asyncTimeoutMs: "300000",
+    pollPath: "/v1/jobs/poll",
     title: "",
     description: "",
     billingType: "fixed_x402",
@@ -1071,6 +1140,10 @@ function endpointToFormState(endpoint: MarketplaceDraftEndpoint): EndpointFormSt
   return {
     operation: endpoint.operation,
     method: endpoint.method,
+    mode: endpoint.mode,
+    asyncStrategy: endpoint.asyncConfig?.strategy ?? "poll",
+    asyncTimeoutMs: endpoint.asyncConfig?.timeoutMs ? String(endpoint.asyncConfig.timeoutMs) : "300000",
+    pollPath: endpoint.asyncConfig?.pollPath ?? "/v1/jobs/poll",
     title: endpoint.title,
     description: endpoint.description,
     billingType: endpoint.billing.type,
@@ -1094,6 +1167,10 @@ function openApiCandidateToFormState(candidate: OpenApiImportPreview["endpoints"
   return {
     operation: candidate.operation,
     method: candidate.method,
+    mode: "sync",
+    asyncStrategy: "poll",
+    asyncTimeoutMs: "300000",
+    pollPath: "/v1/jobs/poll",
     title: candidate.title,
     description: candidate.description,
     billingType: "fixed_x402",
@@ -1121,7 +1198,7 @@ function buildEndpointInput(state: EndpointFormState): CreateMarketplaceProvider
     title: state.title,
     description: state.description,
     billingType: state.billingType,
-    mode: "sync",
+    mode: state.mode,
     requestSchemaJson: JSON.parse(state.requestSchemaJson),
     responseSchemaJson: JSON.parse(state.responseSchemaJson),
     requestExample: JSON.parse(state.requestExample),
@@ -1137,6 +1214,12 @@ function buildEndpointInput(state: EndpointFormState): CreateMarketplaceProvider
     input.minAmount = state.minAmount || null;
     input.maxAmount = state.maxAmount || null;
     return input;
+  }
+
+  if (state.mode === "async") {
+    input.asyncStrategy = state.asyncStrategy;
+    input.asyncTimeoutMs = Number(state.asyncTimeoutMs);
+    input.pollPath = state.asyncStrategy === "poll" ? (state.pollPath || null) : null;
   }
 
   input.upstreamBaseUrl = state.upstreamBaseUrl;
@@ -1160,6 +1243,7 @@ function buildEndpointUpdateInput(state: EndpointFormState, hasSecret: boolean):
     endpointType: "marketplace_proxy",
     operation: state.operation,
     method: state.method,
+    mode: state.mode,
     title: state.title,
     description: state.description,
     billingType: state.billingType,
@@ -1183,6 +1267,12 @@ function buildEndpointUpdateInput(state: EndpointFormState, hasSecret: boolean):
     input.upstreamAuthMode = null;
     input.upstreamAuthHeaderName = null;
     return input;
+  }
+
+  if (state.mode === "async") {
+    input.asyncStrategy = state.asyncStrategy;
+    input.asyncTimeoutMs = Number(state.asyncTimeoutMs);
+    input.pollPath = state.asyncStrategy === "poll" ? (state.pollPath || null) : null;
   }
 
   input.upstreamBaseUrl = state.upstreamBaseUrl;

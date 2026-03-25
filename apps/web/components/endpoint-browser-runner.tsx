@@ -60,7 +60,7 @@ export function EndpointBrowserRunner({
 
   const apiBaseUrl = React.useMemo(() => new URL(endpoint.proxyUrl).origin, [endpoint.proxyUrl]);
   const isFreeRoute = endpoint.billingType === "free";
-  const usesWalletSession = endpoint.billingType === "prepaid_credit";
+  const usesWalletSession = endpoint.billingType === "prepaid_credit" || (endpoint.billingType === "free" && endpoint.mode === "async");
   const usesX402 = endpoint.billingType === "fixed_x402" || endpoint.billingType === "topup_x402_variable";
   const runnerTitle = isFreeRoute
     ? "Run this endpoint in the browser"
@@ -68,9 +68,11 @@ export function EndpointBrowserRunner({
     ? "Authorize and run this endpoint with your Fast wallet"
     : "Pay and run this endpoint with the Fast extension";
   const runnerDescription = isFreeRoute
-    ? "This sends the request directly from the browser. No Fast payment headers or wallet extension are required."
+    ? usesWalletSession
+      ? "This signs a route-scoped wallet session challenge in the browser and invokes the async endpoint with a bearer token. No x402 payment flow is used."
+      : "This sends the request directly from the browser. No Fast payment headers or wallet extension are required."
     : usesWalletSession
-    ? "This signs a route-scoped wallet session challenge in the browser and invokes the endpoint with a bearer token. No x402 payment flow is used for prepaid-credit routes."
+    ? "This signs a route-scoped wallet session challenge in the browser and invokes the endpoint with a bearer token. No x402 payment flow is used for wallet-session routes."
     : "This sends the unpaid request first, signs a Fast payment only if the route returns `402`, and then retries with the x402 proof directly from the browser wallet.";
   const runLabel = isFreeRoute
     ? "Run in browser"

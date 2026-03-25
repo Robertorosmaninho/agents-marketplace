@@ -15,7 +15,7 @@ export class MockProviderAdapter implements ProviderAdapter {
   private readonly syncResponses = new Map<string, { statusCode: number; body: unknown }>();
   private readonly asyncResponses = new Map<
     string,
-    { providerJobId: string; pollAfterMs: number; state: Record<string, unknown> }
+    { providerJobId: string; pollAfterMs: number; providerState: Record<string, unknown> }
   >();
 
   async execute(context: ProviderExecuteContext) {
@@ -55,7 +55,7 @@ export class MockProviderAdapter implements ProviderAdapter {
           kind: "async" as const,
           providerJobId: existing.providerJobId,
           pollAfterMs: existing.pollAfterMs,
-          state: existing.state
+          providerState: existing.providerState
         };
       }
 
@@ -64,7 +64,7 @@ export class MockProviderAdapter implements ProviderAdapter {
         kind: "async" as const,
         providerJobId: createOpaqueToken("provider"),
         pollAfterMs: input.delayMs ?? 5_000,
-        state: {
+        providerState: {
           topic: input.topic,
           shouldFail: Boolean(input.shouldFail),
           readyAt: Date.now() + (input.delayMs ?? 5_000)
@@ -73,7 +73,7 @@ export class MockProviderAdapter implements ProviderAdapter {
       this.asyncResponses.set(context.requestId, {
         providerJobId: response.providerJobId,
         pollAfterMs: response.pollAfterMs ?? 5_000,
-        state: response.state ?? {}
+        providerState: response.providerState ?? {}
       });
       return response;
     }
@@ -91,7 +91,7 @@ export class MockProviderAdapter implements ProviderAdapter {
     if (Date.now() < readyAt) {
       return {
         status: "pending",
-        state,
+        providerState: state,
         pollAfterMs: Math.max(1_000, readyAt - Date.now())
       };
     }
@@ -101,7 +101,7 @@ export class MockProviderAdapter implements ProviderAdapter {
         status: "failed",
         permanent: true,
         error: `Mock provider failed report generation for "${state.topic ?? "unknown"}".`,
-        state
+        providerState: state
       };
     }
 

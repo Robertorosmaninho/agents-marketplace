@@ -108,13 +108,16 @@ function ProviderServiceReviewInner({
     { label: "At least one endpoint exists", ok: detail.endpoints.length > 0 },
     { label: "Website verification succeeded", ok: detail.verification?.status === "verified" },
     {
-      label: isMarketplaceService ? "Runtime key is ready for Community or prepaid flows" : "Marketplace runtime key is not required",
+      label: isMarketplaceService ? "Runtime key is ready for Community, async, or prepaid flows" : "Marketplace runtime key is not required",
       ok: isMarketplaceService
         ? (
             Boolean(runtimeKey)
             || (
               detail.service.settlementMode === "verified_escrow"
-              && !detail.endpoints.some((endpoint) => endpoint.endpointType === "marketplace_proxy" && endpoint.billing.type === "prepaid_credit")
+              && !detail.endpoints.some((endpoint) =>
+                endpoint.endpointType === "marketplace_proxy"
+                && (endpoint.billing.type === "prepaid_credit" || endpoint.mode === "async")
+              )
             )
           )
         : true
