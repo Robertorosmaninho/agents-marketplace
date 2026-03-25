@@ -2,7 +2,7 @@
   "profile": {
     "displayName": "Google Places Scraper",
     "bio": "Marketplace-hosted Google Places scraping powered by Apify.",
-    "websiteUrl": "https://replace-with-google-places-host.example.com",
+    "websiteUrl": "https://fastmainnetapifygoogleplaces.8o.vc",
     "contactEmail": "replace-with-provider-email@example.com"
   },
   "service": {
@@ -19,7 +19,7 @@
       "Call the paid run route with your actor input.",
       "Keep the returned job token and poll the marketplace job route for completion."
     ],
-    "websiteUrl": "https://replace-with-google-places-host.example.com",
+    "websiteUrl": "https://fastmainnetapifygoogleplaces.8o.vc",
     "payoutWallet": "replace-with-mainnet-fast-wallet"
   },
   "endpoints": [
@@ -58,7 +58,7 @@
         ]
       },
       "usageNotes": "The marketplace returns a job token immediately and stores the completed actor output on the job record.",
-      "upstreamBaseUrl": "https://replace-with-google-places-host.example.com",
+      "upstreamBaseUrl": "https://fastmainnetapifygoogleplaces.8o.vc",
       "upstreamPath": "/run",
       "upstreamAuthMode": "none"
     }
