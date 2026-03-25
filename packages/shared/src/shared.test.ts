@@ -733,7 +733,7 @@ describe("shared marketplace helpers", () => {
     expect((await store.listProviderRequests("fast1providerwallet000000000000000000000000000000000000000000000000")).length).toBe(0);
   });
 
-  it("deduplicates refunds by payment id in the in-memory store", async () => {
+  it("deduplicates refunds by payment id and attaches the job token in the in-memory store", async () => {
     const store = new InMemoryMarketplaceStore();
 
     const first = await store.createRefund({
@@ -751,7 +751,55 @@ describe("shared marketplace helpers", () => {
 
     expect(second.id).toBe(first.id);
     expect(second.paymentId).toBe(first.paymentId);
-    expect(second.jobToken).toBeNull();
+    expect(second.jobToken).toBe("job_refund_1");
+  });
+
+  it("does not backfill provider payouts for refunded completed jobs", async () => {
+    const store = new InMemoryMarketplaceStore(TESTNET_NETWORK_CONFIG);
+    const asyncRoute = TESTNET_MARKETPLACE_ROUTES.find((route) => route.routeId === "mock.async-report.v1");
+
+    if (!asyncRoute) {
+      throw new Error("Missing async seeded route.");
+    }
+
+    await store.saveAsyncAcceptance({
+      paymentId: "payment_refunded_completed_job_1",
+      normalizedRequestHash: "hash-refunded-completed-job-1",
+      buyerWallet: "fast1buyerrefundedcompleted000000000000000000000000000000000000000",
+      route: asyncRoute,
+      quotedPrice: "150000",
+      payoutSplit: buildEscrowSplit({
+        providerAccountId: "mock",
+        providerWallet: "fast1providerrefundedcompleted0000000000000000000000000000000000000",
+        marketplaceBps: 5000,
+        marketplaceAmount: "75000",
+        providerBps: 5000,
+        providerAmount: "75000"
+      }),
+      paymentPayload: "payload-refunded-completed-job-1",
+      facilitatorResponse: { isValid: true },
+      jobToken: "job_refunded_completed_1",
+      requestId: "request_refunded_completed_1",
+      providerJobId: "provider_refunded_completed_1",
+      requestBody: { topic: "refunded completed" },
+      providerState: { step: "done" },
+      responseBody: {
+        jobToken: "job_refunded_completed_1",
+        status: "pending"
+      },
+      responseHeaders: {}
+    });
+
+    await store.completeJob("job_refunded_completed_1", { ok: true });
+    const refund = await store.createRefund({
+      jobToken: "job_refunded_completed_1",
+      paymentId: "payment_refunded_completed_job_1",
+      wallet: "fast1buyerrefundedcompleted000000000000000000000000000000000000000",
+      amount: "150000"
+    });
+    await store.markRefundSent(refund.id, "0xrefunded-completed");
+
+    expect(await store.listRecoverableProviderPayouts(10)).toEqual([]);
   });
 
   it("resets async job timeout metadata when acceptance is persisted after a placeholder", async () => {

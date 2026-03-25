@@ -1159,6 +1159,33 @@ export class InMemoryMarketplaceStore implements MarketplaceStore {
     const existing = this.refundsByPaymentId.get(input.paymentId)
       ?? (input.jobToken ? this.refundsByJobToken.get(input.jobToken) : undefined);
     if (existing) {
+      if (input.jobToken && existing.jobToken && existing.jobToken !== input.jobToken) {
+        throw new Error("Refund paymentId and jobToken reference different jobs.");
+      }
+
+      if (input.jobToken && !existing.jobToken) {
+        const updated: RefundRecord = {
+          ...existing,
+          jobToken: input.jobToken,
+          updatedAt: timestamp()
+        };
+        this.refundsById.set(updated.id, updated);
+        this.refundsByPaymentId.set(updated.paymentId, updated);
+        this.refundsByJobToken.set(input.jobToken, updated);
+
+        const job = this.jobsByToken.get(input.jobToken);
+        if (job) {
+          this.jobsByToken.set(input.jobToken, {
+            ...job,
+            refundStatus: updated.status,
+            refundId: updated.id,
+            updatedAt: timestamp()
+          });
+        }
+
+        return clone(updated);
+      }
+
       return clone(existing);
     }
 
@@ -1355,6 +1382,7 @@ export class InMemoryMarketplaceStore implements MarketplaceStore {
 
       if (
         job.status !== "completed"
+        || job.refundStatus !== "not_required"
         || !job.payoutSplit.usesTreasurySettlement
         || !job.payoutSplit.providerWallet
         || BigInt(job.payoutSplit.providerAmount) <= 0n
@@ -5147,7 +5175,35 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
       [input.paymentId, jobToken]
     );
     if (existingResult.rowCount) {
-      return mapRefundRow(existingResult.rows[0]);
+      const existing = mapRefundRow(existingResult.rows[0]);
+      if (jobToken && existing.jobToken && existing.jobToken !== jobToken) {
+        throw new Error("Refund paymentId and jobToken reference different jobs.");
+      }
+
+      if (jobToken && !existing.jobToken) {
+        const result = await this.pool.query(
+          `
+          UPDATE refunds
+          SET job_token = $2, updated_at = NOW()
+          WHERE id = $1
+            AND job_token IS NULL
+          RETURNING *
+          `,
+          [existing.id, jobToken]
+        );
+        const updated = mapRefundRow(result.rows[0] ?? existingResult.rows[0]);
+        await this.pool.query(
+          `
+          UPDATE jobs
+          SET refund_status = $2, refund_id = $3, updated_at = NOW()
+          WHERE job_token = $1
+          `,
+          [jobToken, updated.status, updated.id]
+        );
+        return updated;
+      }
+
+      return existing;
     }
 
     const result = await this.pool.query(
@@ -5314,6 +5370,7 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
         payout_split->>'providerAmount' AS amount
       FROM jobs
       WHERE status = 'completed'
+        AND refund_status = 'not_required'
         AND COALESCE((payout_split->>'usesTreasurySettlement')::boolean, TRUE)
         AND COALESCE(payout_split->>'providerWallet', '') <> ''
         AND (payout_split->>'providerAmount')::numeric > 0

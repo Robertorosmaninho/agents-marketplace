@@ -14,6 +14,7 @@ import {
   type MarketplaceStore,
   type PollResult,
   type PayoutService,
+  type ProviderAttemptRecord,
   type ProviderRegistry,
   type RefundService,
   type UpstreamAuthMode
@@ -221,15 +222,16 @@ export async function runMarketplaceWorkerCycle(options: MarketplaceWorkerOption
 
 async function recoverAcceptedAsyncPlaceholder(
   store: MarketplaceStore,
-  job: JobRecord
+  job: JobRecord,
+  attempt?: ProviderAttemptRecord | null
 ): Promise<JobRecord | null> {
-  const attempt = await store.getLatestSuccessfulProviderExecuteAttempt(job.jobToken);
-  const accepted = parseAcceptedAsyncExecuteAttempt(attempt?.responsePayload);
+  const resolvedAttempt = attempt ?? await store.getLatestSuccessfulProviderExecuteAttempt(job.jobToken);
+  const accepted = parseAcceptedAsyncExecuteAttempt(resolvedAttempt?.responsePayload);
   if (!accepted) {
     return null;
   }
 
-  const acceptedAt = parseAttemptCreatedAt(attempt?.createdAt);
+  const acceptedAt = parseAttemptCreatedAt(resolvedAttempt?.createdAt);
   const nextPollAt = job.routeSnapshot.asyncConfig?.strategy === "poll"
     ? computeNextPollAt(accepted.pollAfterMs, acceptedAt)
     : null;
@@ -522,9 +524,13 @@ function buildRecoveredAsyncJobResponse(job: JobRecord, now: Date = new Date()):
   return response;
 }
 
-function canRecoverPendingJobExecution(job: JobRecord): boolean {
-  return job.status !== "pending"
-    || Boolean(job.providerJobId);
+function canRecoverPendingJobExecution(
+  job: JobRecord,
+  acceptedExecuteAttempt: ProviderAttemptRecord | null
+): boolean {
+  return job.status === "completed"
+    || Boolean(job.providerJobId)
+    || Boolean(parseAcceptedAsyncExecuteAttempt(acceptedExecuteAttempt?.responsePayload));
 }
 
 async function recoverStalePendingPayments(input: {
@@ -540,9 +546,19 @@ async function recoverStalePendingPayments(input: {
       continue;
     }
 
+    let job: JobRecord | null = null;
+    let acceptedExecuteAttempt: ProviderAttemptRecord | null = null;
     if (payment.responseKind === "job" && payment.jobToken) {
-      const job = await input.store.getJob(payment.jobToken);
-      if (job && canRecoverPendingJobExecution(job)) {
+      job = await input.store.getJob(payment.jobToken);
+      if (job && !job.providerJobId) {
+        acceptedExecuteAttempt = await input.store.getLatestSuccessfulProviderExecuteAttempt(job.jobToken);
+        const repairedJob = await recoverAcceptedAsyncPlaceholder(input.store, job, acceptedExecuteAttempt);
+        if (repairedJob) {
+          job = repairedJob;
+        }
+      }
+
+      if (job && canRecoverPendingJobExecution(job, acceptedExecuteAttempt)) {
         await input.store.completePendingJobExecution({
           paymentId: payment.paymentId,
           jobToken: job.jobToken,
@@ -553,16 +569,20 @@ async function recoverStalePendingPayments(input: {
       }
     }
 
-    const existingRefund = await input.store.getRefundByPaymentId(payment.paymentId);
-    if (existingRefund?.status === "sent") {
-      continue;
-    }
-
-    const refund = existingRefund ?? await input.store.createRefund({
+    const refund = await input.store.createRefund({
+      jobToken: payment.jobToken ?? undefined,
       paymentId: payment.paymentId,
       wallet: payment.buyerWallet,
       amount: payment.quotedPrice
     });
+
+    if (job) {
+      await fenceRefundedAsyncJob(input.store, payment.paymentId, job);
+    }
+
+    if (refund.status === "sent") {
+      continue;
+    }
 
     try {
       const receipt = await input.refundService.issueRefund({
@@ -576,6 +596,21 @@ async function recoverStalePendingPayments(input: {
       await input.store.markRefundFailed(refund.id, message);
     }
   }
+}
+
+async function fenceRefundedAsyncJob(
+  store: MarketplaceStore,
+  paymentId: string,
+  job: JobRecord
+) {
+  if (job.status !== "pending") {
+    return job;
+  }
+
+  return store.failJob(
+    job.jobToken,
+    `Automatic recovery refund started for unresolved paid request ${paymentId}.`
+  );
 }
 
 async function backfillProviderPayouts(input: {
