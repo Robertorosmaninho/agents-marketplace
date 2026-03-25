@@ -19,7 +19,7 @@ Marketplace-executed routes use one of four billing modes:
 - `fixed_x402`: standard paid route; buyer sends the request, gets `402 Payment Required`, pays with x402, then retries the same request
 - `topup_x402_variable`: buyer supplies an amount in the request body, pays that exact amount with x402, and receives marketplace-managed service credit
 - `prepaid_credit`: buyer first funds service credit, then invokes the route with wallet-session bearer auth instead of paying x402 on every call
-- `free`: buyer invokes the marketplace route directly with no x402 payment
+- `free`: buyer invokes the marketplace route without x402 payment; async free routes still use wallet-session auth for job-bound retrieval
 
 Discovery-only `external_registry` listings do not use marketplace billing. They publish direct provider URLs and the provider defines payment and auth outside the marketplace.
 
@@ -186,13 +186,13 @@ npm run cli -- wallet address
 npm run cli -- invoke mock quick-insight --body '{"query":"alpha"}'
 ```
 
-For prepaid-credit routes, the CLI can mint an API-scoped wallet session automatically when the route responds with auth requirements instead of `402`. You can also create that session explicitly:
+For prepaid-credit routes, and for async free routes that require wallet-session auth, the CLI can mint an API-scoped wallet session automatically when the route responds with auth requirements instead of `402`. You can also create that session explicitly:
 
 ```bash
 npm run cli -- auth api-session <provider> <operation>
 ```
 
-For provider-authored top-up routes, call the route with an amount in the request body. For prepaid-credit routes, fund credit first, then call the prepaid route with the same `invoke` command; the CLI will switch to wallet-session auth when needed.
+For provider-authored top-up routes, call the route with an amount in the request body. For prepaid-credit routes, fund credit first, then call the prepaid route with the same `invoke` command; the CLI will switch to wallet-session auth when needed. Async free routes also use wallet-session auth and return a `jobToken` for `GET /api/jobs/:jobToken`.
 
 Provider-agent workflow:
 
@@ -255,6 +255,7 @@ Required worker environment:
 ```bash
 DATABASE_URL=postgres://...
 MARKETPLACE_TREASURY_PRIVATE_KEY=<fast-ed25519-private-key-hex>
+MARKETPLACE_SECRETS_KEY=change-me-again
 MARKETPLACE_FAST_NETWORK=mainnet
 FAST_RPC_URL=https://api.fast.xyz/proxy
 WORKER_POLL_INTERVAL_MS=5000
@@ -292,20 +293,25 @@ Keep the web, API, and worker on the same network value inside each stack. The f
 
 ### Provider Credit Runtime
 
-Provider runtime keys are used in two cases:
+Provider runtime keys are used in three cases:
 
 - `community_direct` HTTP routes: the marketplace forwards signed buyer identity headers so the provider can trust the requester wallet and `X-MARKETPLACE-REQUEST-ID`
+- `verified_escrow` async HTTP routes: the marketplace signs async execute and poll requests, injects `X-MARKETPLACE-JOB-TOKEN`, and can inject webhook callback auth for provider completion
 - `verified_escrow` prepaid-credit routes: the provider uses the runtime credit APIs to reserve, capture, and release marketplace-held credit
 
 Provider runtime key operations:
 
 - rotate a runtime key from the provider service dashboard or `POST /provider/services/:id/runtime-key`
 - marketplace forwards signed buyer identity headers to the provider upstream when the settlement flow requires them
+- async HTTP providers can complete webhook jobs through `POST /provider/runtime/jobs/:jobToken/callback`
 - provider backends reserve, capture, and release buyer credit through:
   - `POST /provider/runtime/credits/reserve`
   - `POST /provider/runtime/credits/:reservationId/capture`
 - `POST /provider/runtime/credits/:reservationId/release`
+- `POST /provider/runtime/credits/:reservationId/extend`
 - top-up purchases recognize provider revenue at purchase time; later credit consumption does not create a second provider payout
+
+Webhook async providers require an HTTPS `MARKETPLACE_BASE_URL` so the marketplace can inject a callback URL during execute.
 
 ### Scripts
 
