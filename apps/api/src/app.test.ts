@@ -153,8 +153,77 @@ describe("marketplace api", () => {
     const detailResponse = await request(app).get("/catalog/services/mock-research-signals");
     expect(detailResponse.status).toBe(200);
     expect(detailResponse.body.summary.endpointCount).toBe(2);
+    expect(detailResponse.body.summary.settlementToken).toBe("testUSDC");
     expect(detailResponse.body.skillUrl).toBe("https://marketplace.example.com/skill.md");
     expect(detailResponse.body.useThisServicePrompt).toContain("https://marketplace.example.com/skill.md");
+    expect(detailResponse.body.useThisServicePrompt).toContain("testUSDC");
+    expect(detailResponse.body.endpoints[0]?.authRequirement?.type).toBe("x402");
+    expect(detailResponse.body.endpoints[0]?.tokenSymbol).toBe("testUSDC");
+  });
+
+  it("returns mixed catalog search results with stable machine-readable filters", async () => {
+    const { app } = await createTestApp({
+      deploymentNetwork: "testnet"
+    });
+
+    const response = await request(app)
+      .get("/catalog/search")
+      .query({
+        q: "quick insight",
+        settlementMode: "verified_escrow",
+        limit: 5
+      });
+
+    expect(response.status).toBe(200);
+    expect(response.body.results[0]).toMatchObject({
+      kind: "route",
+      summary: {
+        ref: "mock.quick-insight",
+        tokenSymbol: "testUSDC",
+        authRequirement: {
+          type: "x402"
+        }
+      }
+    });
+    expect(response.body.results[1]).toMatchObject({
+      kind: "service",
+      summary: {
+        slug: "mock-research-signals"
+      },
+      routeRefs: ["mock.quick-insight"]
+    });
+  });
+
+  it("returns route detail for one executable marketplace route", async () => {
+    const { app } = await createTestApp({
+      deploymentNetwork: "testnet"
+    });
+
+    const response = await request(app).get("/catalog/routes/mock/quick-insight");
+
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({
+      kind: "route",
+      ref: "mock.quick-insight",
+      routeId: "mock.quick-insight.v1",
+      billingType: "fixed_x402",
+      tokenSymbol: "testUSDC",
+      authRequirement: {
+        type: "x402"
+      }
+    });
+    expect(response.body.serviceSummary.slug).toBe("mock-research-signals");
+    expect(response.body.serviceSummary.settlementToken).toBe("testUSDC");
+  });
+
+  it("returns 404 for unknown route detail", async () => {
+    const { app } = await createTestApp({
+      deploymentNetwork: "testnet"
+    });
+
+    const response = await request(app).get("/catalog/routes/missing/route");
+    expect(response.status).toBe(404);
+    expect(response.body.error).toBe("Route not found.");
   });
 
   it("accepts public suggestions and requires an admin token for internal review", async () => {
