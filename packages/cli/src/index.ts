@@ -1,5 +1,7 @@
 #!/usr/bin/env node
+import { realpathSync } from "node:fs";
 import { pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 
 import { Command } from "commander";
 
@@ -284,6 +286,19 @@ export async function runCli(argv = process.argv, deps: CliDependencies = defaul
   }
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+export function shouldRunCli(argv = process.argv, moduleUrl = import.meta.url): boolean {
+  const invokedPath = argv[1];
+  if (!invokedPath) {
+    return false;
+  }
+
+  try {
+    return realpathSync(invokedPath) === realpathSync(fileURLToPath(moduleUrl));
+  } catch {
+    return moduleUrl === pathToFileURL(invokedPath).href;
+  }
+}
+
+if (shouldRunCli(process.argv, import.meta.url)) {
   await runCli(process.argv);
 }

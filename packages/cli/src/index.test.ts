@@ -1,8 +1,12 @@
 import { readFile } from "node:fs/promises";
+import { mkdtemp, symlink } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
-import { createProgram } from "./index.js";
+import { createProgram, shouldRunCli } from "./index.js";
 
 describe("marketplace cli command surface", () => {
   it("registers the discovery-first buyer commands", () => {
@@ -46,5 +50,14 @@ describe("marketplace cli command surface", () => {
     expect(packageJson.bin?.["fast-marketplace"]).toBe("./dist/index.js");
     expect(packageJson.exports?.["."]).toBe("./dist/index.js");
     expect(packageJson.scripts?.prepack).toBe("npm run build");
+  });
+
+  it("treats a symlinked bin path as the CLI entrypoint", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "marketplace-cli-entry-"));
+    const targetPath = new URL("./index.ts", import.meta.url);
+    const symlinkPath = join(tempDir, "fast-marketplace");
+    await symlink(fileURLToPath(targetPath), symlinkPath);
+
+    expect(shouldRunCli(["node", symlinkPath], targetPath.href)).toBe(true);
   });
 });
