@@ -367,9 +367,6 @@ export async function invokePaidRoute(
   },
   deps: CliDependencies = defaultCliDependencies()
 ): Promise<UseRouteResult> {
-  const loaded = await loadWallet(input);
-  const config = await readCliConfig(input.configPath);
-  const network = resolveCliNetwork(input.network, config.defaultNetwork, input.rpcUrl);
   const route = await resolvePublishedRoute(input.apiUrl, input.provider, input.operation, deps);
   const requestTarget = buildInvocationTarget({
     apiUrl: input.apiUrl,
@@ -413,6 +410,9 @@ export async function invokePaidRoute(
     return buildUseRouteResult(route.ref, response.status, await safeJson(response), "none");
   }
 
+  const config = await readCliConfig(input.configPath);
+  const network = resolveCliNetwork(input.network, config.defaultNetwork, input.rpcUrl);
+  const loaded = await loadWallet(input);
   const paymentId = createOpaqueToken("payment");
   const headers = buildClientHeaders(config, paymentId);
   const preflight = await deps.fetchImpl(requestTarget.url, buildInvocationInit(route.method, headers, requestTarget.body));

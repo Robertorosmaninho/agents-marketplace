@@ -186,7 +186,7 @@ describe("marketplace api", () => {
       summary: {
         slug: "mock-research-signals"
       },
-      routeRefs: ["mock.quick-insight", "mock.async-report"]
+      routeRefs: ["mock.quick-insight"]
     });
   });
 

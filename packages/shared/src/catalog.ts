@@ -615,7 +615,6 @@ export function buildCatalogSearchResults(input: {
       continue;
     }
 
-    const matchingRouteRefs = filteredRoutes.map((route) => buildRouteRef(route));
     const serviceScore = scoreTextMatch(queryTokens, [
       serviceDetail.service.slug,
       serviceDetail.service.name,
@@ -625,23 +624,32 @@ export function buildCatalogSearchResults(input: {
       serviceDetail.service.promptIntro,
       ...serviceDetail.service.categories
     ]);
-    const routeScores = filteredRoutes.map((route) =>
-      scoreTextMatch(queryTokens, [
-        buildRouteRef(route),
-        route.routeId,
-        route.provider,
-        route.operation,
-        route.title,
-        route.description,
-        route.usageNotes,
-        serviceDetail.service.slug,
-        serviceDetail.service.name,
-        serviceDetail.service.ownerName,
-        ...serviceDetail.service.categories
-      ])
-    );
-    const maxRouteScore = routeScores.reduce((highest, score) => Math.max(highest, score), -1);
-
+    const scoredRoutes = filteredRoutes.map((route) => {
+      const ref = buildRouteRef(route);
+      return {
+        route,
+        ref,
+        score: scoreTextMatch(queryTokens, [
+          ref,
+          route.routeId,
+          route.provider,
+          route.operation,
+          route.title,
+          route.description,
+          route.usageNotes,
+          serviceDetail.service.slug,
+          serviceDetail.service.name,
+          serviceDetail.service.ownerName,
+          ...serviceDetail.service.categories
+        ])
+      };
+    });
+    const maxRouteScore = scoredRoutes.reduce((highest, candidate) => Math.max(highest, candidate.score), -1);
+    const matchingRouteRefs = (queryTokens.length === 0
+      ? scoredRoutes
+      : scoredRoutes.filter((candidate) => candidate.score >= 0))
+      .map((candidate) => candidate.ref)
+      .sort((left, right) => left.localeCompare(right));
     if (queryTokens.length === 0 || serviceScore >= 0 || maxRouteScore >= 0) {
       results.push({
         score: Math.max(serviceScore, maxRouteScore > 0 ? maxRouteScore - 1 : maxRouteScore),
@@ -652,21 +660,7 @@ export function buildCatalogSearchResults(input: {
       });
     }
 
-    for (const route of filteredRoutes) {
-      const routeScore = scoreTextMatch(queryTokens, [
-        buildRouteRef(route),
-        route.routeId,
-        route.provider,
-        route.operation,
-        route.title,
-        route.description,
-        route.usageNotes,
-        serviceDetail.service.slug,
-        serviceDetail.service.name,
-        serviceDetail.service.ownerName,
-        ...serviceCategories
-      ]);
-
+    for (const { route, score: routeScore } of scoredRoutes) {
       if (queryTokens.length > 0 && routeScore < 0) {
         continue;
       }

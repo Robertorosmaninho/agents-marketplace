@@ -709,6 +709,10 @@ describe("shared marketplace helpers", () => {
         settlementMode: "verified_escrow"
       }
     });
+    const unfilteredSearch = buildCatalogSearchResults({
+      services: [searchableService],
+      apiBaseUrl: "https://api.marketplace.example.com"
+    });
 
     expect(fixedSearch[0]).toMatchObject({
       kind: "route",
@@ -718,7 +722,7 @@ describe("shared marketplace helpers", () => {
     });
     expect(fixedSearch[1]).toMatchObject({
       kind: "service",
-      routeRefs: ["mock.quick-insight", "mock.free-async-search"]
+      routeRefs: ["mock.quick-insight"]
     });
     expect(asyncSearch).toEqual([
       expect.objectContaining({
@@ -735,6 +739,10 @@ describe("shared marketplace helpers", () => {
         routeRefs: ["mock.free-async-search"]
       })
     ]);
+    expect(unfilteredSearch.find((result) => result.kind === "service")).toMatchObject({
+      kind: "service",
+      routeRefs: ["mock.free-async-search", "mock.quick-insight"]
+    });
   });
 
   it("computes service analytics and provider request queue state in the in-memory store", async () => {

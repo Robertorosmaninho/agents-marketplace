@@ -548,6 +548,68 @@ describe("marketplace cli", () => {
     });
   });
 
+  it("executes a free sync route without requiring local wallet setup", async () => {
+    const fetchImpl = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+
+      if (url.endsWith("/catalog/routes/public/free-search")) {
+        return jsonResponse(200, buildRouteDetail({
+          ref: "public.free-search",
+          routeId: "public.free-search.v1",
+          provider: "public",
+          operation: "free-search",
+          price: "Free",
+          billingType: "free",
+          authRequirement: {
+            type: "none",
+            description: "No payment or session token is required."
+          },
+          path: "/api/public/free-search",
+          proxyUrl: `${API_URL}/api/public/free-search`,
+          requestExample: { query: "alpha" }
+        }));
+      }
+
+      if (url.endsWith("/api/public/free-search")) {
+        const headers = new Headers(init?.headers);
+        expect(headers.get("authorization")).toBeNull();
+        expect(headers.get("x-payment")).toBeNull();
+        return jsonResponse(200, {
+          ok: true,
+          query: "alpha"
+        });
+      }
+
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+
+    const result = await useMarketplaceRoute(
+      {
+        apiUrl: API_URL,
+        ref: "public.free-search",
+        body: { query: "alpha" }
+      },
+      {
+        fetchImpl: fetchImpl as unknown as typeof fetch,
+        confirm: async () => true,
+        now: () => new Date(),
+        print: () => {},
+        error: () => {}
+      }
+    );
+
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(result).toMatchObject({
+      ref: "public.free-search",
+      statusCode: 200,
+      authFlow: "none",
+      body: {
+        ok: true,
+        query: "alpha"
+      }
+    });
+  });
+
   it("executes a prepaid-credit route with wallet-session auth", async () => {
     const tempDir = await mkdtemp(join(tmpdir(), "marketplace-cli-use-prepaid-"));
     const keyfilePath = join(tempDir, "wallet.json");
