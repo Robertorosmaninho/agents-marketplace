@@ -44,12 +44,16 @@ export async function resolveAsyncJobFailure(input: {
     wallet: job.buyerWallet,
     amount: job.quotedPrice
   });
-  const claimedRefund = refund.status === "pending"
-    ? await input.store.claimRefundForSend(refund.id)
-    : null;
-
-  if (refund.status === "sent" || refund.status === "failed" || !claimedRefund) {
+  if (refund.status === "sent" || refund.status === "failed") {
     return { job, refund };
+  }
+
+  const claimedRefund = await input.store.claimRefundForSend(refund.id);
+  if (!claimedRefund) {
+    return {
+      job,
+      refund: await input.store.getRefundByPaymentId(job.paymentId) ?? refund
+    };
   }
 
   try {

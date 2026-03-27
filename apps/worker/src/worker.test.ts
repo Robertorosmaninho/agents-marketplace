@@ -424,6 +424,60 @@ describe("marketplace worker", () => {
     expect(await store.listPendingProviderPayouts(10)).toHaveLength(0);
   });
 
+  it("reclaims stale sending provider payouts after a worker crash", async () => {
+    const store = new InMemoryMarketplaceStore();
+    const providerWallet = "fast1providercrash0000000000000000000000000000000000000000000000000";
+
+    const payout = await store.createProviderPayout({
+      sourceKind: "route_charge",
+      sourceId: "sync_payment_crash_1",
+      providerAccountId: "provider_crash_1",
+      providerWallet,
+      currency: "USDC",
+      amount: "200000"
+    });
+
+    const claimed = await store.claimPendingProviderPayouts(10);
+    expect(claimed.map((entry) => entry.id)).toEqual([payout.id]);
+
+    const providerPayoutsById = (store as unknown as {
+      providerPayoutsById: Map<string, {
+        status: string;
+        updatedAt: string;
+      }>;
+    }).providerPayoutsById;
+    const sending = providerPayoutsById.get(payout.id);
+    if (!sending) {
+      throw new Error("Missing sending payout record.");
+    }
+
+    providerPayoutsById.set(payout.id, {
+      ...sending,
+      updatedAt: new Date(Date.now() - PAYMENT_EXECUTION_RECOVERY_MS - 1_000).toISOString()
+    });
+
+    const payouts: Array<{ wallet: string; amount: string }> = [];
+
+    await runMarketplaceWorkerCycle({
+      store,
+      secretsKey: "test-secrets-key",
+      refundService: {
+        async issueRefund() {
+          return { txHash: "0xrefund" };
+        }
+      },
+      payoutService: {
+        async issuePayout({ wallet, amount }) {
+          payouts.push({ wallet, amount });
+          return { txHash: "0xreclaimed-payout" };
+        }
+      }
+    });
+
+    expect(payouts).toEqual([{ wallet: providerWallet, amount: "200000" }]);
+    expect(await store.listPendingProviderPayouts(10)).toHaveLength(0);
+  });
+
   it("refunds stale pending payments using the stored recovery action", async () => {
     const store = new InMemoryMarketplaceStore();
     const buyerWallet = "fast1buyer00000000000000000000000000000000000000000000000000000000";
@@ -481,6 +535,89 @@ describe("marketplace worker", () => {
 
     expect(refunds).toEqual([{ wallet: buyerWallet, amount: "125000" }]);
     expect((await store.getRefundByPaymentId("stale_payment_refund_1"))?.txHash).toBe("0xstale-refund");
+  });
+
+  it("reclaims stale sending refunds after a worker crash", async () => {
+    const store = new InMemoryMarketplaceStore();
+    const buyerWallet = "fast1buyerrefundcrash000000000000000000000000000000000000000000000";
+
+    await store.claimPaymentExecution({
+      paymentId: "stale_payment_refund_crash_1",
+      normalizedRequestHash: "refund-crash-hash-1",
+      buyerWallet,
+      routeId: "mock.quick-insight.v1",
+      routeVersion: "v1",
+      pendingRecoveryAction: "refund",
+      quotedPrice: "125000",
+      payoutSplit: buildEscrowSplit({
+        providerAccountId: "mock",
+        providerWallet: null,
+        marketplaceBps: 10_000,
+        marketplaceAmount: "125000",
+        providerBps: 0,
+        providerAmount: "0"
+      }),
+      paymentPayload: "payload-refund-crash-1",
+      facilitatorResponse: { isValid: true },
+      responseKind: "sync",
+      requestId: "request-refund-crash-1",
+      responseHeaders: {}
+    });
+
+    const idempotencyByPaymentId = (store as unknown as {
+      idempotencyByPaymentId: Map<string, {
+        updatedAt: string;
+      }>;
+    }).idempotencyByPaymentId;
+    const pending = idempotencyByPaymentId.get("stale_payment_refund_crash_1");
+    if (!pending) {
+      throw new Error("Missing pending payment record.");
+    }
+
+    idempotencyByPaymentId.set("stale_payment_refund_crash_1", {
+      ...pending,
+      updatedAt: new Date(Date.now() - PAYMENT_EXECUTION_RECOVERY_MS - 1_000).toISOString()
+    });
+
+    const refund = await store.createRefund({
+      paymentId: "stale_payment_refund_crash_1",
+      wallet: buyerWallet,
+      amount: "125000"
+    });
+    const claimedRefund = await store.claimRefundForSend(refund.id);
+    expect(claimedRefund?.status).toBe("sending");
+
+    const refundsById = (store as unknown as {
+      refundsById: Map<string, {
+        status: string;
+        updatedAt: string;
+      }>;
+    }).refundsById;
+    const sendingRefund = refundsById.get(refund.id);
+    if (!sendingRefund) {
+      throw new Error("Missing sending refund record.");
+    }
+
+    refundsById.set(refund.id, {
+      ...sendingRefund,
+      updatedAt: new Date(Date.now() - PAYMENT_EXECUTION_RECOVERY_MS - 1_000).toISOString()
+    });
+
+    const refunds: Array<{ wallet: string; amount: string }> = [];
+
+    await runMarketplaceWorkerCycle({
+      store,
+      secretsKey: "test-secrets-key",
+      refundService: {
+        async issueRefund({ wallet, amount }) {
+          refunds.push({ wallet, amount });
+          return { txHash: "0xreclaimed-refund" };
+        }
+      }
+    });
+
+    expect(refunds).toEqual([{ wallet: buyerWallet, amount: "125000" }]);
+    expect((await store.getRefundByPaymentId("stale_payment_refund_crash_1"))?.txHash).toBe("0xreclaimed-refund");
   });
 
   it("finalizes already-refunded stale payments so they do not starve later recovery work", async () => {

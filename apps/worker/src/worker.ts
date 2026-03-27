@@ -659,12 +659,10 @@ async function recoverStalePendingPayments(input: {
       continue;
     }
 
-    const claimedRefund = refund.status === "pending"
-      ? await input.store.claimRefundForSend(refund.id)
-      : null;
+    const claimedRefund = await input.store.claimRefundForSend(refund.id);
     if (!claimedRefund) {
       const currentRefund = await input.store.getRefundByPaymentId(payment.paymentId);
-      if (currentRefund) {
+      if (currentRefund && (currentRefund.status === "sent" || currentRefund.status === "failed")) {
         await finalizeRecoveredRefundedPayment(input.store, payment, currentRefund, latestExecuteAttempt);
       }
       continue;

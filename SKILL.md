@@ -69,12 +69,23 @@ Before using CLI commands from this skill:
 1. Run `npm install` at the repo root.
 2. Use `npm run cli -- ...` from this workspace as the default invocation path.
 3. Treat `fast-marketplace ...` as the command name exposed by the CLI itself; if the package is installed globally or linked into `$PATH`, the same subcommands can be run directly as `fast-marketplace ...`.
+4. For provider flows, put `AGENT_WALLET_KEY`, `MARKETPLACE_API_BASE_URL`, and `MARKETPLACE_FAST_NETWORK` in the repo-root `.env`.
 
 Examples:
 
 - `npm run cli -- wallet init`
-- `npm run cli -- auth api-session <provider> <operation>`
+- `npm run cli -- use <provider>.<operation> --input '{"query":"alpha"}'`
 - `npm run cli -- provider sync --spec ./provider-spec.json`
+
+Provider env example:
+
+```bash
+AGENT_WALLET_KEY=<fast private key hex>
+MARKETPLACE_API_BASE_URL=https://fastapi.8o.vc
+MARKETPLACE_FAST_NETWORK=mainnet
+```
+
+The current provider CLI is this workspace itself. Do not point users at a separate toolkit unless one is explicitly published.
 
 ## Concrete buyer call patterns
 
@@ -254,7 +265,7 @@ Polling guidance:
 4. If the user is delegating the task to another agent, copy the service page's "Use this service" block or the canonical skill URL.
 5. For `fixed_x402` routes outside the browser panel, send the first request without payment proof, read the `402 Payment Required` response, pay from the funded wallet, and retry the same request with the payment proof headers.
 6. For `topup_x402_variable` routes, include the requested amount in the request body, expect a `402` quote for that exact amount, pay it, and persist the credited response details.
-7. For `prepaid_credit` routes, create an API-scoped wallet session through `/auth/challenge` and `/auth/session` or use `npm run cli -- auth api-session <provider> <operation>`; then invoke the route with the bearer token instead of x402 proof.
+7. For `prepaid_credit` routes, create an API-scoped wallet session through `/auth/challenge` and `/auth/session`, or use `npm run cli -- use <provider>.<operation> --input <json>` and let the CLI mint the route-scoped wallet session automatically; these routes use bearer auth instead of x402 proof.
 8. If the route returns `202 Accepted`, store the `jobToken` and switch to wallet-bound retrieval.
 9. If the marketplace does not have the needed capability, submit a suggestion for an endpoint or source.
 
@@ -295,9 +306,9 @@ Interpret the `402` body as follows:
 ### Prepaid credit
 
 1. Fund service credit first through the service's `topup_x402_variable` route.
-2. Create an API-scoped wallet session through `/auth/challenge` and `/auth/session`, or use `npm run cli -- auth api-session <provider> <operation>`.
+2. Create an API-scoped wallet session through `/auth/challenge` and `/auth/session`, or use `npm run cli -- use <provider>.<operation> --input <json>` and let the CLI handle the wallet-session flow.
 3. Invoke the `prepaid_credit` route with the bearer token.
-4. If using the CLI, `fast-marketplace invoke` will automatically switch to wallet-session auth when the route requires it.
+4. The current CLI does not expose a standalone `auth api-session` command; `use` is the supported buyer command surface.
 
 ### Async free
 
@@ -365,6 +376,125 @@ Important constraints:
 13. Run `npm run cli -- provider submit --service <slug-or-id>` only after verification succeeds; this flow stops at `pending_review`, not admin publish.
 14. If building from marketplace demand, review provider-visible request intake and claim the request you want to build before syncing the draft.
 15. After admin publish, use the public service page and paid proxy routes as the canonical execution surface.
+
+### Provider spec shape
+
+`provider sync` expects JSON with `profile`, `service`, and `endpoints`. The shape is strict and must match the service type.
+
+Example `marketplace_proxy` spec:
+
+```json
+{
+  "profile": {
+    "displayName": "Signal Labs",
+    "bio": "Quant feeds for agent workflows.",
+    "websiteUrl": "https://provider.example.com",
+    "contactEmail": "ops@provider.example.com"
+  },
+  "service": {
+    "serviceType": "marketplace_proxy",
+    "slug": "signal-labs",
+    "apiNamespace": "signals",
+    "name": "Signal Labs",
+    "tagline": "Short-form market signals",
+    "about": "Provider-authored signal endpoints for agent workflows.",
+    "categories": ["Research", "Trading"],
+    "promptIntro": "I want to use the Signal Labs service on Fast Marketplace.",
+    "setupInstructions": [
+      "Use a funded Fast wallet.",
+      "Call the marketplace proxy route."
+    ],
+    "websiteUrl": "https://provider.example.com",
+    "payoutWallet": "fast1..."
+  },
+  "endpoints": [
+    {
+      "endpointType": "marketplace_proxy",
+      "operation": "quote",
+      "title": "Quote",
+      "description": "Return a single quote snapshot.",
+      "billingType": "fixed_x402",
+      "price": "$0.25",
+      "method": "POST",
+      "mode": "sync",
+      "requestSchemaJson": {
+        "type": "object",
+        "properties": {
+          "symbol": { "type": "string", "minLength": 1 }
+        },
+        "required": ["symbol"],
+        "additionalProperties": false
+      },
+      "responseSchemaJson": {
+        "type": "object",
+        "properties": {
+          "symbol": { "type": "string" },
+          "price": { "type": "number" }
+        },
+        "required": ["symbol", "price"],
+        "additionalProperties": false
+      },
+      "requestExample": {
+        "symbol": "FAST"
+      },
+      "responseExample": {
+        "symbol": "FAST",
+        "price": 42.5
+      },
+      "usageNotes": "Returns the latest quote only.",
+      "upstreamBaseUrl": "https://provider.example.com",
+      "upstreamPath": "/api/quote",
+      "upstreamAuthMode": "none"
+    }
+  ]
+}
+```
+
+Notes:
+
+- use `serviceType: "marketplace_proxy"` for marketplace-executed routes and `serviceType: "external_registry"` for discovery-only listings
+- every endpoint in `endpoints[]` must use the same `endpointType` as the service `serviceType`
+- `apiNamespace` is required for `marketplace_proxy` services
+- if the user needs a larger real example, reuse the inline spec above or a public provider-owned template instead of assuming access to this repo
+
+### Provider pricing format
+
+- `fixed_x402` uses a dollar string such as `"$0.25"`
+- `topup_x402_variable` uses decimal token amounts such as `"10"` and `"100"` for `minAmount` and `maxAmount`
+- `prepaid_credit` does not take a per-call price field on the provider draft
+- the deployment decides whether the settlement token is `USDC` or `testUSDC`; treat the deployment network as authoritative
+
+Example top-up billing:
+
+```json
+{
+  "billingType": "topup_x402_variable",
+  "minAmount": "10",
+  "maxAmount": "100"
+}
+```
+
+### Provider runtime keys
+
+- there is no separate `provider key create` CLI surface in the current repo
+- `provider sync` creates a runtime key automatically for a `marketplace_proxy` service when one does not already exist
+- the sync result includes the plaintext key only on creation; store it immediately
+- after the draft exists, the provider web editor at `https://marketplace.fast.xyz/providers/services` can rotate the runtime key
+- community-direct, async, and prepaid-credit marketplace services require a runtime key before publish/use
+
+### Website verification details
+
+- the verification file path is `/.well-known/fast-marketplace-verification.txt`
+- `npm run cli -- provider verify --service <slug-or-id>` creates a fresh challenge and prints the exact HTTPS URL plus token
+- host the exact token with `200 OK` over HTTPS, then rerun the same command so the marketplace checks ownership
+- changing the website host invalidates the old verification and requires a new challenge
+
+### Provider references
+
+- provider dashboard: `https://marketplace.fast.xyz/providers`
+- provider onboarding: `https://marketplace.fast.xyz/providers/onboard`
+- provider services: `https://marketplace.fast.xyz/providers/services`
+- marketplace OpenAPI, including provider endpoints: `https://fastapi.8o.vc/openapi.json`
 
 Important provider constraints:
 

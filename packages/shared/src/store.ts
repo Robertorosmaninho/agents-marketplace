@@ -4,6 +4,7 @@ import { Pool } from "pg";
 
 import { rawToDecimalString } from "./amounts.js";
 import { createDraftRouteBilling, normalizeRouteBilling } from "./billing.js";
+import { PAYMENT_EXECUTION_RECOVERY_MS } from "./constants.js";
 import { getDefaultMarketplaceNetworkConfig, type MarketplaceNetworkConfig } from "./network.js";
 import { hashProviderRuntimeKey } from "./provider-runtime.js";
 import { usesMarketplaceTreasurySettlement } from "./settlement.js";
@@ -78,6 +79,11 @@ function quoteIdentifier(value: string): string {
 
 function clone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
+}
+
+function isOlderThanRecoveryWindow(updatedAt: string): boolean {
+  const updatedAtMs = Date.parse(updatedAt);
+  return !Number.isNaN(updatedAtMs) && updatedAtMs <= Date.now() - PAYMENT_EXECUTION_RECOVERY_MS;
 }
 
 function isPendingJobTimedOut(job: Pick<JobRecord, "timeoutAt">, nowMs: number): boolean {
@@ -1257,7 +1263,13 @@ export class InMemoryMarketplaceStore implements MarketplaceStore {
 
   async claimRefundForSend(refundId: string): Promise<RefundRecord | null> {
     const existing = this.refundsById.get(refundId);
-    if (!existing || existing.status !== "pending") {
+    if (
+      !existing
+      || (
+        existing.status !== "pending"
+        && !(existing.status === "sending" && isOlderThanRecoveryWindow(existing.updatedAt))
+      )
+    ) {
       return null;
     }
 
@@ -1480,7 +1492,7 @@ export class InMemoryMarketplaceStore implements MarketplaceStore {
   async claimPendingProviderPayouts(limit: number): Promise<ProviderPayoutRecord[]> {
     const claimed: ProviderPayoutRecord[] = [];
     for (const payout of Array.from(this.providerPayoutsById.values())
-      .filter((record) => record.status === "pending")
+      .filter((record) => record.status === "pending" || (record.status === "sending" && isOlderThanRecoveryWindow(record.updatedAt)))
       .sort((left, right) => left.createdAt.localeCompare(right.createdAt))
       .slice(0, limit)) {
       const next: ProviderPayoutRecord = {
@@ -5500,15 +5512,19 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
   }
 
   async claimRefundForSend(refundId: string): Promise<RefundRecord | null> {
+    const staleBefore = new Date(Date.now() - PAYMENT_EXECUTION_RECOVERY_MS).toISOString();
     const result = await this.pool.query(
       `
       UPDATE refunds
       SET status = 'sending', error_message = NULL, updated_at = NOW()
       WHERE id = $1
-        AND status = 'pending'
+        AND (
+          status = 'pending'
+          OR (status = 'sending' AND updated_at <= $2)
+        )
       RETURNING *
       `,
-      [refundId]
+      [refundId, staleBefore]
     );
     if (!result.rowCount) {
       return null;
@@ -5705,12 +5721,14 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
       return [];
     }
 
+    const staleBefore = new Date(Date.now() - PAYMENT_EXECUTION_RECOVERY_MS).toISOString();
     const result = await this.pool.query(
       `
       WITH claimed AS (
         SELECT id
         FROM provider_payouts
         WHERE status = 'pending'
+           OR (status = 'sending' AND updated_at <= $2)
         ORDER BY created_at ASC
         LIMIT $1
         FOR UPDATE SKIP LOCKED
@@ -5720,7 +5738,7 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
       WHERE id IN (SELECT id FROM claimed)
       RETURNING *
       `,
-      [limit]
+      [limit, staleBefore]
     );
     return result.rows.map(mapProviderPayoutRow);
   }
