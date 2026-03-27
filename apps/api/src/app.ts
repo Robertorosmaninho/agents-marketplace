@@ -3538,21 +3538,9 @@ async function validateProviderServiceForSubmit(detail: ProviderServiceDetailRec
     return { ok: false as const, statusCode: 400, error: "At least one endpoint is required before submit." };
   }
 
-  const verification = detail.verification;
-  if (!verification || verification.status !== "verified") {
-    return { ok: false as const, statusCode: 400, error: "Verify website ownership before submit." };
-  }
-
   const serviceUrl = new URL(detail.service.websiteUrl);
   const serviceHost = serviceUrl.host;
   const serviceHostname = serviceUrl.hostname;
-  if (verification.verifiedHost !== serviceHost) {
-    return {
-      ok: false as const,
-      statusCode: 400,
-      error: "Website URL changed since verification. Re-verify ownership before submit."
-    };
-  }
 
   if (detail.service.serviceType === "external_registry") {
     for (const endpoint of detail.endpoints) {
@@ -3582,6 +3570,19 @@ async function validateProviderServiceForSubmit(detail: ProviderServiceDetailRec
     }
 
     return { ok: true as const };
+  }
+
+  const verification = detail.verification;
+  if (!verification || verification.status !== "verified") {
+    return { ok: false as const, statusCode: 400, error: "Verify website ownership before submit." };
+  }
+
+  if (verification.verifiedHost !== serviceHost) {
+    return {
+      ok: false as const,
+      statusCode: 400,
+      error: "Website URL changed since verification. Re-verify ownership before submit."
+    };
   }
 
   if (!detail.service.payoutWallet) {

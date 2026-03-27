@@ -340,7 +340,7 @@ export async function submitProviderService(input: {
   const session = await createProviderSiteSession(input, deps);
   const detail = await resolveProviderService(session.apiUrl, session.accessToken, input.serviceRef, deps);
 
-  if (!isVerificationReady(detail)) {
+  if (detail.service.serviceType === "marketplace_proxy" && !isVerificationReady(detail)) {
     return {
       status: "action_required",
       service: summarizeService(detail),

@@ -420,6 +420,43 @@ describe("provider cli", () => {
     });
   });
 
+  it("submits external registry specs without website verification and still enters pending_review", async () => {
+    const { apiUrl, store } = await startApiServer();
+    const spec = buildExternalRegistrySpec({
+      service: {
+        slug: "messari-direct"
+      },
+      endpoints: [
+        {
+          endpointType: "external_registry",
+          title: "Markets",
+          description: "Direct market data endpoint.",
+          method: "GET",
+          publicUrl: "https://provider.example.com/api/markets",
+          docsUrl: "https://docs.provider.example.com/markets",
+          authNotes: "Bearer token required.",
+          requestExample: {},
+          responseExample: { ok: true },
+          usageNotes: "Call the provider directly."
+        }
+      ]
+    });
+
+    await withAgentEnv(apiUrl, async (tempDir) => {
+      const syncResult = await syncProviderSpec({
+        specPath: await writeSpec(tempDir, "external-provider-spec.json", spec)
+      });
+
+      const submitted = await submitProviderService({ serviceRef: syncResult.service.slug, apiUrl });
+      expect(submitted.status).toBe("submitted");
+      expect(submitted.service.status).toBe("pending_review");
+
+      const detail = await store.getProviderServiceForOwner(syncResult.service.id, syncResult.wallet);
+      expect(detail?.service.status).toBe("pending_review");
+      expect(detail?.verification).toBeNull();
+    });
+  });
+
   it("preserves plain-text API errors from the wallet session flow", async () => {
     await withAgentEnv("http://127.0.0.1:9", async () => {
       await expect(createProviderSiteSession(
@@ -593,6 +630,34 @@ function buildMarketplaceEndpoint(input: {
     upstreamBaseUrl: "https://provider.example.com",
     upstreamPath: `/api/${input.operation}`,
     upstreamAuthMode: "none"
+  };
+}
+
+function buildExternalRegistrySpec(input: {
+  service: {
+    slug: string;
+  };
+  endpoints: ProviderSyncSpec["endpoints"];
+}): ProviderSyncSpec {
+  return {
+    profile: {
+      displayName: "Signal Labs",
+      bio: "Quant feeds for agent workflows.",
+      websiteUrl: "https://provider.example.com",
+      contactEmail: "ops@provider.example.com"
+    },
+    service: {
+      serviceType: "external_registry",
+      slug: input.service.slug,
+      name: "Signal Labs Direct",
+      tagline: "Direct provider APIs",
+      about: "Discovery-only direct APIs that the marketplace lists but does not execute.",
+      categories: ["Research"],
+      promptIntro: 'I want to use the "Signal Labs Direct" service.',
+      setupInstructions: ["Read the provider docs first."],
+      websiteUrl: "https://provider.example.com"
+    },
+    endpoints: input.endpoints
   };
 }
 

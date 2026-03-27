@@ -21,7 +21,7 @@ export function ProviderServiceReview({
     <ProviderSessionGate
       deploymentNetwork={deploymentNetwork}
       title="Review service draft"
-      description="Confirm verification, endpoint coverage, and submit the draft for marketplace review."
+      description="Confirm the required draft metadata and submit the service for marketplace review."
     >
       {(session) => (
         <ProviderServiceReviewInner apiBaseUrl={apiBaseUrl} accessToken={session.accessToken} serviceId={serviceId} />
@@ -90,6 +90,7 @@ function ProviderServiceReviewInner({
   }
 
   const isMarketplaceService = detail.service.serviceType === "marketplace_proxy";
+  const externalHostConsistencyReady = !isMarketplaceService && isExternalRegistryHostConfigReady(detail);
   const checklist = [
     isMarketplaceService
       ? {
@@ -106,7 +107,9 @@ function ProviderServiceReviewInner({
       ok: isMarketplaceService ? Boolean(detail.service.payoutWallet) : true
     },
     { label: "At least one endpoint exists", ok: detail.endpoints.length > 0 },
-    { label: "Website verification succeeded", ok: detail.verification?.status === "verified" },
+    isMarketplaceService
+      ? { label: "Website verification succeeded", ok: detail.verification?.status === "verified" }
+      : { label: "Website URL and endpoint hosts are set consistently", ok: externalHostConsistencyReady },
     {
       label: isMarketplaceService ? "Runtime key is ready for Community, async, or prepaid flows" : "Marketplace runtime key is not required",
       ok: isMarketplaceService
@@ -151,8 +154,12 @@ function ProviderServiceReviewInner({
         </CardHeader>
         <CardContent className="grid gap-4 text-sm">
           <div className="rounded-card border border-border bg-background/70 p-5 dark:bg-background/20">
-            <div className="font-medium">Latest verification</div>
-            <div className="mt-2 text-muted-foreground">{detail.verification?.status ?? "not started"}</div>
+            <div className="font-medium">{isMarketplaceService ? "Latest verification" : "Website ownership verification"}</div>
+            <div className="mt-2 text-muted-foreground">
+              {isMarketplaceService
+                ? (detail.verification?.status ?? "not started")
+                : (detail.verification?.status ?? "not required")}
+            </div>
           </div>
           <div className="rounded-card border border-border bg-background/70 p-5 dark:bg-background/20">
             <div className="font-medium">Latest review</div>
@@ -200,4 +207,36 @@ function ProviderServiceReviewInner({
       </Card>
     </div>
   );
+}
+
+function isExternalRegistryHostConfigReady(detail: NonNullable<Awaited<ReturnType<typeof fetchProviderService>>>) {
+  if (!detail.service.websiteUrl || detail.endpoints.length === 0) {
+    return false;
+  }
+
+  let serviceHostname: string;
+  try {
+    serviceHostname = new URL(detail.service.websiteUrl).hostname;
+  } catch {
+    return false;
+  }
+
+  return detail.endpoints.every((endpoint) => {
+    if (endpoint.endpointType !== "external_registry") {
+      return false;
+    }
+
+    try {
+      return (
+        isSameOrSubdomain(serviceHostname, new URL(endpoint.publicUrl).hostname)
+        && isSameOrSubdomain(serviceHostname, new URL(endpoint.docsUrl).hostname)
+      );
+    } catch {
+      return false;
+    }
+  });
+}
+
+function isSameOrSubdomain(expectedHostname: string, candidateHostname: string) {
+  return candidateHostname === expectedHostname || candidateHostname.endsWith(`.${expectedHostname}`);
 }

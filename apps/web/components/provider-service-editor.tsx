@@ -83,7 +83,7 @@ export function ProviderServiceEditor({
     <ProviderSessionGate
       deploymentNetwork={deploymentNetwork}
       title="Provider service editor"
-      description="Edit metadata, configure endpoints, and complete ownership verification."
+      description="Edit metadata, configure endpoints, and complete any required verification."
     >
       {(session) => (
         <ProviderServiceEditorInner
@@ -425,26 +425,31 @@ function ProviderServiceEditorInner({
         <CardHeader>
           <CardTitle className="text-3xl">Website verification</CardTitle>
           <CardDescription>
-            Host the issued token on your site before submitting this service for review. If your deploy is set up to
-            serve this file from config, you can add the token there as an env var.
+            {detail.service.serviceType === "marketplace_proxy"
+              ? "Host the issued token on your site before submitting this service for review. If your deploy is set up to serve this file from config, you can add the token there as an env var."
+              : "Discovery-only listings submit without website verification in this flow. Admin review still checks the website URL and endpoint host metadata."}
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="text-sm text-muted-foreground">
-            Current status: {detail.verification?.status ?? "not started"}
+            Current status: {detail.verification?.status ?? (detail.service.serviceType === "marketplace_proxy" ? "not started" : "not required")}
           </div>
           <div className="flex flex-wrap gap-3">
-            <Button type="button" onClick={onCreateVerificationChallenge} disabled={pending}>
-              Create challenge
-            </Button>
-            <Button type="button" variant="outline" onClick={onVerifyService} disabled={pending}>
-              Verify ownership
-            </Button>
+            {detail.service.serviceType === "marketplace_proxy" ? (
+              <>
+                <Button type="button" onClick={onCreateVerificationChallenge} disabled={pending}>
+                  Create challenge
+                </Button>
+                <Button type="button" variant="outline" onClick={onVerifyService} disabled={pending}>
+                  Verify ownership
+                </Button>
+              </>
+            ) : null}
             <Button type="button" variant="outline" onClick={onSubmitService} disabled={pending}>
               Submit for review
             </Button>
           </div>
-          {challenge ? (
+          {detail.service.serviceType === "marketplace_proxy" && challenge ? (
             <div className="grid gap-4 rounded-card border border-border bg-background/70 p-5 dark:bg-background/20">
               <div className="flex items-center justify-between gap-3">
                 <div>

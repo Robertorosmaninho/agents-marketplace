@@ -410,12 +410,13 @@ Important constraints:
 6. For `topup_x402_variable` endpoints, set `minAmount` and `maxAmount`; the marketplace owns the top-up crediting flow.
 7. For async HTTP endpoints, require a provider runtime key and implement the marketplace async contract: execute returns `202` with `providerJobId`, poll routes expose `pollPath`, and webhook routes complete through the marketplace callback endpoint.
 8. For `prepaid_credit` endpoints, verify marketplace identity headers upstream and use the provider runtime credit APIs to reserve, capture, release, and when needed extend buyer credit reservations.
-9. Run `npm run cli -- provider verify --service <slug-or-id>` to mint a fresh verification challenge and show the exact URL and token the website must serve.
+9. For `marketplace_proxy`, run `npm run cli -- provider verify --service <slug-or-id>` to mint a fresh verification challenge and show the exact URL and token the website must serve.
 10. If verification requires touching deploy, DNS, or cloud env outside this repo, ask the user before taking that action. For arbitrary external sites, the agent should hand off the token and wait for confirmation rather than mutating infrastructure on its own.
 11. After the user confirms the verification token is live, continue the same `provider verify` flow so the marketplace performs the ownership check.
-12. Run `npm run cli -- provider submit --service <slug-or-id>` only after verification succeeds; this flow stops at `pending_review`, not admin publish.
+12. Run `npm run cli -- provider submit --service <slug-or-id>` when the draft is ready. `marketplace_proxy` requires verification first; `external_registry` can submit without verification and then wait in `pending_review` for admin publish.
 13. If building from marketplace demand, review provider-visible request intake and claim the request you want to build before syncing the draft.
 14. After admin publish, use the public service page and paid proxy routes as the canonical execution surface.
+15. For curated external imports, keep local `ProviderSyncSpec` seed files under a gitignored path such as `.tmp/provider-seeds/` and use the normal sync plus submit flow with a Fast-operated provider account.
 
 ### Provider spec shape
 
@@ -524,6 +525,7 @@ Example top-up billing:
 
 ### Website verification details
 
+- website verification is required for `marketplace_proxy` submit and not required for `external_registry`
 - the verification file path is `/.well-known/fast-marketplace-verification.txt`
 - `npm run cli -- provider verify --service <slug-or-id>` creates a fresh challenge and prints the exact HTTPS URL plus token
 - host the exact token with `200 OK` over HTTPS, then rerun the same command so the marketplace checks ownership
@@ -546,7 +548,7 @@ Important provider constraints:
 - webhook async routes require an HTTPS marketplace base URL so the marketplace can inject a callback URL
 - prepaid-credit upstreams should verify the signed marketplace identity headers before reserving or capturing credit
 - async providers should trust the signed marketplace identity headers and `X-MARKETPLACE-JOB-TOKEN` when correlating work
-- changing the service website host requires re-verification before submission
+- changing the website host requires re-verification before submitting a `marketplace_proxy` service
 - request intake claiming is exclusive once another provider has claimed it
 
 ## Admin and review workflow
@@ -554,7 +556,7 @@ Important provider constraints:
 1. Sign into `/admin/login` with the marketplace admin token.
 2. Open the internal review surfaces for suggestions and submitted provider services.
 3. Review suggestion intake, update statuses, and add operator notes as needed.
-4. Review submitted provider services for correctness, pricing, ownership verification, and marketplace fit.
+4. Review submitted provider services for correctness, marketplace fit, and website verification where required.
 5. Publish approved services under `verified_escrow` so they appear in the public catalog and route registry.
 6. Suspend services when they should no longer be publicly executable.
 
@@ -567,7 +569,7 @@ Important provider constraints:
 - `409 Conflict`: the payment identifier was reused with a different request body
 - insufficient prepaid credit: buy more service credit through the top-up route before retrying
 - permanent async failure after acceptance: escrow services use the marketplace refund policy; community/direct services require provider support
-- provider submission blocked: complete website verification or fix draft validation errors
+- provider submission blocked: complete required website verification for `marketplace_proxy` or fix draft validation errors
 - provider prepaid route failing upstream: confirm the runtime key, signed identity header verification, and reserve/capture/release flow
 - service website host changed: generate a new verification challenge and verify again
 - provider request claim conflict: another provider already claimed the request

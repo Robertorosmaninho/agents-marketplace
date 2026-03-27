@@ -182,7 +182,7 @@ function ProviderServicesDashboardInner({
       <Card variant="frosted">
         <CardHeader>
           <CardTitle className="text-3xl">New service draft</CardTitle>
-          <CardDescription>Create the public service metadata first, then add endpoints and verification.</CardDescription>
+          <CardDescription>Create the public service metadata first, then add endpoints and any required verification.</CardDescription>
         </CardHeader>
         <CardContent>
           <form className="grid gap-4" onSubmit={onCreateService}>

@@ -42,7 +42,7 @@ For `verified_escrow`, successful route charges and top-ups create provider payo
 
 - Creates a service as `external_registry`
 - Adds direct `GET` or `POST` endpoint listings with `publicUrl`, `docsUrl`, auth notes, and examples
-- Verifies website ownership
+- Does not need website verification to submit
 - Submits for admin review
 - After publish, appears in the catalog as a discovery-only external API
 - Marketplace does not proxy calls, collect payment, mint runtime auth, or track execution analytics
@@ -58,7 +58,7 @@ For `verified_escrow`, successful route charges and top-ups create provider payo
 
 - Log in at `/admin/login`
 - Reviews submitted provider services
-- Checks website verification and service completeness
+- Checks service completeness and website verification where required
 - Requests changes or publishes
 - Publishes discovery-only metadata for `external_registry` services
 - Publishes `marketplace_proxy` services as `verified_escrow`
@@ -235,11 +235,18 @@ Set `AGENT_WALLET_KEY`, `MARKETPLACE_API_BASE_URL`, and `MARKETPLACE_FAST_NETWOR
 
 ```bash
 npm run cli -- provider sync --spec ./provider-spec.json
-npm run cli -- provider verify --service <slug-or-id>
 npm run cli -- provider submit --service <slug-or-id>
 ```
 
-`provider verify` always creates a fresh verification challenge and prompts before the marketplace attempts verification. For arbitrary external sites, host the token outside this repo first; the CLI will not mutate deploy, DNS, or cloud env settings on its own.
+For `marketplace_proxy` services, run verification before submit:
+
+```bash
+npm run cli -- provider verify --service <slug-or-id>
+```
+
+`provider verify` always creates a fresh verification challenge and prompts before the marketplace attempts verification. For arbitrary external sites, host the token outside this repo first; the CLI will not mutate deploy, DNS, or cloud env settings on its own. Discovery-only `external_registry` services can submit without verification and still wait in `pending_review` until an admin publishes them.
+
+For curated x402 imports, keep local `ProviderSyncSpec` seed files under a gitignored path such as `.tmp/provider-seeds/` and use the normal `provider sync` plus `provider submit` flow with a Fast-operated provider account.
 
 9. Build runtime artifacts:
 

@@ -61,6 +61,16 @@ async function createSiteSession(app: Express, wallet: Awaited<ReturnType<typeof
   return session.body.accessToken as string;
 }
 
+async function createProviderProfile(app: Express, providerToken: string, websiteUrl = "https://provider.example.com") {
+  return request(app)
+    .post("/provider/me")
+    .set("Authorization", `Bearer ${providerToken}`)
+    .send({
+      displayName: "Signal Labs",
+      websiteUrl
+    });
+}
+
 async function createTestApp(
   input: {
     deploymentNetwork?: "mainnet" | "testnet";
@@ -2975,13 +2985,7 @@ describe("marketplace api", () => {
     const { app } = await createTestApp();
     const providerToken = await createSiteSession(app, providerWallet);
 
-    const profile = await request(app)
-      .post("/provider/me")
-      .set("Authorization", `Bearer ${providerToken}`)
-      .send({
-        displayName: "Signal Labs",
-        websiteUrl: "https://provider.example.com"
-      });
+    const profile = await createProviderProfile(app, providerToken);
 
     expect(profile.status).toBe(201);
 
@@ -3046,6 +3050,14 @@ describe("marketplace api", () => {
       .set("Authorization", `Bearer ${providerToken}`);
 
     expect(submitted.status).toBe(202);
+    expect(submitted.body.service.status).toBe("pending_review");
+
+    const pendingPublicDetail = await request(app).get("/catalog/services/signal-labs-direct");
+    expect(pendingPublicDetail.status).toBe(404);
+
+    const pendingPublicList = await request(app).get("/catalog/services");
+    expect(pendingPublicList.status).toBe(200);
+    expect(pendingPublicList.body.services.some((service: { slug: string }) => service.slug === "signal-labs-direct")).toBe(false);
 
     const published = await request(app)
       .post(`/internal/provider-services/${serviceId}/publish`)
@@ -3079,18 +3091,224 @@ describe("marketplace api", () => {
     expect(routeResponse.status).toBe(404);
   });
 
+  it("rejects invalid external registry drafts without requiring website verification", async () => {
+    const providerWallet = await createTestWallet(PROVIDER_PRIVATE_KEY);
+    const { app } = await createTestApp();
+    const providerToken = await createSiteSession(app, providerWallet);
+
+    const profile = await createProviderProfile(app, providerToken);
+    expect(profile.status).toBe(201);
+
+    const missingWebsite = await request(app)
+      .post("/provider/services")
+      .set("Authorization", `Bearer ${providerToken}`)
+      .send({
+        serviceType: "external_registry",
+        slug: "signal-labs-no-website",
+        name: "Signal Labs No Website",
+        tagline: "Direct provider APIs",
+        about: "Discovery-only direct APIs that the marketplace lists but does not execute.",
+        categories: ["Research"],
+        promptIntro: 'I want to use the "Signal Labs No Website" service.',
+        setupInstructions: ["Read the provider docs first."],
+        websiteUrl: "https://provider.example.com"
+      });
+
+    expect(missingWebsite.status).toBe(201);
+
+    const missingWebsiteEndpoint = await request(app)
+      .post(`/provider/services/${missingWebsite.body.service.id}/endpoints`)
+      .set("Authorization", `Bearer ${providerToken}`)
+      .send({
+        endpointType: "external_registry",
+        title: "Status",
+        description: "Returns service status directly from the provider.",
+        method: "GET",
+        publicUrl: "https://provider.example.com/api/status",
+        docsUrl: "https://provider.example.com/docs/status",
+        authNotes: "Bearer token required.",
+        requestExample: {},
+        responseExample: { status: "ok" }
+      });
+
+    expect(missingWebsiteEndpoint.status).toBe(201);
+
+    const clearedWebsite = await request(app)
+      .patch(`/provider/services/${missingWebsite.body.service.id}`)
+      .set("Authorization", `Bearer ${providerToken}`)
+      .send({
+        websiteUrl: null
+      });
+
+    expect(clearedWebsite.status).toBe(200);
+
+    const missingWebsiteSubmit = await request(app)
+      .post(`/provider/services/${missingWebsite.body.service.id}/submit`)
+      .set("Authorization", `Bearer ${providerToken}`);
+
+    expect(missingWebsiteSubmit.status).toBe(400);
+    expect(missingWebsiteSubmit.body.error).toContain("websiteUrl is required");
+
+    const noEndpoints = await request(app)
+      .post("/provider/services")
+      .set("Authorization", `Bearer ${providerToken}`)
+      .send({
+        serviceType: "external_registry",
+        slug: "signal-labs-no-endpoints",
+        name: "Signal Labs No Endpoints",
+        tagline: "Direct provider APIs",
+        about: "Discovery-only direct APIs that the marketplace lists but does not execute.",
+        categories: ["Research"],
+        promptIntro: 'I want to use the "Signal Labs No Endpoints" service.',
+        setupInstructions: ["Read the provider docs first."],
+        websiteUrl: "https://provider.example.com"
+      });
+
+    expect(noEndpoints.status).toBe(201);
+
+    const noEndpointsSubmit = await request(app)
+      .post(`/provider/services/${noEndpoints.body.service.id}/submit`)
+      .set("Authorization", `Bearer ${providerToken}`);
+
+    expect(noEndpointsSubmit.status).toBe(400);
+    expect(noEndpointsSubmit.body.error).toContain("At least one endpoint is required");
+
+    const wrongEndpointType = await request(app)
+      .post("/provider/services")
+      .set("Authorization", `Bearer ${providerToken}`)
+      .send({
+        serviceType: "external_registry",
+        slug: "signal-labs-wrong-endpoint",
+        name: "Signal Labs Wrong Endpoint",
+        tagline: "Direct provider APIs",
+        about: "Discovery-only direct APIs that the marketplace lists but does not execute.",
+        categories: ["Research"],
+        promptIntro: 'I want to use the "Signal Labs Wrong Endpoint" service.',
+        setupInstructions: ["Read the provider docs first."],
+        websiteUrl: "https://provider.example.com"
+      });
+
+    expect(wrongEndpointType.status).toBe(201);
+
+    const wrongEndpointServiceId = wrongEndpointType.body.service.id as string;
+    const createdMarketplaceEndpoint = await request(app)
+      .post(`/provider/services/${wrongEndpointServiceId}/endpoints`)
+      .set("Authorization", `Bearer ${providerToken}`)
+      .send({
+        endpointType: "marketplace_proxy",
+        operation: "quote",
+        method: "POST",
+        title: "Quote",
+        description: "Return a single quote snapshot.",
+        billingType: "fixed_x402",
+        price: "$0.25",
+        mode: "sync",
+        requestSchemaJson: {
+          type: "object",
+          properties: {
+            symbol: { type: "string" }
+          },
+          required: ["symbol"],
+          additionalProperties: false
+        },
+        responseSchemaJson: {
+          type: "object",
+          properties: {
+            symbol: { type: "string" },
+            price: { type: "number" }
+          },
+          required: ["symbol", "price"],
+          additionalProperties: false
+        },
+        requestExample: { symbol: "FAST" },
+        responseExample: { symbol: "FAST", price: 42.5 },
+        upstreamBaseUrl: "https://provider.example.com",
+        upstreamPath: "/api/quote",
+        upstreamAuthMode: "none"
+      });
+
+    expect(createdMarketplaceEndpoint.status).toBe(400);
+    expect(createdMarketplaceEndpoint.body.error).toContain("Endpoint validation failed");
+
+    const publicUrlMismatch = await request(app)
+      .post("/provider/services")
+      .set("Authorization", `Bearer ${providerToken}`)
+      .send({
+        serviceType: "external_registry",
+        slug: "signal-labs-public-mismatch",
+        name: "Signal Labs Public Mismatch",
+        tagline: "Direct provider APIs",
+        about: "Discovery-only direct APIs that the marketplace lists but does not execute.",
+        categories: ["Research"],
+        promptIntro: 'I want to use the "Signal Labs Public Mismatch" service.',
+        setupInstructions: ["Read the provider docs first."],
+        websiteUrl: "https://provider.example.com"
+      });
+
+    expect(publicUrlMismatch.status).toBe(201);
+
+    const publicUrlMismatchServiceId = publicUrlMismatch.body.service.id as string;
+    const publicUrlMismatchEndpoint = await request(app)
+      .post(`/provider/services/${publicUrlMismatchServiceId}/endpoints`)
+      .set("Authorization", `Bearer ${providerToken}`)
+      .send({
+        endpointType: "external_registry",
+        title: "Status",
+        description: "Returns service status directly from the provider.",
+        method: "GET",
+        publicUrl: "https://other-provider.example.com/api/status",
+        docsUrl: "https://provider.example.com/docs/status",
+        authNotes: "Bearer token required.",
+        requestExample: {},
+        responseExample: { status: "ok" }
+      });
+
+    expect(publicUrlMismatchEndpoint.status).toBe(400);
+    expect(publicUrlMismatchEndpoint.body.error).toContain("publicUrl host must match");
+
+    const docsUrlMismatch = await request(app)
+      .post("/provider/services")
+      .set("Authorization", `Bearer ${providerToken}`)
+      .send({
+        serviceType: "external_registry",
+        slug: "signal-labs-docs-mismatch",
+        name: "Signal Labs Docs Mismatch",
+        tagline: "Direct provider APIs",
+        about: "Discovery-only direct APIs that the marketplace lists but does not execute.",
+        categories: ["Research"],
+        promptIntro: 'I want to use the "Signal Labs Docs Mismatch" service.',
+        setupInstructions: ["Read the provider docs first."],
+        websiteUrl: "https://provider.example.com"
+      });
+
+    expect(docsUrlMismatch.status).toBe(201);
+
+    const docsUrlMismatchServiceId = docsUrlMismatch.body.service.id as string;
+    const docsUrlMismatchEndpoint = await request(app)
+      .post(`/provider/services/${docsUrlMismatchServiceId}/endpoints`)
+      .set("Authorization", `Bearer ${providerToken}`)
+      .send({
+        endpointType: "external_registry",
+        title: "Status",
+        description: "Returns service status directly from the provider.",
+        method: "GET",
+        publicUrl: "https://provider.example.com/api/status",
+        docsUrl: "https://docs.other-provider.example.com/status",
+        authNotes: "Bearer token required.",
+        requestExample: {},
+        responseExample: { status: "ok" }
+      });
+
+    expect(docsUrlMismatchEndpoint.status).toBe(400);
+    expect(docsUrlMismatchEndpoint.body.error).toContain("docsUrl host must match");
+  });
+
   it("returns 409 when an external service tries to add a duplicate external endpoint", async () => {
     const providerWallet = await createTestWallet(PROVIDER_PRIVATE_KEY);
     const { app } = await createTestApp();
     const providerToken = await createSiteSession(app, providerWallet);
 
-    const profile = await request(app)
-      .post("/provider/me")
-      .set("Authorization", `Bearer ${providerToken}`)
-      .send({
-        displayName: "Signal Labs",
-        websiteUrl: "https://provider.example.com"
-      });
+    const profile = await createProviderProfile(app, providerToken);
 
     expect(profile.status).toBe(201);
 
