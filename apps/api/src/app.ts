@@ -2142,6 +2142,23 @@ async function handleWalletSessionRoute(input: {
       timeoutAt: computeTimeoutAt(input.route)
     });
   } catch (error) {
+    try {
+      await input.store.recordProviderAttempt({
+        jobToken: acceptedBody.jobToken,
+        routeId: input.route.routeId,
+        requestId,
+        phase: "execute",
+        status: "succeeded",
+        requestPayload: input.requestInput,
+        responsePayload: executeResult
+      });
+    } catch (attemptError) {
+      console.error("Failed to persist wallet-session async acceptance recovery attempt:", attemptError);
+      return input.res.status(500).json({
+        error: attemptError instanceof Error ? attemptError.message : "Async acceptance recovery persistence failed."
+      });
+    }
+
     console.error("Failed to persist wallet-session async acceptance:", error);
     return input.res.status(202).json(acceptedBody);
   }
@@ -2748,6 +2765,23 @@ async function handleX402Route(input: {
       responseHeaders: paymentResponseHeaders
     });
   } catch (error) {
+    let acceptedAttemptRecorded = false;
+    try {
+      await input.store.recordProviderAttempt({
+        jobToken: acceptedBody.jobToken,
+        paymentId: paymentHeaders.paymentId,
+        routeId: input.route.routeId,
+        requestId,
+        phase: "execute",
+        status: "succeeded",
+        requestPayload: requestBody,
+        responsePayload: executeResult
+      });
+      acceptedAttemptRecorded = true;
+    } catch (attemptError) {
+      console.error("Failed to persist accepted async execute attempt for recovery:", attemptError);
+    }
+
     const recovered = await persistAcceptedAsyncPaymentFallback({
       store: input.store,
       paymentId: paymentHeaders.paymentId,
@@ -2757,7 +2791,7 @@ async function handleX402Route(input: {
       responseBody: acceptedBody,
       responseHeaders: paymentResponseHeaders
     });
-    if (!recovered) {
+    if (!recovered && !acceptedAttemptRecorded) {
       return input.res.status(500).json({
         error: error instanceof Error ? error.message : "Async acceptance persistence failed."
       });

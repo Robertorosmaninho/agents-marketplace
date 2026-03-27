@@ -110,25 +110,25 @@ function expectMarketplaceCatalogEndpoint(
 }
 
 describe("shared marketplace helpers", () => {
-  it("normalizes payment headers across new and legacy names", () => {
+  it("normalizes payment headers from PAYMENT-* names", () => {
     expect(
       normalizePaymentHeaders({
         "payment-signature": "new-header",
-        "x-payment-identifier": "legacy-id"
+        "payment-identifier": "new-id"
       })
     ).toEqual({
-      paymentId: "legacy-id",
+      paymentId: "new-id",
       paymentPayload: "new-header"
     });
 
     expect(
       normalizePaymentHeaders({
-        "x-payment": "legacy-header",
-        "payment-identifier": "new-id"
+        "PAYMENT-SIGNATURE": "upper-header",
+        "PAYMENT-IDENTIFIER": "upper-id"
       })
     ).toEqual({
-      paymentId: "new-id",
-      paymentPayload: "legacy-header"
+      paymentId: "upper-id",
+      paymentPayload: "upper-header"
     });
   });
 
@@ -1763,7 +1763,7 @@ describe("shared marketplace helpers", () => {
     await store.submitProviderService(created.service.id, wallet);
     await store.publishProviderService(created.service.id, {
       reviewerIdentity: "ops@test",
-      settlementMode: "community_direct"
+      settlementMode: "verified_escrow"
     });
 
     const published = await store.getPublishedServiceBySlug("signal-labs-wallet-sync");

@@ -399,14 +399,14 @@ describe("marketplace api", () => {
     expect(response.headers["access-control-allow-origin"]).toBe("https://marketplace.fast.xyz");
   });
 
-  it("accepts legacy X-PAYMENT on a sync route", async () => {
+  it("accepts PAYMENT-* headers on a sync route", async () => {
     const { app, store } = await createTestApp({
       deploymentNetwork: "testnet"
     });
 
     const response = await request(app)
       .post("/api/mock/quick-insight")
-      .set("X-PAYMENT", Buffer.from(JSON.stringify({ paid: true })).toString("base64"))
+      .set("PAYMENT-SIGNATURE", Buffer.from(JSON.stringify({ paid: true })).toString("base64"))
       .set("PAYMENT-IDENTIFIER", "payment_sync_1")
       .send({ query: "alpha" });
 
@@ -427,19 +427,19 @@ describe("marketplace api", () => {
 
     const first = await request(app)
       .post("/api/mock/quick-insight")
-      .set("X-PAYMENT", Buffer.from(JSON.stringify({ paid: true })).toString("base64"))
+      .set("PAYMENT-SIGNATURE", Buffer.from(JSON.stringify({ paid: true })).toString("base64"))
       .set("PAYMENT-IDENTIFIER", "payment_sync_2")
       .send({ query: "alpha" });
 
     const second = await request(app)
       .post("/api/mock/quick-insight")
-      .set("X-PAYMENT", Buffer.from(JSON.stringify({ paid: true })).toString("base64"))
+      .set("PAYMENT-SIGNATURE", Buffer.from(JSON.stringify({ paid: true })).toString("base64"))
       .set("PAYMENT-IDENTIFIER", "payment_sync_2")
       .send({ query: "alpha" });
 
     const conflict = await request(app)
       .post("/api/mock/quick-insight")
-      .set("X-PAYMENT", Buffer.from(JSON.stringify({ paid: true })).toString("base64"))
+      .set("PAYMENT-SIGNATURE", Buffer.from(JSON.stringify({ paid: true })).toString("base64"))
       .set("PAYMENT-IDENTIFIER", "payment_sync_2")
       .send({ query: "different" });
 
@@ -496,7 +496,7 @@ describe("marketplace api", () => {
 
     const first = await request(app)
       .post("/api/mock/quick-insight")
-      .set("X-PAYMENT", Buffer.from(JSON.stringify({ paid: true })).toString("base64"))
+      .set("PAYMENT-SIGNATURE", Buffer.from(JSON.stringify({ paid: true })).toString("base64"))
       .set("PAYMENT-IDENTIFIER", "payment_sync_recovery_1")
       .send({ query: "alpha" });
 
@@ -505,7 +505,7 @@ describe("marketplace api", () => {
 
     const second = await request(app)
       .post("/api/mock/quick-insight")
-      .set("X-PAYMENT", Buffer.from(JSON.stringify({ paid: true })).toString("base64"))
+      .set("PAYMENT-SIGNATURE", Buffer.from(JSON.stringify({ paid: true })).toString("base64"))
       .set("PAYMENT-IDENTIFIER", "payment_sync_recovery_1")
       .send({ query: "alpha" });
 
@@ -528,7 +528,7 @@ describe("marketplace api", () => {
 
     const firstRecoveryAttempt = await request(app)
       .post("/api/mock/quick-insight")
-      .set("X-PAYMENT", Buffer.from(JSON.stringify({ paid: true })).toString("base64"))
+      .set("PAYMENT-SIGNATURE", Buffer.from(JSON.stringify({ paid: true })).toString("base64"))
       .set("PAYMENT-IDENTIFIER", "payment_sync_recovery_1")
       .send({ query: "alpha" });
 
@@ -538,7 +538,7 @@ describe("marketplace api", () => {
 
     const third = await request(app)
       .post("/api/mock/quick-insight")
-      .set("X-PAYMENT", Buffer.from(JSON.stringify({ paid: true })).toString("base64"))
+      .set("PAYMENT-SIGNATURE", Buffer.from(JSON.stringify({ paid: true })).toString("base64"))
       .set("PAYMENT-IDENTIFIER", "payment_sync_recovery_1")
       .send({ query: "alpha" });
 
@@ -556,7 +556,7 @@ describe("marketplace api", () => {
 
     const recovered = await request(app)
       .post("/api/mock/quick-insight")
-      .set("X-PAYMENT", Buffer.from(JSON.stringify({ paid: true })).toString("base64"))
+      .set("PAYMENT-SIGNATURE", Buffer.from(JSON.stringify({ paid: true })).toString("base64"))
       .set("PAYMENT-IDENTIFIER", "payment_sync_recovery_1")
       .send({ query: "alpha" });
 
@@ -576,7 +576,7 @@ describe("marketplace api", () => {
 
     const accepted = await request(app)
       .post("/api/mock/async-report")
-      .set("X-PAYMENT", Buffer.from(JSON.stringify({ paid: true })).toString("base64"))
+      .set("PAYMENT-SIGNATURE", Buffer.from(JSON.stringify({ paid: true })).toString("base64"))
       .set("PAYMENT-IDENTIFIER", "payment_async_1")
       .send({ topic: "market depth", delayMs: 60_000 });
 
@@ -669,7 +669,7 @@ describe("marketplace api", () => {
 
     const first = await request(app)
       .post("/api/mock/async-report")
-      .set("X-PAYMENT", Buffer.from(JSON.stringify({ paid: true })).toString("base64"))
+      .set("PAYMENT-SIGNATURE", Buffer.from(JSON.stringify({ paid: true })).toString("base64"))
       .set("PAYMENT-IDENTIFIER", "payment_async_recovery_1")
       .send({ topic: "market depth", delayMs: 60_000 });
 
@@ -679,7 +679,7 @@ describe("marketplace api", () => {
 
     const second = await request(app)
       .post("/api/mock/async-report")
-      .set("X-PAYMENT", Buffer.from(JSON.stringify({ paid: true })).toString("base64"))
+      .set("PAYMENT-SIGNATURE", Buffer.from(JSON.stringify({ paid: true })).toString("base64"))
       .set("PAYMENT-IDENTIFIER", "payment_async_recovery_1")
       .send({ topic: "market depth", delayMs: 60_000 });
 
@@ -710,7 +710,7 @@ describe("marketplace api", () => {
 
     const accepted = await request(app)
       .post("/api/mock/async-report")
-      .set("X-PAYMENT", Buffer.from(JSON.stringify({ paid: true })).toString("base64"))
+      .set("PAYMENT-SIGNATURE", Buffer.from(JSON.stringify({ paid: true })).toString("base64"))
       .set("PAYMENT-IDENTIFIER", "payment_async_replay_repair_1")
       .send({ topic: "market depth", delayMs: 60_000 });
 
@@ -725,7 +725,7 @@ describe("marketplace api", () => {
 
     const replayed = await request(app)
       .post("/api/mock/async-report")
-      .set("X-PAYMENT", Buffer.from(JSON.stringify({ paid: true })).toString("base64"))
+      .set("PAYMENT-SIGNATURE", Buffer.from(JSON.stringify({ paid: true })).toString("base64"))
       .set("PAYMENT-IDENTIFIER", "payment_async_replay_repair_1")
       .send({ topic: "market depth", delayMs: 60_000 });
 
@@ -811,7 +811,7 @@ describe("marketplace api", () => {
 
     const response = await request(app)
       .post("/api/mock/quick-insight")
-      .set("X-PAYMENT", Buffer.from(JSON.stringify({ paid: true })).toString("base64"))
+      .set("PAYMENT-SIGNATURE", Buffer.from(JSON.stringify({ paid: true })).toString("base64"))
       .set("PAYMENT-IDENTIFIER", "payment_wrong_network_1")
       .send({ query: "alpha" });
 
@@ -964,7 +964,7 @@ describe("marketplace api", () => {
       .set("Authorization", "Bearer test-admin-token")
       .send({
         reviewerIdentity: "ops@test",
-        settlementMode: "community_direct"
+        settlementMode: "verified_escrow"
       });
 
     expect(published.status).toBe(200);
@@ -988,11 +988,11 @@ describe("marketplace api", () => {
       .send({ symbol: "FAST" });
 
     expect(unpaid.status).toBe(402);
-    expect(unpaid.body.accepts[0].payTo).toBe(replacementPayoutWallet.address);
+    expect(unpaid.body.accepts[0].payTo).toBe(buyer.address);
 
     const paid = await request(app)
       .post("/api/signals/quote")
-      .set("X-PAYMENT", Buffer.from(JSON.stringify({ paid: true })).toString("base64"))
+      .set("PAYMENT-SIGNATURE", Buffer.from(JSON.stringify({ paid: true })).toString("base64"))
       .set("PAYMENT-IDENTIFIER", "payment_provider_sync_1")
       .send({ symbol: "FAST" });
 
@@ -1013,13 +1013,13 @@ describe("marketplace api", () => {
     const record = await store.getIdempotencyByPaymentId("payment_provider_sync_1");
     expect(record?.routeId).toBe("signals.quote.v1");
     expect(record?.payoutSplit.providerAccountId).toBe(providerAccountId);
-    expect(record?.payoutSplit.settlementMode).toBe("community_direct");
+    expect(record?.payoutSplit.settlementMode).toBe("verified_escrow");
     expect(record?.payoutSplit.providerWallet).toBe(replacementPayoutWallet.address);
-    expect(record?.payoutSplit.paymentDestinationWallet).toBe(replacementPayoutWallet.address);
-    expect(record?.payoutSplit.usesTreasurySettlement).toBe(false);
+    expect(record?.payoutSplit.paymentDestinationWallet).toBe(buyer.address);
+    expect(record?.payoutSplit.usesTreasurySettlement).toBe(true);
     expect(record?.payoutSplit.providerAmount).toBe("250000");
     expect(record?.payoutSplit.marketplaceAmount).toBe("0");
-    expect(await store.listPendingProviderPayouts(10)).toHaveLength(0);
+    expect(await store.listPendingProviderPayouts(10)).toHaveLength(1);
   });
 
   it("supports provider onboarding, publish, and free execution for a self-serve service", async () => {
@@ -2195,7 +2195,7 @@ describe("marketplace api", () => {
     );
   });
 
-  it("supports fixed-price GET routes with x402 preflight and wrong-method 405", async () => {
+  it("rejects paid GET endpoint drafts for fixed-price routes", async () => {
     const providerWallet = await createTestWallet(PROVIDER_PRIVATE_KEY);
     const { app } = await createTestApp();
     const providerToken = await createSiteSession(app, providerWallet);
@@ -2264,93 +2264,8 @@ describe("marketplace api", () => {
         upstreamAuthMode: "none"
       });
 
-    expect(createdEndpoint.status).toBe(201);
-
-    const verificationChallenge = await request(app)
-      .post(`/provider/services/${serviceId}/verification-challenge`)
-      .set("Authorization", `Bearer ${providerToken}`);
-
-    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
-      const url = String(input);
-      if (url === verificationChallenge.body.expectedUrl) {
-        return new Response(verificationChallenge.body.token, { status: 200 });
-      }
-
-      if (url === "https://provider.example.com/api/quote?symbol=FAST") {
-        expect(init?.method).toBe("GET");
-        expect(init?.body).toBeUndefined();
-        return new Response(JSON.stringify({ symbol: "FAST", price: 42.5 }), {
-          status: 200,
-          headers: {
-            "content-type": "application/json"
-          }
-        });
-      }
-
-      return new Response("not found", { status: 404 });
-    });
-
-    expect(
-      await request(app)
-        .post(`/provider/services/${serviceId}/verify`)
-        .set("Authorization", `Bearer ${providerToken}`)
-    ).toMatchObject({ status: 200 });
-
-    expect(
-      await request(app)
-        .post(`/provider/services/${serviceId}/submit`)
-        .set("Authorization", `Bearer ${providerToken}`)
-    ).toMatchObject({ status: 202 });
-
-    expect(
-      await request(app)
-        .post(`/internal/provider-services/${serviceId}/publish`)
-        .set("Authorization", "Bearer test-admin-token")
-        .send({
-          reviewerIdentity: "ops@test",
-          settlementMode: "verified_escrow"
-        })
-    ).toMatchObject({ status: 200 });
-
-    const openApi = await request(app).get("/openapi.json");
-    expect(openApi.status).toBe(200);
-    expect(openApi.body.paths["/api/signals-get/quote"].get.requestBody).toBeUndefined();
-    expect(openApi.body.paths["/api/signals-get/quote"].get.parameters).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        name: "symbol",
-        in: "query",
-        required: true
-      })
-    ]));
-    expect(openApi.body.paths["/api/signals-get/quote"].post).toBeUndefined();
-
-    const wrongMethod = await request(app)
-      .post("/api/signals-get/quote")
-      .send({ symbol: "FAST" });
-
-    expect(wrongMethod.status).toBe(405);
-    expect(wrongMethod.headers.allow).toBe("GET");
-
-    const unpaid = await request(app)
-      .get("/api/signals-get/quote")
-      .query({ symbol: "FAST" });
-
-    expect(unpaid.status).toBe(402);
-
-    const paid = await request(app)
-      .get("/api/signals-get/quote")
-      .query({ symbol: "FAST" })
-      .set("X-PAYMENT", Buffer.from(JSON.stringify({ paid: true })).toString("base64"))
-      .set("PAYMENT-IDENTIFIER", "payment_provider_get_1");
-
-    expect(paid.status).toBe(200);
-    expect(paid.body).toEqual({ symbol: "FAST", price: 42.5 });
-    expect(fetchMock).toHaveBeenCalledWith(
-      "https://provider.example.com/api/quote?symbol=FAST",
-      expect.objectContaining({
-        method: "GET"
-      })
-    );
+    expect(createdEndpoint.status).toBe(400);
+    expect(createdEndpoint.body.error).toContain("Paid marketplace routes must use method=POST");
   });
 
   it("supports free GET execution for a self-serve service", async () => {
@@ -2492,7 +2407,7 @@ describe("marketplace api", () => {
     expect(analytics.revenueRaw).toBe("0");
   });
 
-  it("supports prepaid-credit GET execution with wallet-session auth", async () => {
+  it("rejects paid GET endpoint drafts for prepaid-credit routes", async () => {
     const providerWallet = await createTestWallet(PROVIDER_PRIVATE_KEY);
     const { app, buyer, store } = await createTestApp();
     const providerToken = await createSiteSession(app, providerWallet);
@@ -2612,152 +2527,8 @@ describe("marketplace api", () => {
         upstreamAuthMode: "none"
       });
 
-    expect(prepaidEndpoint.status).toBe(201);
-
-    const verificationChallenge = await request(app)
-      .post(`/provider/services/${serviceId}/verification-challenge`)
-      .set("Authorization", `Bearer ${providerToken}`);
-
-    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (fetchInput, init) => {
-      const url = String(fetchInput);
-      if (url === verificationChallenge.body.expectedUrl) {
-        return new Response(verificationChallenge.body.token, { status: 200 });
-      }
-
-      if (url === "https://orders.example.com/api/place-order?item=notebook&quantity=2") {
-        const headers = Object.fromEntries(new Headers(init?.headers).entries());
-        const identity = verifyMarketplaceIdentityHeaders({
-          headers,
-          signingSecret: runtimeKey
-        });
-        if (!identity.buyerWallet) {
-          throw new Error("Prepaid route execution must include a buyer wallet.");
-        }
-
-        const reserveResponse = await request(app)
-          .post("/provider/runtime/credits/reserve")
-          .set("Authorization", `Bearer ${runtimeKey}`)
-          .send({
-            buyerWallet: identity.buyerWallet,
-            amount: "12.5",
-            idempotencyKey: `reserve_${identity.requestId}`,
-            providerReference: "order-get-123"
-          });
-
-        if (reserveResponse.status !== 200) {
-          return new Response(JSON.stringify(reserveResponse.body), {
-            status: reserveResponse.status,
-            headers: {
-              "content-type": "application/json"
-            }
-          });
-        }
-
-        const captureResponse = await request(app)
-          .post(`/provider/runtime/credits/${reserveResponse.body.reservation.id}/capture`)
-          .set("Authorization", `Bearer ${runtimeKey}`)
-          .send({
-            amount: "12.5"
-          });
-
-        if (captureResponse.status !== 200) {
-          return new Response(JSON.stringify(captureResponse.body), {
-            status: captureResponse.status,
-            headers: {
-              "content-type": "application/json"
-            }
-          });
-        }
-
-        expect(init?.method).toBe("GET");
-        expect(init?.body).toBeUndefined();
-
-        return new Response(JSON.stringify({ orderId: "ord_123" }), {
-          status: 200,
-          headers: {
-            "content-type": "application/json"
-          }
-        });
-      }
-
-      return new Response("not found", { status: 404 });
-    });
-
-    expect(
-      await request(app)
-        .post(`/provider/services/${serviceId}/verify`)
-        .set("Authorization", `Bearer ${providerToken}`)
-    ).toMatchObject({ status: 200 });
-    expect(
-      await request(app)
-        .post(`/provider/services/${serviceId}/submit`)
-        .set("Authorization", `Bearer ${providerToken}`)
-    ).toMatchObject({ status: 202 });
-    expect(
-      await request(app)
-        .post(`/internal/provider-services/${serviceId}/publish`)
-        .set("Authorization", "Bearer test-admin-token")
-        .send({
-          reviewerIdentity: "ops@test",
-          settlementMode: "verified_escrow"
-        })
-    ).toMatchObject({ status: 200 });
-
-    const toppedUp = await request(app)
-      .post("/api/orders-get/topup")
-      .set("X-PAYMENT", Buffer.from(JSON.stringify({ paid: true })).toString("base64"))
-      .set("PAYMENT-IDENTIFIER", "payment_orders_get_topup_1")
-      .send({ amount: "25" });
-
-    expect(toppedUp.status).toBe(200);
-
-    const unauthorized = await request(app)
-      .get("/api/orders-get/place-order")
-      .query({ item: "notebook", quantity: 2 });
-
-    expect(unauthorized.status).toBe(401);
-
-    const challenge = await request(app)
-      .post("/auth/challenge")
-      .send({
-        wallet: buyer.address,
-        resourceType: "api",
-        resourceId: "orders-get.place-order.v1"
-      });
-
-    expect(challenge.status).toBe(200);
-
-    const signed = await buyer.wallet.sign({ message: challenge.body.message });
-    const apiSession = await request(app)
-      .post("/auth/session")
-      .send({
-        wallet: buyer.address,
-        resourceType: "api",
-        resourceId: "orders-get.place-order.v1",
-        nonce: challenge.body.nonce,
-        expiresAt: challenge.body.expiresAt,
-        signature: signed.signature
-      });
-
-    expect(apiSession.status).toBe(200);
-
-    const prepaid = await request(app)
-      .get("/api/orders-get/place-order")
-      .query({ item: "notebook", quantity: 2 })
-      .set("Authorization", `Bearer ${apiSession.body.accessToken}`);
-
-    expect(prepaid.status).toBe(200);
-    expect(prepaid.body).toEqual({ orderId: "ord_123" });
-    expect(fetchMock).toHaveBeenCalledWith(
-      "https://orders.example.com/api/place-order?item=notebook&quantity=2",
-      expect.objectContaining({
-        method: "GET"
-      })
-    );
-
-    const creditAccount = await store.getCreditAccount(serviceId, buyer.address, "USDC");
-    expect(creditAccount?.availableAmount).toBe("12500000");
-    expect(creditAccount?.reservedAmount).toBe("0");
+    expect(prepaidEndpoint.status).toBe(400);
+    expect(prepaidEndpoint.body.error).toContain("Paid marketplace routes must use method=POST");
   });
 
   it("supports async prepaid-credit reservation during execute with the injected marketplace job token", async () => {
@@ -2963,7 +2734,7 @@ describe("marketplace api", () => {
 
     const toppedUp = await request(app)
       .post("/api/orders-async/topup")
-      .set("X-PAYMENT", Buffer.from(JSON.stringify({ paid: true })).toString("base64"))
+      .set("PAYMENT-SIGNATURE", Buffer.from(JSON.stringify({ paid: true })).toString("base64"))
       .set("PAYMENT-IDENTIFIER", "payment_orders_async_topup_1")
       .send({ amount: "25" });
 
@@ -4063,7 +3834,7 @@ describe("marketplace api", () => {
       .set("Authorization", "Bearer test-admin-token")
       .send({
         reviewerIdentity: "ops@test",
-        settlementMode: "community_direct"
+        settlementMode: "verified_escrow"
       });
 
     expect(published.status).toBe(200);
@@ -4075,7 +3846,7 @@ describe("marketplace api", () => {
     expect(publicDetail.body.endpoints[0].proxyUrl).toContain("/api/signals-snapshot/quote");
   });
 
-  it("does not re-execute stale pending self-serve HTTP charges and auto-refunds them in the worker", async () => {
+  it("does not re-execute stale pending self-serve HTTP charges and reconstructs the sync response in the worker", async () => {
     class FlakyProviderStore extends InMemoryMarketplaceStore {
       private remainingCompletedWriteFailures = 1;
 
@@ -4209,7 +3980,7 @@ describe("marketplace api", () => {
 
     const first = await request(app)
       .post("/api/signals-recovery/quote")
-      .set("X-PAYMENT", Buffer.from(JSON.stringify({ paid: true })).toString("base64"))
+      .set("PAYMENT-SIGNATURE", Buffer.from(JSON.stringify({ paid: true })).toString("base64"))
       .set("PAYMENT-IDENTIFIER", "payment_provider_sync_recovery_1")
       .send({ symbol: "FAST" });
 
@@ -4232,7 +4003,7 @@ describe("marketplace api", () => {
 
     const second = await request(app)
       .post("/api/signals-recovery/quote")
-      .set("X-PAYMENT", Buffer.from(JSON.stringify({ paid: true })).toString("base64"))
+      .set("PAYMENT-SIGNATURE", Buffer.from(JSON.stringify({ paid: true })).toString("base64"))
       .set("PAYMENT-IDENTIFIER", "payment_provider_sync_recovery_1")
       .send({ symbol: "FAST" });
 
@@ -4256,16 +4027,14 @@ describe("marketplace api", () => {
       }
     });
 
-    const refunded = await request(app)
+    const recovered = await request(app)
       .post("/api/signals-recovery/quote")
-      .set("X-PAYMENT", Buffer.from(JSON.stringify({ paid: true })).toString("base64"))
+      .set("PAYMENT-SIGNATURE", Buffer.from(JSON.stringify({ paid: true })).toString("base64"))
       .set("PAYMENT-IDENTIFIER", "payment_provider_sync_recovery_1")
       .send({ symbol: "FAST" });
 
-    expect(refunded.status).toBe(500);
-    expect(refunded.body.error).toContain("not durably recorded");
-    expect(refunded.body.refund.status).toBe("sent");
-    expect(refunded.body.refund.txHash).toBe("0xmanualrecoveryrefund");
+    expect(recovered.status).toBe(200);
+    expect(recovered.body).toEqual({ symbol: "FAST", price: 42.5 });
     expect(upstreamExecutions).toBe(1);
   });
 
@@ -4401,6 +4170,9 @@ describe("marketplace api", () => {
 
       if (url === "https://orders.example.com/api/place-order") {
         const headers = Object.fromEntries(new Headers(init?.headers).entries());
+        const marketplaceIdentityHeaders = Object.fromEntries(
+          Object.entries(headers).filter(([key]) => key.startsWith("x-marketplace-"))
+        );
         const identity = verifyMarketplaceIdentityHeaders({
           headers,
           signingSecret: runtimeKey
@@ -4412,6 +4184,7 @@ describe("marketplace api", () => {
         const reserveResponse = await request(app)
           .post("/provider/runtime/credits/reserve")
           .set("Authorization", `Bearer ${runtimeKey}`)
+          .set(marketplaceIdentityHeaders)
           .send({
             buyerWallet: identity.buyerWallet,
             amount: "12.5",
@@ -4431,6 +4204,7 @@ describe("marketplace api", () => {
         const captureResponse = await request(app)
           .post(`/provider/runtime/credits/${reserveResponse.body.reservation.id}/capture`)
           .set("Authorization", `Bearer ${runtimeKey}`)
+          .set(marketplaceIdentityHeaders)
           .send({
             amount: "12.5"
           });
@@ -4482,7 +4256,7 @@ describe("marketplace api", () => {
 
     const toppedUp = await request(app)
       .post("/api/orders/topup")
-      .set("X-PAYMENT", Buffer.from(JSON.stringify({ paid: true })).toString("base64"))
+      .set("PAYMENT-SIGNATURE", Buffer.from(JSON.stringify({ paid: true })).toString("base64"))
       .set("PAYMENT-IDENTIFIER", "payment_orders_topup_1")
       .send({ amount: "25" });
 
@@ -4533,7 +4307,7 @@ describe("marketplace api", () => {
 
     const toppedUpReplay = await request(app)
       .post("/api/orders/topup")
-      .set("X-PAYMENT", Buffer.from(JSON.stringify({ paid: true })).toString("base64"))
+      .set("PAYMENT-SIGNATURE", Buffer.from(JSON.stringify({ paid: true })).toString("base64"))
       .set("PAYMENT-IDENTIFIER", "payment_orders_topup_1")
       .send({ amount: "25" });
 
@@ -4651,7 +4425,7 @@ describe("marketplace api", () => {
     expect(submitted.body.error).toContain("Verify website ownership");
   });
 
-  it("refunds rejected sync upstream calls and excludes them from accepted call analytics", async () => {
+  it("refunds rejected sync upstream calls and excludes them from revenue analytics", async () => {
     const providerWallet = await createTestWallet(PROVIDER_PRIVATE_KEY);
     const { app, store } = await createTestApp();
     const providerToken = await createSiteSession(app, providerWallet);
@@ -4756,7 +4530,7 @@ describe("marketplace api", () => {
 
     const failed = await request(app)
       .post("/api/signals-failure/quote")
-      .set("X-PAYMENT", Buffer.from(JSON.stringify({ paid: true })).toString("base64"))
+      .set("PAYMENT-SIGNATURE", Buffer.from(JSON.stringify({ paid: true })).toString("base64"))
       .set("PAYMENT-IDENTIFIER", "payment_provider_sync_failure_1")
       .send({ symbol: "FAST" });
 
@@ -4767,7 +4541,7 @@ describe("marketplace api", () => {
 
     const replay = await request(app)
       .post("/api/signals-failure/quote")
-      .set("X-PAYMENT", Buffer.from(JSON.stringify({ paid: true })).toString("base64"))
+      .set("PAYMENT-SIGNATURE", Buffer.from(JSON.stringify({ paid: true })).toString("base64"))
       .set("PAYMENT-IDENTIFIER", "payment_provider_sync_failure_1")
       .send({ symbol: "FAST" });
 
@@ -4778,7 +4552,7 @@ describe("marketplace api", () => {
     expect(record?.responseStatusCode).toBe(502);
 
     const analytics = await store.getServiceAnalytics(["signals-failure.quote.v1"]);
-    expect(analytics.totalCalls).toBe(0);
+    expect(analytics.totalCalls).toBe(1);
     expect(analytics.revenueRaw).toBe("0");
   });
 

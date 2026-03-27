@@ -6229,26 +6229,28 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
           );
         }
 
-        const reserveEntryResult = await client.query(
-          `
-          SELECT *
-          FROM credit_ledger_entries
-          WHERE reservation_id = $1 AND kind = 'reserve'
-          ORDER BY created_at ASC
-          LIMIT 1
-          `,
-          [reservation.id]
-        );
-        if (!reserveEntryResult.rowCount) {
-          throw new Error(`Credit reserve entry not found: ${reservation.id}`);
-        }
+        if (reservation.status === "reserved" || reservation.status === "captured") {
+          const reserveEntryResult = await client.query(
+            `
+            SELECT *
+            FROM credit_ledger_entries
+            WHERE reservation_id = $1 AND kind = 'reserve'
+            ORDER BY created_at ASC
+            LIMIT 1
+            `,
+            [reservation.id]
+          );
+          if (!reserveEntryResult.rowCount) {
+            throw new Error(`Credit reserve entry not found: ${reservation.id}`);
+          }
 
-        await client.query("COMMIT");
-        return {
-          account,
-          reservation,
-          entry: mapCreditLedgerEntryRow(reserveEntryResult.rows[0])
-        };
+          await client.query("COMMIT");
+          return {
+            account,
+            reservation,
+            entry: mapCreditLedgerEntryRow(reserveEntryResult.rows[0])
+          };
+        }
       }
 
       const accountResult = await client.query(

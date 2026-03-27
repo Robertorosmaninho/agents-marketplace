@@ -20,6 +20,7 @@ const secretsKey = process.env.MARKETPLACE_SECRETS_KEY;
 if (!secretsKey) {
   throw new Error("MARKETPLACE_SECRETS_KEY is required.");
 }
+const runtimeSecretsKey: string = secretsKey;
 
 const pool = new Pool({ connectionString: databaseUrl });
 const store = new PostgresMarketplaceStore(pool);
@@ -56,7 +57,7 @@ async function runCycle() {
       store,
       refundService,
       payoutService,
-      secretsKey
+      secretsKey: runtimeSecretsKey
     });
   } catch (error) {
     console.error("Worker cycle failed:", error);
