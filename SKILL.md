@@ -22,6 +22,7 @@ Use this skill when a user wants to work with APIs listed on the Fast Marketplac
 - the user wants to sign into `https://marketplace.fast.xyz` with a Fast browser wallet
 - the user wants to pay and execute a marketplace route directly from the website with the Fast browser extension
 - the user needs to call a fixed-price x402 route, a variable top-up route, or a prepaid-credit route with a local Fast wallet
+- the user wants to connect the marketplace to an MCP-capable agent client with a local stdio MCP server
 - the user needs to retrieve an async result from a previously accepted job
 - the user wants to suggest a missing endpoint or a new source/webservice for providers to build
 - the user wants to create or update a provider profile and manage service drafts
@@ -37,6 +38,7 @@ Use this skill when a user wants to work with APIs listed on the Fast Marketplac
 - the user wants generic `@fastxyz/x402-client`, `@fastxyz/x402-server`, or `@fastxyz/x402-facilitator` integration outside marketplace routes
 - the user wants a direct provider integration outside the marketplace
 - the task is generic web research rather than using marketplace routes
+- the user wants a hosted MCP service; the marketplace MCP integration is local stdio in v1
 
 ## Inputs to gather
 
@@ -86,6 +88,48 @@ MARKETPLACE_FAST_NETWORK=mainnet
 ```
 
 The current provider CLI is this workspace itself. Do not point users at a separate toolkit unless one is explicitly published.
+
+## Local MCP setup
+
+The marketplace MCP integration is local stdio in v1, not a hosted remote MCP service.
+
+- the user runs `fast-pay-mcp` locally from their own environment
+- the MCP server calls the hosted marketplace API
+- payment signing still happens from the user's Fast wallet via `FAST_PRIVATE_KEY` or `FAST_KEYFILE_PATH`
+- do not describe this as a hosted marketplace service
+
+Typical environment:
+
+```bash
+export MARKETPLACE_API_BASE_URL=https://api.marketplace.fast.xyz
+export MARKETPLACE_FAST_NETWORK=mainnet
+export FAST_PRIVATE_KEY=<32-byte-hex-private-key>
+```
+
+Typical MCP config:
+
+```json
+{
+  "mcpServers": {
+    "fast-pay": {
+      "command": "fast-pay-mcp",
+      "env": {
+        "MARKETPLACE_API_BASE_URL": "https://api.marketplace.fast.xyz",
+        "MARKETPLACE_FAST_NETWORK": "mainnet",
+        "FAST_PRIVATE_KEY": "<private key hex>"
+      }
+    }
+  }
+}
+```
+
+The v1 MCP tool surface is:
+
+- `marketplace_search`
+- `marketplace_show`
+- `marketplace_call`
+- `marketplace_topup`
+- `marketplace_get_job`
 
 ## Concrete buyer call patterns
 

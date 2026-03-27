@@ -11,6 +11,7 @@ Fast-native data marketplace using [`@fastxyz/sdk`](https://www.npmjs.com/packag
 - `apps/tavily-service`: optional standalone Tavily-backed provider example that can be onboarded through the website like any other provider service. See [`apps/tavily-service/README.md`](./apps/tavily-service/README.md)
 - `packages/shared`: source of truth for shared contracts, route registry, catalog/docs generation, auth, billing, payout logic, and store behavior
 - `packages/cli`: buyer and provider CLI for discovery-first marketplace search/show/use flows, wallet setup, provider draft sync/verification/submission, and job retrieval
+- `packages/mcp`: local stdio MCP server for agent clients that reuses the marketplace CLI wallet and payment flow
 
 ## Billing Model
 
@@ -183,6 +184,47 @@ For provider-authored top-up routes, pass the amount in `--input`. For prepaid-c
 
 Async retrieval uses a second wallet challenge flow scoped to the `jobToken`. Poll `GET /api/jobs/:jobToken` with `Authorization: Bearer <accessToken>` from the same wallet that paid for or authorized the original trigger. The default poll interval is `5000` ms.
 
+### Local MCP Server
+
+`fast-pay-mcp` is a local stdio MCP server. It is not hosted by the marketplace and does not require a server deployment. The user or agent runner starts it locally, and it calls the hosted marketplace API with the user's Fast wallet.
+
+Required environment:
+
+```bash
+export MARKETPLACE_API_BASE_URL=http://localhost:3000
+export MARKETPLACE_FAST_NETWORK=mainnet
+export FAST_PRIVATE_KEY=<32-byte-hex-private-key>
+# or: export FAST_KEYFILE_PATH=~/.fast/keys/default.json
+# optional: export FAST_MARKETPLACE_CONFIG=~/.fast-marketplace/config.json
+```
+
+Typical MCP client config:
+
+```json
+{
+  "mcpServers": {
+    "fast-pay": {
+      "command": "fast-pay-mcp",
+      "env": {
+        "MARKETPLACE_API_BASE_URL": "https://api.marketplace.fast.xyz",
+        "MARKETPLACE_FAST_NETWORK": "mainnet",
+        "FAST_PRIVATE_KEY": "<private key hex>"
+      }
+    }
+  }
+}
+```
+
+V1 MCP tools:
+
+- `marketplace_search`
+- `marketplace_show`
+- `marketplace_call`
+- `marketplace_topup`
+- `marketplace_get_job`
+
+The MCP server reuses the CLI wallet loader and spend controls. If `FAST_MARKETPLACE_CONFIG` points at a CLI config with spend controls, MCP calls enforce the same limits.
+
 Provider-agent workflow:
 
 ```bash
@@ -223,6 +265,8 @@ Use the repo-root Docker context with one Dockerfile per service:
 - Facilitator: `docker/facilitator.Dockerfile`
 - Web: `docker/web.Dockerfile`
 - Worker: `docker/worker.Dockerfile`
+
+`fast-pay-mcp` is local stdio only and is not deployed with Docker or Coolify.
 
 Required API environment:
 
