@@ -234,7 +234,7 @@ MARKETPLACE_SESSION_SECRET=change-me
 MARKETPLACE_ADMIN_TOKEN=change-me-too
 MARKETPLACE_SECRETS_KEY=change-me-again
 MARKETPLACE_FAST_NETWORK=mainnet
-MARKETPLACE_BASE_URL=https://fastapi.8o.vc
+MARKETPLACE_BASE_URL=https://api.marketplace.fast.xyz
 MARKETPLACE_WEB_BASE_URL=https://marketplace.fast.xyz
 PORT=3000
 ```
@@ -266,7 +266,7 @@ FACILITATOR_FAST_RPC_URL=https://api.fast.xyz/proxy
 Required web environment:
 
 ```bash
-MARKETPLACE_API_BASE_URL=https://fastapi.8o.vc
+MARKETPLACE_API_BASE_URL=https://api.marketplace.fast.xyz
 MARKETPLACE_WEB_BASE_URL=https://marketplace.fast.xyz
 MARKETPLACE_ADMIN_TOKEN=change-me-too
 MARKETPLACE_FAST_NETWORK=mainnet

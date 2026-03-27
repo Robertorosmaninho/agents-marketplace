@@ -29,6 +29,7 @@ describe("skill markdown route", () => {
       expect(markdown).toContain("https://api.fast.8o.vc/llms.txt");
       expect(markdown).not.toContain("marketplace.example.com");
       expect(markdown).not.toContain("api.marketplace.example.com");
+      expect(markdown).not.toContain("api.marketplace.fast.xyz");
       expect(markdown).not.toContain("marketplace.fast.xyz");
       expect(markdown).not.toContain("fastapi.8o.vc");
     } finally {

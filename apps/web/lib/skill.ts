@@ -8,7 +8,7 @@ const CANDIDATE_PATHS = [
 ];
 
 const LEGACY_WEB_HOST_PATTERN = /\b(?:https?:\/\/)?(?:marketplace\.example\.com|marketplace\.fast\.xyz)\b/giu;
-const LEGACY_API_HOST_PATTERN = /\b(?:https?:\/\/)?(?:api\.marketplace\.example\.com|fastapi\.8o\.vc)\b/giu;
+const LEGACY_API_HOST_PATTERN = /\b(?:https?:\/\/)?(?:api\.marketplace\.example\.com|api\.marketplace\.fast\.xyz|fastapi\.8o\.vc)\b/giu;
 
 function normalizeBaseUrl(candidate: string | undefined, fallback: string): string {
   const raw = candidate
