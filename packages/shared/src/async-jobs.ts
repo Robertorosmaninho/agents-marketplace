@@ -44,6 +44,13 @@ export async function resolveAsyncJobFailure(input: {
     wallet: job.buyerWallet,
     amount: job.quotedPrice
   });
+  const claimedRefund = refund.status === "pending"
+    ? await input.store.claimRefundForSend(refund.id)
+    : null;
+
+  if (refund.status === "sent" || refund.status === "failed" || !claimedRefund) {
+    return { job, refund };
+  }
 
   try {
     const receipt = await input.refundService.issueRefund({
@@ -53,13 +60,13 @@ export async function resolveAsyncJobFailure(input: {
     });
     return {
       job: await input.store.failJob(job.jobToken, input.error),
-      refund: await input.store.markRefundSent(refund.id, receipt.txHash)
+      refund: await input.store.markRefundSent(claimedRefund.id, receipt.txHash)
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown refund failure.";
     return {
       job: await input.store.failJob(job.jobToken, input.error),
-      refund: await input.store.markRefundFailed(refund.id, message)
+      refund: await input.store.markRefundFailed(claimedRefund.id, message)
     };
   }
 }

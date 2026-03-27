@@ -1067,7 +1067,7 @@ function isVerificationReady(detail: ProviderServiceDetailRecord): boolean {
     return false;
   }
 
-  return new URL(detail.service.websiteUrl).hostname === detail.verification.verifiedHost;
+  return new URL(detail.service.websiteUrl).host === detail.verification.verifiedHost;
 }
 
 function summarizeService(detail: ProviderServiceDetailRecord) {

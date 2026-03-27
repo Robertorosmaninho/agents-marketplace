@@ -471,11 +471,23 @@ async function expireAsyncPrepaidReservation(store: MarketplaceStore, job: {
   }
 
   const reservation = await store.getCreditReservationByJobToken(job.serviceId, job.jobToken);
-  if (!reservation || reservation.status !== "reserved") {
+  if (!reservation) {
     return;
   }
 
-  await store.expireCreditReservation(reservation.id);
+  if (reservation.status === "reserved") {
+    await store.expireCreditReservation(reservation.id);
+    return;
+  }
+
+  if (reservation.status === "captured") {
+    await store.reverseCapturedCreditReservation({
+      reservationId: reservation.id,
+      metadata: {
+        reason: "async_job_failed"
+      }
+    });
+  }
 }
 
 async function expireStaleCreditReservations(input: {
@@ -572,6 +584,29 @@ async function recoverStalePendingPayments(input: {
       continue;
     }
 
+    if (payment.responseKind === "sync") {
+      const successfulSyncAttempt = await input.store.getLatestSuccessfulProviderExecuteAttemptByPaymentId(payment.paymentId);
+      if (successfulSyncAttempt && successfulSyncAttempt.responseStatusCode && successfulSyncAttempt.responseStatusCode < 400) {
+        await input.store.saveSyncIdempotency({
+          paymentId: payment.paymentId,
+          normalizedRequestHash: payment.normalizedRequestHash,
+          buyerWallet: payment.buyerWallet,
+          routeId: payment.routeId,
+          routeVersion: payment.routeVersion,
+          quotedPrice: payment.quotedPrice,
+          payoutSplit: payment.payoutSplit,
+          paymentPayload: payment.paymentPayload,
+          facilitatorResponse: payment.facilitatorResponse,
+          statusCode: successfulSyncAttempt.responseStatusCode,
+          body: successfulSyncAttempt.responsePayload,
+          headers: payment.responseHeaders,
+          requestId: payment.requestId ?? undefined,
+          providerPayoutSourceKind: "route_charge"
+        });
+        continue;
+      }
+    }
+
     let job: JobRecord | null = null;
     let acceptedExecuteAttempt: ProviderAttemptRecord | null = null;
     let latestExecuteAttempt: ProviderAttemptRecord | null = null;
@@ -624,17 +659,28 @@ async function recoverStalePendingPayments(input: {
       continue;
     }
 
+    const claimedRefund = refund.status === "pending"
+      ? await input.store.claimRefundForSend(refund.id)
+      : null;
+    if (!claimedRefund) {
+      const currentRefund = await input.store.getRefundByPaymentId(payment.paymentId);
+      if (currentRefund) {
+        await finalizeRecoveredRefundedPayment(input.store, payment, currentRefund, latestExecuteAttempt);
+      }
+      continue;
+    }
+
     try {
       const receipt = await input.refundService.issueRefund({
         wallet: payment.buyerWallet,
         amount: payment.quotedPrice,
         reason: `Automatic recovery refund for unresolved paid request ${payment.paymentId}.`
       });
-      const sentRefund = await input.store.markRefundSent(refund.id, receipt.txHash);
+      const sentRefund = await input.store.markRefundSent(claimedRefund.id, receipt.txHash);
       await finalizeRecoveredRefundedPayment(input.store, payment, sentRefund, latestExecuteAttempt);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown refund failure.";
-      const failedRefund = await input.store.markRefundFailed(refund.id, message);
+      const failedRefund = await input.store.markRefundFailed(claimedRefund.id, message);
       await finalizeRecoveredRefundedPayment(input.store, payment, failedRefund, latestExecuteAttempt);
     }
   }
@@ -775,7 +821,7 @@ async function settleProviderPayouts(input: {
   payoutService: PayoutService;
   limit: number;
 }) {
-  const pending = await input.store.listPendingProviderPayouts(input.limit);
+  const pending = await input.store.claimPendingProviderPayouts(input.limit);
   const groups = new Map<string, typeof pending>();
 
   for (const payout of pending) {

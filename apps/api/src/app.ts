@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { isIP } from "node:net";
 import { URL } from "node:url";
 
 import type { Express, Request, Response as ExpressResponse } from "express";
@@ -6,9 +7,6 @@ import express from "express";
 import { verifyPayment } from "@fastxyz/x402-server";
 import { z } from "zod";
 import {
-  LEGACY_PAYMENT_HEADER,
-  LEGACY_PAYMENT_IDENTIFIER_HEADER,
-  LEGACY_PAYMENT_RESPONSE_HEADER,
   MARKETPLACE_CALLBACK_AUTH_HEADER,
   MARKETPLACE_CALLBACK_URL_HEADER,
   MARKETPLACE_JOB_TOKEN_HEADER,
@@ -54,10 +52,10 @@ import {
   requiresWalletSession,
   requiresX402Payment,
   buildMarketplaceIdentityHeaders,
-  usesMarketplaceTreasurySettlement,
   validateJsonSchema,
   verifyMarketplaceCallbackAuthToken,
   verifyMarketplaceCallbackHeaders,
+  verifyMarketplaceIdentityHeaders,
   verifySessionToken,
   verifyWalletChallenge,
   CREDIT_RESERVATION_TTL_MS,
@@ -145,7 +143,7 @@ const catalogSearchQuerySchema = z.object({
   category: z.string().min(1).optional(),
   billingType: z.enum(["fixed_x402", "topup_x402_variable", "prepaid_credit", "free"]).optional(),
   mode: z.enum(["sync", "async"]).optional(),
-  settlementMode: z.enum(["community_direct", "verified_escrow"]).optional(),
+  settlementMode: z.enum(["verified_escrow"]).optional(),
   limit: z.coerce.number().int().min(1).max(100).optional()
 });
 
@@ -285,12 +283,12 @@ const reviewRequestSchema = z.object({
 
 const publishSchema = z.object({
   reviewerIdentity: z.string().min(1).max(120).optional().nullable(),
-  settlementMode: z.enum(["community_direct", "verified_escrow"]).optional().nullable()
+  settlementMode: z.enum(["verified_escrow"]).optional().nullable()
 });
 
 const settlementModeUpdateSchema = z.object({
   reviewerIdentity: z.string().min(1).max(120).optional().nullable(),
-  settlementMode: z.enum(["community_direct", "verified_escrow"])
+  settlementMode: z.enum(["verified_escrow"])
 });
 
 const suspendSchema = z.object({
@@ -371,15 +369,12 @@ export function createMarketplaceApi(options: MarketplaceApiOptions): Express {
           PAYMENT_IDENTIFIER_HEADER,
           PAYMENT_SIGNATURE_HEADER,
           PAYMENT_REQUIRED_HEADER,
-          PAYMENT_RESPONSE_HEADER,
-          LEGACY_PAYMENT_HEADER,
-          LEGACY_PAYMENT_IDENTIFIER_HEADER,
-          LEGACY_PAYMENT_RESPONSE_HEADER
+          PAYMENT_RESPONSE_HEADER
         ].join(", ")
       );
       res.setHeader(
         "Access-Control-Expose-Headers",
-        [PAYMENT_REQUIRED_HEADER, PAYMENT_RESPONSE_HEADER, LEGACY_PAYMENT_RESPONSE_HEADER].join(", ")
+        [PAYMENT_REQUIRED_HEADER, PAYMENT_RESPONSE_HEADER].join(", ")
       );
     }
 
@@ -1211,6 +1206,10 @@ export function createMarketplaceApi(options: MarketplaceApiOptions): Express {
       return res.status(400).json({ error: "websiteUrl is required before OpenAPI import." });
     }
 
+    if (!isSafePublicHttpsUrl(service.service.websiteUrl) || !isSafePublicHttpsUrl(parsed.data.documentUrl)) {
+      return res.status(400).json({ error: "OpenAPI import only supports public HTTPS URLs." });
+    }
+
     const serviceHost = new URL(service.service.websiteUrl).hostname;
     const documentHost = new URL(parsed.data.documentUrl).hostname;
     if (!isSameOrSubdomain(serviceHost, documentHost)) {
@@ -1303,6 +1302,10 @@ export function createMarketplaceApi(options: MarketplaceApiOptions): Express {
       return res.status(400).json({ error: "websiteUrl is required before verification." });
     }
 
+    if (!isSafePublicHttpsUrl(detail.service.websiteUrl)) {
+      return res.status(400).json({ error: "Verification only supports public HTTPS website URLs." });
+    }
+
     const verification = await options.store.createProviderVerificationChallenge(req.params.id, session.wallet);
     if (!verification) {
       return res.status(404).json({ error: "Provider service not found." });
@@ -1329,6 +1332,10 @@ export function createMarketplaceApi(options: MarketplaceApiOptions): Express {
 
     if (!detail.service.websiteUrl) {
       return res.status(400).json({ error: "websiteUrl is required before verification." });
+    }
+
+    if (!isSafePublicHttpsUrl(detail.service.websiteUrl)) {
+      return res.status(400).json({ error: "Verification only supports public HTTPS website URLs." });
     }
 
     const latestVerification = await options.store.getLatestProviderVerification(req.params.id);
@@ -1412,6 +1419,7 @@ export function createMarketplaceApi(options: MarketplaceApiOptions): Express {
 
     try {
       const reserveJobToken = parsed.data.jobToken ?? req.header(MARKETPLACE_JOB_TOKEN_HEADER) ?? null;
+      let signedIdentity: ReturnType<typeof verifyMarketplaceIdentityHeaders> | null = null;
       if (reserveJobToken) {
         const job = await options.store.getJob(reserveJobToken);
         if (!job || job.serviceId !== runtimeKey.serviceId) {
@@ -1426,6 +1434,16 @@ export function createMarketplaceApi(options: MarketplaceApiOptions): Express {
         if (job.buyerWallet !== buyerWallet) {
           return res.status(409).json({ error: "buyerWallet does not match the async prepaid job." });
         }
+      } else {
+        signedIdentity = verifyRuntimeMarketplaceIdentity({
+          req,
+          runtimeKey,
+          secretsKey,
+          expectedBuyerWallet: buyerWallet
+        });
+        if (!signedIdentity) {
+          return res.status(401).json({ error: "Missing or invalid marketplace identity headers." });
+        }
       }
 
       const result = await options.store.reserveCredit({
@@ -1435,6 +1453,8 @@ export function createMarketplaceApi(options: MarketplaceApiOptions): Express {
         amount: decimalToRawString(parsed.data.amount, 6),
         idempotencyKey: parsed.data.idempotencyKey,
         jobToken: parsed.data.jobToken ?? req.header(MARKETPLACE_JOB_TOKEN_HEADER) ?? null,
+        requestId: signedIdentity?.requestId ?? null,
+        paymentId: signedIdentity?.paymentId ?? null,
         providerReference: parsed.data.providerReference ?? null,
         expiresAt: clampCreditReservationExpiry(parsed.data.expiresAt ?? null)
       });
@@ -1463,6 +1483,22 @@ export function createMarketplaceApi(options: MarketplaceApiOptions): Express {
     const parsed = runtimeCaptureSchema.safeParse(req.body ?? {});
     if (!parsed.success) {
       return res.status(400).json({ error: "Capture request validation failed.", issues: parsed.error.issues });
+    }
+
+    if (!reservation.jobToken) {
+      const signedIdentity = verifyRuntimeMarketplaceIdentity({
+        req,
+        runtimeKey,
+        secretsKey,
+        expectedBuyerWallet: reservation.buyerWallet
+      });
+      if (
+        !signedIdentity
+        || signedIdentity.requestId !== reservation.requestId
+        || (reservation.paymentId && signedIdentity.paymentId !== reservation.paymentId)
+      ) {
+        return res.status(401).json({ error: "Missing or invalid marketplace identity headers." });
+      }
     }
 
     try {
@@ -2051,10 +2087,16 @@ async function handleWalletSessionRoute(input: {
       requestId,
       responseStatusCode: executeResult.statusCode,
       phase: "execute",
-      status: executeResult.statusCode >= 200 && executeResult.statusCode < 400 ? "succeeded" : "failed",
+      status: jobToken ? "failed" : executeResult.statusCode >= 200 && executeResult.statusCode < 400 ? "succeeded" : "failed",
       requestPayload: input.requestInput,
       responsePayload: executeResult.body
     });
+
+    if (jobToken) {
+      return input.res.status(502).json({
+        error: "Async route returned a synchronous response."
+      });
+    }
 
     return input.res
       .status(executeResult.statusCode)
@@ -2204,15 +2246,6 @@ async function handleX402Route(input: {
   store: MarketplaceStore;
   secretsKey: string;
 }) {
-  if (
-    input.route.settlementMode === "community_direct"
-    && (input.route.mode !== "sync" || input.route.executorKind !== "http" || input.route.billing.type !== "fixed_x402")
-  ) {
-    return input.res.status(500).json({
-      error: "Community settlement only supports sync HTTP fixed_x402 routes."
-    });
-  }
-
   const requestBody = input.requestInput;
   const paymentHeaders = normalizePaymentHeaders(
     input.req.headers as Record<string, string | string[] | undefined>
@@ -2504,6 +2537,7 @@ async function handleX402Route(input: {
       await failPendingAsyncJobSafely(input.store, asyncJobToken, error instanceof Error ? error.message : "Route execution failed.");
       await recordProviderAttemptSafely(input.store, {
         jobToken: asyncJobToken,
+        paymentId: paymentHeaders.paymentId,
         routeId: input.route.routeId,
         requestId,
         responseStatusCode: 500,
@@ -2552,21 +2586,25 @@ async function handleX402Route(input: {
   }
 
   if (executeResult.kind === "sync") {
-    if (asyncJobToken) {
-      await recordProviderAttemptSafely(input.store, {
-        jobToken: asyncJobToken,
-        routeId: input.route.routeId,
-        requestId,
-        responseStatusCode: executeResult.statusCode,
-        phase: "execute",
-        status: executeResult.statusCode >= 200 && executeResult.statusCode < 400 ? "succeeded" : "failed",
-        requestPayload: requestBody,
-        responsePayload: executeResult.body,
-        errorMessage: executeResult.statusCode >= 200 && executeResult.statusCode < 400
-          ? undefined
-          : `Async route failed with status ${executeResult.statusCode} before acceptance.`
-      });
-    }
+    await recordProviderAttemptSafely(input.store, {
+      paymentId: paymentHeaders.paymentId,
+      jobToken: asyncJobToken,
+      routeId: input.route.routeId,
+      requestId,
+      responseStatusCode: executeResult.statusCode,
+      phase: "execute",
+      status: asyncJobToken
+        ? "failed"
+        : executeResult.statusCode >= 200 && executeResult.statusCode < 400
+          ? "succeeded"
+          : "failed",
+      requestPayload: requestBody,
+      responsePayload: executeResult.body,
+      errorMessage: asyncJobToken && executeResult.statusCode >= 200 && executeResult.statusCode < 400
+        ? "Async route returned a synchronous response."
+        : undefined
+    });
+
     if (asyncJobToken) {
       await failPendingAsyncJobSafely(
         input.store,
@@ -2576,9 +2614,19 @@ async function handleX402Route(input: {
           : `Async route failed with status ${executeResult.statusCode} before acceptance.`
       );
     }
-    if (executeResult.statusCode < 200 || executeResult.statusCode >= 400) {
+    if (asyncJobToken || executeResult.statusCode < 200 || executeResult.statusCode >= 400) {
       const failedResponse = await buildRejectedSyncResponse({
-        executeResult,
+        executeResult: asyncJobToken && executeResult.statusCode >= 200 && executeResult.statusCode < 400
+          ? {
+              ...executeResult,
+              statusCode: 502,
+              body: {
+                error: "Async route returned a synchronous response.",
+                upstreamStatus: executeResult.statusCode,
+                upstreamBody: executeResult.body
+              }
+            }
+          : executeResult,
         paymentId: paymentHeaders.paymentId,
         buyerWallet,
         quotedPrice,
@@ -2654,6 +2702,7 @@ async function handleX402Route(input: {
 
   await recordProviderAttemptSafely(input.store, {
     jobToken: acceptedBody.jobToken,
+    paymentId: paymentHeaders.paymentId,
     routeId: input.route.routeId,
     requestId,
     phase: "execute",
@@ -2891,10 +2940,6 @@ async function executeHttpRoute(input: {
       : null;
 
     if (runtimeKeyRecord) {
-      if (!input.buyerWallet && input.route.settlementMode === "community_direct") {
-        throw new Error("Buyer wallet is required for community settlement routes.");
-      }
-
       if (!input.buyerWallet && isPrepaidCreditBilling(input.route)) {
         throw new Error("Buyer wallet is required for prepaid-credit routes.");
       }
@@ -2939,7 +2984,7 @@ async function executeHttpRoute(input: {
           })}`;
         }
       }
-    } else if (input.route.mode === "async" || input.route.settlementMode === "community_direct" || isPrepaidCreditBilling(input.route)) {
+    } else if (input.route.mode === "async" || isPrepaidCreditBilling(input.route)) {
       throw new Error("Provider runtime key is required for this settlement flow.");
     }
   }
@@ -3056,26 +3101,50 @@ async function buildRejectedSyncResponse(input: {
   store: MarketplaceStore;
   refundService: RefundService;
 }) {
-  if (!usesMarketplaceTreasurySettlement(input.route.settlementMode)) {
+  const refund = await input.store.createRefund({
+    paymentId: input.paymentId,
+    wallet: input.buyerWallet,
+    amount: input.quotedPrice
+  });
+  const claimedRefund = refund.status === "pending"
+    ? await input.store.claimRefundForSend(refund.id)
+    : null;
+
+  if (refund.status === "sent") {
     return {
       statusCode: input.executeResult.statusCode,
       headers: {
         "content-type": "application/json"
       },
       body: {
-        error: "Upstream request failed after a direct provider payment. Contact the provider for reimbursement or refund.",
+        error: "Upstream request failed. Payment was refunded.",
         upstreamStatus: input.executeResult.statusCode,
         upstreamBody: input.executeResult.body,
-        settlementMode: input.route.settlementMode
+        refund: {
+          status: refund.status,
+          txHash: refund.txHash
+        }
       }
     };
   }
 
-  const refund = await input.store.createRefund({
-    paymentId: input.paymentId,
-    wallet: input.buyerWallet,
-    amount: input.quotedPrice
-  });
+  if (refund.status === "failed" || !claimedRefund) {
+    return {
+      statusCode: input.executeResult.statusCode,
+      headers: {
+        "content-type": "application/json"
+      },
+      body: {
+        error: "Upstream request failed and the automatic refund did not complete.",
+        upstreamStatus: input.executeResult.statusCode,
+        upstreamBody: input.executeResult.body,
+        refund: {
+          status: refund.status,
+          error: refund.errorMessage
+        }
+      }
+    };
+  }
 
   try {
     const receipt = await input.refundService.issueRefund({
@@ -3083,7 +3152,7 @@ async function buildRejectedSyncResponse(input: {
       amount: input.quotedPrice,
       reason: `Sync upstream request rejected for ${input.route.routeId}.`
     });
-    const sentRefund = await input.store.markRefundSent(refund.id, receipt.txHash);
+    const sentRefund = await input.store.markRefundSent(claimedRefund.id, receipt.txHash);
 
     return {
       statusCode: input.executeResult.statusCode,
@@ -3102,7 +3171,7 @@ async function buildRejectedSyncResponse(input: {
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Refund failed.";
-    const failedRefund = await input.store.markRefundFailed(refund.id, message);
+    const failedRefund = await input.store.markRefundFailed(claimedRefund.id, message);
 
     return {
       statusCode: input.executeResult.statusCode,
@@ -3123,15 +3192,7 @@ async function buildRejectedSyncResponse(input: {
 }
 
 function resolvePaymentDestinationWallet(route: PublishedEndpointVersionRecord, treasuryWallet: string): string {
-  if (usesMarketplaceTreasurySettlement(route.settlementMode)) {
-    return treasuryWallet;
-  }
-
-  if (!route.payout.providerWallet) {
-    throw new Error(`Community route ${route.routeId} is missing a provider payout wallet.`);
-  }
-
-  return route.payout.providerWallet;
+  return treasuryWallet;
 }
 
 async function persistProviderPayoutSafely(
@@ -3253,10 +3314,11 @@ async function validateProviderEndpointInput(input: {
     }
   }
 
+  if (billingType !== "free" && nextMethod !== "POST") {
+    return { ok: false, statusCode: 400, error: "Paid marketplace routes must use method=POST." };
+  }
+
   if (billingType === "topup_x402_variable") {
-    if (nextMethod !== "POST") {
-      return { ok: false, statusCode: 400, error: "Marketplace top-up routes must use method=POST." };
-    }
     if (nextMode !== "sync") {
       return { ok: false, statusCode: 400, error: "Marketplace top-up routes must use mode=sync." };
     }
@@ -3395,7 +3457,9 @@ async function validateProviderServiceForSubmit(detail: ProviderServiceDetailRec
     return { ok: false as const, statusCode: 400, error: "Verify website ownership before submit." };
   }
 
-  const serviceHost = new URL(detail.service.websiteUrl).hostname;
+  const serviceUrl = new URL(detail.service.websiteUrl);
+  const serviceHost = serviceUrl.host;
+  const serviceHostname = serviceUrl.hostname;
   if (verification.verifiedHost !== serviceHost) {
     return {
       ok: false as const,
@@ -3414,7 +3478,7 @@ async function validateProviderServiceForSubmit(detail: ProviderServiceDetailRec
         };
       }
 
-      if (!isSameOrSubdomain(serviceHost, new URL(endpoint.publicUrl).hostname)) {
+      if (!isSameOrSubdomain(serviceHostname, new URL(endpoint.publicUrl).hostname)) {
         return {
           ok: false as const,
           statusCode: 400,
@@ -3422,7 +3486,7 @@ async function validateProviderServiceForSubmit(detail: ProviderServiceDetailRec
         };
       }
 
-      if (!isSameOrSubdomain(serviceHost, new URL(endpoint.docsUrl).hostname)) {
+      if (!isSameOrSubdomain(serviceHostname, new URL(endpoint.docsUrl).hostname)) {
         return {
           ok: false as const,
           statusCode: 400,
@@ -3455,7 +3519,7 @@ async function validateProviderServiceForSubmit(detail: ProviderServiceDetailRec
       return { ok: false as const, statusCode: 400, error: `Endpoint ${endpoint.operation} is missing asyncConfig.` };
     }
 
-    if (!endpoint.upstreamBaseUrl || !isSameOrSubdomain(serviceHost, new URL(endpoint.upstreamBaseUrl).hostname)) {
+    if (!endpoint.upstreamBaseUrl || !isSameOrSubdomain(serviceHostname, new URL(endpoint.upstreamBaseUrl).hostname)) {
       return {
         ok: false as const,
         statusCode: 400,
@@ -3465,15 +3529,6 @@ async function validateProviderServiceForSubmit(detail: ProviderServiceDetailRec
   }
 
   return { ok: true as const };
-}
-
-function isCommunityDirectPublishCompatible(detail: ProviderServiceDetailRecord): boolean {
-  return detail.endpoints.every((endpoint) =>
-    endpoint.endpointType === "marketplace_proxy"
-    && endpoint.mode === "sync"
-    && endpoint.billing.type === "fixed_x402"
-    && endpoint.executorKind === "http"
-  );
 }
 
 async function validateProviderServiceForSettlement(input: {
@@ -3503,25 +3558,6 @@ async function validateProviderServiceForSettlement(input: {
     endpoint.endpointType === "marketplace_proxy"
     && (endpoint.mode === "async" || endpoint.billing.type === "prepaid_credit")
   );
-
-  if (input.settlementMode === "community_direct") {
-    if (!runtimeKey) {
-      return {
-        ok: false as const,
-        statusCode: 400,
-        error: "Community services require a provider runtime key before publish."
-      };
-    }
-
-    if (!isCommunityDirectPublishCompatible(input.detail)) {
-      return {
-        ok: false as const,
-        statusCode: 400,
-        error:
-          "Community services must use sync HTTP fixed_x402 endpoints only. Free routes, variable top-ups, prepaid credit, async, and marketplace executors require Verified escrow."
-      };
-    }
-  }
 
   if (requiresRuntimeKey && !runtimeKey) {
     return {
@@ -3560,7 +3596,46 @@ function websiteHostChanged(previousUrl: string | null, nextUrl: string | null):
     return false;
   }
 
-  return new URL(previousUrl).hostname !== new URL(nextUrl).hostname;
+  return new URL(previousUrl).host !== new URL(nextUrl).host;
+}
+
+function isSafePublicHttpsUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "https:") {
+      return false;
+    }
+
+    const host = url.hostname.toLowerCase();
+    if (host === "localhost" || host.endsWith(".local") || !host.includes(".")) {
+      return false;
+    }
+
+    const family = isIP(host);
+    if (family === 4) {
+      const [a, b] = host.split(".").map((part) => Number(part));
+      if (
+        a === 10
+        || a === 127
+        || a === 0
+        || (a === 169 && b === 254)
+        || (a === 172 && b >= 16 && b <= 31)
+        || (a === 192 && b === 168)
+      ) {
+        return false;
+      }
+    }
+
+    if (family === 6) {
+      if (host === "::1" || host.startsWith("fe80:") || host.startsWith("fc") || host.startsWith("fd")) {
+        return false;
+      }
+    }
+
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function parseServiceStatus(value: string | undefined | null) {
@@ -3663,6 +3738,35 @@ async function requireProviderRuntimeKey(req: Request, res: ExpressResponse, sto
   }
 
   return runtimeKey;
+}
+
+function verifyRuntimeMarketplaceIdentity(input: {
+  req: Request;
+  runtimeKey: ProviderRuntimeKeyRecord;
+  secretsKey: string;
+  expectedBuyerWallet: string;
+}) {
+  try {
+    const runtimeSecret = decryptProviderRuntimeKey({
+      ciphertext: input.runtimeKey.secretCiphertext,
+      iv: input.runtimeKey.iv,
+      authTag: input.runtimeKey.authTag,
+      secret: input.secretsKey
+    });
+    const identity = verifyMarketplaceIdentityHeaders({
+      headers: input.req.headers as Record<string, string | string[] | undefined>,
+      signingSecret: runtimeSecret
+    });
+    if (identity.serviceId !== input.runtimeKey.serviceId) {
+      return null;
+    }
+    if (identity.buyerWallet !== input.expectedBuyerWallet) {
+      return null;
+    }
+    return identity;
+  } catch {
+    return null;
+  }
 }
 
 async function findPublishedRouteByRouteId(store: MarketplaceStore, routeId: string): Promise<PublishedEndpointVersionRecord | null> {
@@ -3777,8 +3881,7 @@ function isPendingExecutionRecoverable(record: IdempotencyRecord) {
 function pendingPaymentRecoveryActionForRoute(
   route: Pick<PublishedEndpointVersionRecord, "executorKind" | "settlementMode">
 ) {
-  return ("settlementMode" in route && route.settlementMode === "community_direct")
-    || route.executorKind === "mock"
+  return route.executorKind === "mock"
     || route.executorKind === "marketplace"
     ? "retry"
     : "refund";
@@ -3940,11 +4043,23 @@ async function expireAsyncPrepaidReservation(store: MarketplaceStore, job: Pick<
   }
 
   const reservation = await store.getCreditReservationByJobToken(job.serviceId, job.jobToken);
-  if (!reservation || reservation.status !== "reserved") {
+  if (!reservation) {
     return;
   }
 
-  await store.expireCreditReservation(reservation.id);
+  if (reservation.status === "reserved") {
+    await store.expireCreditReservation(reservation.id);
+    return;
+  }
+
+  if (reservation.status === "captured") {
+    await store.reverseCapturedCreditReservation({
+      reservationId: reservation.id,
+      metadata: {
+        reason: "async_job_failed"
+      }
+    });
+  }
 }
 
 function joinUrl(baseUrl: string, path: string): string {

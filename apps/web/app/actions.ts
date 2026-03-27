@@ -51,7 +51,7 @@ function buildAdminRedirect(path: string, key: "message" | "error", value: strin
 }
 
 function parseSettlementMode(value: string): SettlementMode | null {
-  return value === "community_direct" || value === "verified_escrow" ? value : null;
+  return value === "verified_escrow" ? value : null;
 }
 
 function getString(formData: FormData, key: string): string {
@@ -190,9 +190,7 @@ export async function publishProviderServiceAction(formData: FormData): Promise<
     successMessage:
       settlementMode === "verified_escrow"
         ? "Published service as Verified."
-        : settlementMode === "community_direct"
-          ? "Published service as Community."
-          : "Published service.",
+        : "Published service.",
     fallbackErrorMessage: "Failed to publish provider service.",
     mutate: () => publishAdminProviderService(serviceId, {
       reviewerIdentity,

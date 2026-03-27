@@ -207,7 +207,6 @@ export default async function AdminProviderServiceDetailPage({
                           defaultValue={currentDetail.service.settlementMode ?? "verified_escrow"}
                           className="fast-select min-h-12"
                         >
-                          <option value="community_direct">Community</option>
                           <option value="verified_escrow">Verified</option>
                         </select>
                       </label>
@@ -280,7 +279,6 @@ export default async function AdminProviderServiceDetailPage({
                           defaultValue={currentDetail.service.settlementMode ?? "verified_escrow"}
                           className="fast-select min-h-12"
                         >
-                          <option value="community_direct">Community</option>
                           <option value="verified_escrow">Verified</option>
                         </select>
                       </label>

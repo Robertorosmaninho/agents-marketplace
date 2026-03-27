@@ -5,7 +5,7 @@ export type RouteMode = "sync" | "async";
 export type AsyncRouteStrategy = "poll" | "webhook";
 export type ResourceType = "job" | "site" | "api";
 export type JobStatus = "pending" | "completed" | "failed";
-export type RefundStatus = "not_required" | "pending" | "sent" | "failed";
+export type RefundStatus = "not_required" | "pending" | "sending" | "sent" | "failed";
 export type SuggestionType = "endpoint" | "source";
 export type SuggestionStatus = "submitted" | "reviewing" | "accepted" | "rejected" | "shipped";
 export type UpstreamAuthMode = "none" | "bearer" | "header";
@@ -19,7 +19,7 @@ export type ProviderServiceStatus =
   | "archived";
 export type ProviderVerificationStatus = "pending" | "verified" | "failed";
 export type ProviderReviewStatus = "pending_review" | "changes_requested" | "published" | "suspended";
-export type SettlementMode = "community_direct" | "verified_escrow";
+export type SettlementMode = "verified_escrow";
 export type ProviderServiceType = "marketplace_proxy" | "external_registry";
 export type ServiceEndpointType = ProviderServiceType;
 export type HttpMethod = "GET" | "POST";
@@ -898,6 +898,7 @@ export interface JobRecord {
 export interface ProviderAttemptRecord {
   id: string;
   jobToken: string | null;
+  paymentId: string | null;
   routeId: string;
   requestId: string | null;
   responseStatusCode: number | null;
@@ -925,7 +926,7 @@ export interface RefundRecord {
   paymentId: string;
   wallet: string;
   amount: string;
-  status: "pending" | "sent" | "failed";
+  status: "pending" | "sending" | "sent" | "failed";
   txHash: string | null;
   errorMessage: string | null;
   createdAt: string;
@@ -940,7 +941,7 @@ export interface ProviderPayoutRecord {
   providerWallet: string;
   currency: MarketplaceTokenSymbol;
   amount: string;
-  status: "pending" | "sent";
+  status: "pending" | "sending" | "sent";
   txHash: string | null;
   sentAt: string | null;
   attemptCount: number;
@@ -966,7 +967,7 @@ export interface CreditLedgerEntryRecord {
   serviceId: string;
   buyerWallet: string;
   currency: MarketplaceTokenSymbol;
-  kind: "topup" | "reserve" | "capture" | "release";
+  kind: "topup" | "reserve" | "capture" | "release" | "restore";
   amount: string;
   reservationId: string | null;
   paymentId: string | null;
@@ -982,8 +983,10 @@ export interface CreditReservationRecord {
   currency: MarketplaceTokenSymbol;
   idempotencyKey: string;
   jobToken: string | null;
+  requestId: string | null;
+  paymentId: string | null;
   providerReference: string | null;
-  status: "reserved" | "captured" | "released" | "expired";
+  status: "reserved" | "captured" | "released" | "expired" | "reversed";
   reservedAmount: string;
   capturedAmount: string;
   expiresAt: string;
@@ -1131,6 +1134,7 @@ export interface MarketplaceStore {
   getAccessGrant(resourceType: ResourceType, resourceId: string, wallet: string): Promise<AccessGrantRecord | null>;
   recordProviderAttempt(input: {
     jobToken?: string | null;
+    paymentId?: string | null;
     routeId: string;
     requestId?: string | null;
     responseStatusCode?: number | null;
@@ -1142,12 +1146,14 @@ export interface MarketplaceStore {
   }): Promise<ProviderAttemptRecord>;
   getLatestProviderExecuteAttempt(jobToken: string): Promise<ProviderAttemptRecord | null>;
   getLatestSuccessfulProviderExecuteAttempt(jobToken: string): Promise<ProviderAttemptRecord | null>;
+  getLatestSuccessfulProviderExecuteAttemptByPaymentId(paymentId: string): Promise<ProviderAttemptRecord | null>;
   createRefund(input: {
     jobToken?: string | null;
     paymentId: string;
     wallet: string;
     amount: string;
   }): Promise<RefundRecord>;
+  claimRefundForSend(refundId: string): Promise<RefundRecord | null>;
   markRefundSent(refundId: string, txHash: string): Promise<RefundRecord>;
   markRefundFailed(refundId: string, errorMessage: string): Promise<RefundRecord>;
   getRefundByJobToken(jobToken: string): Promise<RefundRecord | null>;
@@ -1155,6 +1161,7 @@ export interface MarketplaceStore {
   createProviderPayout(input: ProviderPayoutInput): Promise<ProviderPayoutRecord>;
   listRecoverableProviderPayouts(limit: number): Promise<ProviderPayoutInput[]>;
   listPendingProviderPayouts(limit: number): Promise<ProviderPayoutRecord[]>;
+  claimPendingProviderPayouts(limit: number): Promise<ProviderPayoutRecord[]>;
   markProviderPayoutSendFailure(payoutIds: string[], errorMessage: string): Promise<void>;
   markProviderPayoutsSent(payoutIds: string[], txHash: string): Promise<ProviderPayoutRecord[]>;
   completeCreditTopupCharge(
@@ -1180,6 +1187,8 @@ export interface MarketplaceStore {
     amount: string;
     idempotencyKey: string;
     jobToken?: string | null;
+    requestId?: string | null;
+    paymentId?: string | null;
     providerReference?: string | null;
     expiresAt: string;
     metadata?: Record<string, unknown>;
@@ -1203,6 +1212,10 @@ export interface MarketplaceStore {
     reservation: CreditReservationRecord;
     entry: CreditLedgerEntryRecord | null;
   }>;
+  reverseCapturedCreditReservation(input: {
+    reservationId: string;
+    metadata?: Record<string, unknown>;
+  }): Promise<{ account: CreditAccountRecord; reservation: CreditReservationRecord; entry: CreditLedgerEntryRecord | null }>;
   getCreditReservationById(reservationId: string): Promise<CreditReservationRecord | null>;
   getCreditReservationByIdempotencyKey(serviceId: string, idempotencyKey: string): Promise<CreditReservationRecord | null>;
   getCreditReservationByJobToken(serviceId: string, jobToken: string): Promise<CreditReservationRecord | null>;

@@ -43,25 +43,40 @@ const payoutService = createFastPayoutService({
 });
 
 const intervalMs = Number(process.env.WORKER_POLL_INTERVAL_MS ?? DEFAULT_JOB_POLL_INTERVAL_MS);
+let stopped = false;
+let timer: NodeJS.Timeout | null = null;
 
-const timer = setInterval(() => {
-  void runMarketplaceWorkerCycle({
-    store,
-    refundService,
-    payoutService,
-    secretsKey
-  }).catch((error) => {
+async function runCycle() {
+  if (stopped) {
+    return;
+  }
+
+  try {
+    await runMarketplaceWorkerCycle({
+      store,
+      refundService,
+      payoutService,
+      secretsKey
+    });
+  } catch (error) {
     console.error("Worker cycle failed:", error);
-  });
-}, intervalMs);
+  } finally {
+    if (!stopped) {
+      timer = setTimeout(() => {
+        void runCycle();
+      }, intervalMs);
+    }
+  }
+}
 
-void runMarketplaceWorkerCycle({ store, refundService, payoutService, secretsKey }).catch((error) => {
-  console.error("Initial worker cycle failed:", error);
-});
+void runCycle();
 
 for (const signal of ["SIGINT", "SIGTERM"] as const) {
   process.on(signal, async () => {
-    clearInterval(timer);
+    stopped = true;
+    if (timer) {
+      clearTimeout(timer);
+    }
     await pool.end();
     process.exit(0);
   });

@@ -114,22 +114,9 @@ export function EndpointBrowserRunner({
         const parsedBody = JSON.parse(requestBody) as unknown;
         const invocation = buildInvocation(parsedBody);
 
-        if (isFreeRoute) {
-          const response = await fetch(invocation.url, invocation.init);
-
-          const body = await safeJson(response);
-          setResult({
-            statusCode: response.status,
-            body
-          });
-          setJob(null);
-          return;
-        }
-
-        const connector = await ensureConnector(deploymentNetwork, connectorRef);
-        const payer = await connector.exportKeys();
-
         if (usesWalletSession) {
+          const connector = await ensureConnector(deploymentNetwork, connectorRef);
+          const payer = await connector.exportKeys();
           const accessToken = await createApiAccessToken({
             apiBaseUrl,
             wallet: payer.address,
@@ -153,6 +140,21 @@ export function EndpointBrowserRunner({
           setJob(null);
           return;
         }
+
+        if (isFreeRoute) {
+          const response = await fetch(invocation.url, invocation.init);
+
+          const body = await safeJson(response);
+          setResult({
+            statusCode: response.status,
+            body
+          });
+          setJob(null);
+          return;
+        }
+
+        const connector = await ensureConnector(deploymentNetwork, connectorRef);
+        const payer = await connector.exportKeys();
 
         const paymentId = createPaymentIdentifier();
 

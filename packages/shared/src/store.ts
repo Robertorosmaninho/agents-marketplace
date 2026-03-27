@@ -701,11 +701,11 @@ function normalizeSettlementMode(
   mode: SettlementMode | null | undefined,
   fallback: SettlementMode = "verified_escrow"
 ): SettlementMode {
-  return mode === "community_direct" || mode === "verified_escrow" ? mode : fallback;
+  return mode === "verified_escrow" ? mode : fallback;
 }
 
 function settlementModeForNewProviderService(): SettlementMode {
-  return "community_direct";
+  return "verified_escrow";
 }
 
 function normalizePersistedPayoutSplit(
@@ -718,9 +718,7 @@ function normalizePersistedPayoutSplit(
   const legacyMarketplaceWallet = (split as { marketplaceWallet?: string | null }).marketplaceWallet ?? "";
   const paymentDestinationWallet =
     (split as { paymentDestinationWallet?: string | null }).paymentDestinationWallet
-    ?? (settlementMode === "community_direct"
-      ? ((split as { providerWallet?: string | null }).providerWallet ?? legacyMarketplaceWallet)
-      : legacyMarketplaceWallet);
+    ?? legacyMarketplaceWallet;
 
   return {
     ...split,
@@ -1118,6 +1116,7 @@ export class InMemoryMarketplaceStore implements MarketplaceStore {
 
   async recordProviderAttempt(input: {
     jobToken?: string | null;
+    paymentId?: string | null;
     routeId: string;
     requestId?: string | null;
     responseStatusCode?: number | null;
@@ -1130,6 +1129,7 @@ export class InMemoryMarketplaceStore implements MarketplaceStore {
     const record: ProviderAttemptRecord = {
       id: randomUUID(),
       jobToken: input.jobToken ?? null,
+      paymentId: input.paymentId ?? null,
       routeId: input.routeId,
       requestId: input.requestId ?? null,
       responseStatusCode: input.responseStatusCode ?? null,
@@ -1150,6 +1150,19 @@ export class InMemoryMarketplaceStore implements MarketplaceStore {
       [...this.attempts]
         .filter((attempt) =>
           attempt.jobToken === jobToken
+          && attempt.phase === "execute"
+          && attempt.status === "succeeded"
+        )
+        .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0]
+        ?? null
+    );
+  }
+
+  async getLatestSuccessfulProviderExecuteAttemptByPaymentId(paymentId: string): Promise<ProviderAttemptRecord | null> {
+    return clone(
+      [...this.attempts]
+        .filter((attempt) =>
+          attempt.paymentId === paymentId
           && attempt.phase === "execute"
           && attempt.status === "succeeded"
         )
@@ -1240,6 +1253,39 @@ export class InMemoryMarketplaceStore implements MarketplaceStore {
     }
 
     return clone(record);
+  }
+
+  async claimRefundForSend(refundId: string): Promise<RefundRecord | null> {
+    const existing = this.refundsById.get(refundId);
+    if (!existing || existing.status !== "pending") {
+      return null;
+    }
+
+    const updated: RefundRecord = {
+      ...existing,
+      status: "sending",
+      errorMessage: null,
+      updatedAt: timestamp()
+    };
+
+    this.refundsById.set(refundId, updated);
+    this.refundsByPaymentId.set(updated.paymentId, updated);
+
+    if (updated.jobToken) {
+      this.refundsByJobToken.set(updated.jobToken, updated);
+
+      const job = this.jobsByToken.get(updated.jobToken);
+      if (job) {
+        this.jobsByToken.set(updated.jobToken, {
+          ...job,
+          refundStatus: "sending",
+          refundId,
+          updatedAt: timestamp()
+        });
+      }
+    }
+
+    return clone(updated);
   }
 
   async markRefundSent(refundId: string, txHash: string): Promise<RefundRecord> {
@@ -1431,6 +1477,24 @@ export class InMemoryMarketplaceStore implements MarketplaceStore {
       .map((record) => clone(record));
   }
 
+  async claimPendingProviderPayouts(limit: number): Promise<ProviderPayoutRecord[]> {
+    const claimed: ProviderPayoutRecord[] = [];
+    for (const payout of Array.from(this.providerPayoutsById.values())
+      .filter((record) => record.status === "pending")
+      .sort((left, right) => left.createdAt.localeCompare(right.createdAt))
+      .slice(0, limit)) {
+      const next: ProviderPayoutRecord = {
+        ...payout,
+        status: "sending",
+        lastError: null,
+        updatedAt: timestamp()
+      };
+      this.providerPayoutsById.set(next.id, next);
+      claimed.push(clone(next));
+    }
+    return claimed;
+  }
+
   async markProviderPayoutSendFailure(payoutIds: string[], errorMessage: string): Promise<void> {
     for (const payoutId of payoutIds) {
       const existing = this.providerPayoutsById.get(payoutId);
@@ -1440,6 +1504,7 @@ export class InMemoryMarketplaceStore implements MarketplaceStore {
 
       this.providerPayoutsById.set(payoutId, {
         ...existing,
+        status: "pending",
         attemptCount: existing.attemptCount + 1,
         lastError: errorMessage,
         updatedAt: timestamp()
@@ -1711,6 +1776,8 @@ export class InMemoryMarketplaceStore implements MarketplaceStore {
     amount: string;
     idempotencyKey: string;
     jobToken?: string | null;
+    requestId?: string | null;
+    paymentId?: string | null;
     providerReference?: string | null;
     expiresAt: string;
     metadata?: Record<string, unknown>;
@@ -1739,24 +1806,23 @@ export class InMemoryMarketplaceStore implements MarketplaceStore {
         await this.expireCreditReservation(existingReservation.id);
       }
       const reservation = this.creditReservationsById.get(existingReservationId);
-      if (!reservation) {
-        throw new Error(`Credit reservation not found: ${existingReservationId}`);
+      if (reservation && (reservation.status === "reserved" || reservation.status === "captured")) {
+        const account = this.creditAccountsById.get(reservation.accountId);
+        if (!account) {
+          throw new Error(`Credit account not found: ${reservation.accountId}`);
+        }
+        const entry = Array.from(this.creditEntriesById.values())
+          .filter((candidate) => candidate.reservationId === reservation.id && candidate.kind === "reserve")
+          .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0];
+        if (!entry) {
+          throw new Error(`Credit reserve entry not found: ${reservation.id}`);
+        }
+        return {
+          account: clone(account),
+          reservation: clone(reservation),
+          entry: clone(entry)
+        };
       }
-      const account = this.creditAccountsById.get(reservation.accountId);
-      if (!account) {
-        throw new Error(`Credit account not found: ${reservation.accountId}`);
-      }
-      const entry = Array.from(this.creditEntriesById.values()).find(
-        (candidate) => candidate.reservationId === reservation.id && candidate.kind === "reserve"
-      );
-      if (!entry) {
-        throw new Error(`Credit reserve entry not found: ${reservation.id}`);
-      }
-      return {
-        account: clone(account),
-        reservation: clone(reservation),
-        entry: clone(entry)
-      };
     }
 
     const account = await this.getCreditAccount(input.serviceId, input.buyerWallet, input.currency);
@@ -1783,6 +1849,8 @@ export class InMemoryMarketplaceStore implements MarketplaceStore {
       currency: input.currency,
       idempotencyKey: input.idempotencyKey,
       jobToken: input.jobToken ?? null,
+      requestId: input.requestId ?? null,
+      paymentId: input.paymentId ?? null,
       providerReference: input.providerReference ?? null,
       status: "reserved",
       reservedAmount: input.amount,
@@ -1960,6 +2028,10 @@ export class InMemoryMarketplaceStore implements MarketplaceStore {
       updatedAt: timestamp()
     };
     this.creditReservationsById.set(updatedReservation.id, updatedReservation);
+    this.creditReservationIdByIdempotencyKey.delete(creditReservationKey(updatedReservation.serviceId, updatedReservation.idempotencyKey));
+    if (updatedReservation.jobToken) {
+      this.creditReservationIdByJobToken.delete(creditReservationJobTokenKey(updatedReservation.serviceId, updatedReservation.jobToken));
+    }
 
     const entry: CreditLedgerEntryRecord = {
       id: randomUUID(),
@@ -2016,10 +2088,74 @@ export class InMemoryMarketplaceStore implements MarketplaceStore {
       updatedAt: timestamp()
     };
     this.creditReservationsById.set(expiredReservation.id, expiredReservation);
+    this.creditReservationIdByIdempotencyKey.delete(creditReservationKey(expiredReservation.serviceId, expiredReservation.idempotencyKey));
+    if (expiredReservation.jobToken) {
+      this.creditReservationIdByJobToken.delete(creditReservationJobTokenKey(expiredReservation.serviceId, expiredReservation.jobToken));
+    }
     return {
       account: clone(released.account),
       reservation: clone(expiredReservation),
       entry: clone(released.entry)
+    };
+  }
+
+  async reverseCapturedCreditReservation(input: {
+    reservationId: string;
+    metadata?: Record<string, unknown>;
+  }): Promise<{ account: CreditAccountRecord; reservation: CreditReservationRecord; entry: CreditLedgerEntryRecord | null }> {
+    const existing = this.creditReservationsById.get(input.reservationId);
+    if (!existing) {
+      throw new Error(`Credit reservation not found: ${input.reservationId}`);
+    }
+    const account = this.creditAccountsById.get(existing.accountId);
+    if (!account) {
+      throw new Error(`Credit account not found: ${existing.accountId}`);
+    }
+    if (existing.status !== "captured") {
+      return {
+        account: clone(account),
+        reservation: clone(existing),
+        entry: null
+      };
+    }
+
+    const updatedAccount: CreditAccountRecord = {
+      ...account,
+      availableAmount: (BigInt(account.availableAmount) + BigInt(existing.capturedAmount)).toString(),
+      updatedAt: timestamp()
+    };
+    this.creditAccountsById.set(updatedAccount.id, updatedAccount);
+
+    const updatedReservation: CreditReservationRecord = {
+      ...existing,
+      status: "reversed",
+      updatedAt: timestamp()
+    };
+    this.creditReservationsById.set(updatedReservation.id, updatedReservation);
+    this.creditReservationIdByIdempotencyKey.delete(creditReservationKey(updatedReservation.serviceId, updatedReservation.idempotencyKey));
+    if (updatedReservation.jobToken) {
+      this.creditReservationIdByJobToken.delete(creditReservationJobTokenKey(updatedReservation.serviceId, updatedReservation.jobToken));
+    }
+
+    const entry: CreditLedgerEntryRecord = {
+      id: randomUUID(),
+      accountId: updatedAccount.id,
+      serviceId: updatedReservation.serviceId,
+      buyerWallet: updatedReservation.buyerWallet,
+      currency: updatedReservation.currency,
+      kind: "restore",
+      amount: updatedReservation.capturedAmount,
+      reservationId: updatedReservation.id,
+      paymentId: updatedReservation.paymentId,
+      metadata: clone(input.metadata ?? {}),
+      createdAt: timestamp()
+    };
+    this.creditEntriesById.set(entry.id, entry);
+
+    return {
+      account: clone(updatedAccount),
+      reservation: clone(updatedReservation),
+      entry: clone(entry)
     };
   }
 
@@ -2029,12 +2165,28 @@ export class InMemoryMarketplaceStore implements MarketplaceStore {
 
   async getCreditReservationByIdempotencyKey(serviceId: string, idempotencyKey: string): Promise<CreditReservationRecord | null> {
     const reservationId = this.creditReservationIdByIdempotencyKey.get(creditReservationKey(serviceId, idempotencyKey));
-    return clone(reservationId ? this.creditReservationsById.get(reservationId) ?? null : null);
+    if (reservationId) {
+      return clone(this.creditReservationsById.get(reservationId) ?? null);
+    }
+    return clone(
+      Array.from(this.creditReservationsById.values())
+        .filter((reservation) => reservation.serviceId === serviceId && reservation.idempotencyKey === idempotencyKey)
+        .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0]
+        ?? null
+    );
   }
 
   async getCreditReservationByJobToken(serviceId: string, jobToken: string): Promise<CreditReservationRecord | null> {
     const reservationId = this.creditReservationIdByJobToken.get(creditReservationJobTokenKey(serviceId, jobToken));
-    return clone(reservationId ? this.creditReservationsById.get(reservationId) ?? null : null);
+    if (reservationId) {
+      return clone(this.creditReservationsById.get(reservationId) ?? null);
+    }
+    return clone(
+      Array.from(this.creditReservationsById.values())
+        .filter((reservation) => reservation.serviceId === serviceId && reservation.jobToken === jobToken)
+        .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0]
+        ?? null
+    );
   }
 
   async listExpiredCreditReservations(limit: number, expiresBefore: string = new Date().toISOString()): Promise<CreditReservationRecord[]> {
@@ -2967,7 +3119,7 @@ export class InMemoryMarketplaceStore implements MarketplaceStore {
     this.assertServiceUniqueness(version.slug, version.apiNamespace, serviceId);
 
     const settlementMode = service.serviceType === "marketplace_proxy"
-      ? normalizeSettlementMode(input?.settlementMode ?? service.settlementMode, service.settlementMode ?? "community_direct")
+      ? normalizeSettlementMode(input?.settlementMode ?? service.settlementMode, service.settlementMode ?? "verified_escrow")
       : null;
 
     this.latestPublishedVersionByServiceId.set(serviceId, version.versionId);
@@ -3032,7 +3184,7 @@ export class InMemoryMarketplaceStore implements MarketplaceStore {
       return this.buildProviderServiceDetail(serviceId);
     }
 
-    const settlementMode = normalizeSettlementMode(input.settlementMode, service.settlementMode ?? "community_direct");
+    const settlementMode = normalizeSettlementMode(input.settlementMode, service.settlementMode ?? "verified_escrow");
     this.providerServicesById.set(serviceId, {
       ...service,
       settlementMode,
@@ -3398,6 +3550,7 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
       CREATE TABLE IF NOT EXISTS provider_attempts (
         id TEXT PRIMARY KEY,
         job_token TEXT REFERENCES jobs(job_token),
+        payment_id TEXT,
         route_id TEXT NOT NULL,
         request_id TEXT,
         response_status_code INTEGER,
@@ -3420,6 +3573,9 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
 
       ALTER TABLE provider_attempts
       ADD COLUMN IF NOT EXISTS response_status_code INTEGER;
+
+      ALTER TABLE provider_attempts
+      ADD COLUMN IF NOT EXISTS payment_id TEXT;
 
       UPDATE provider_attempts attempts
       SET route_id = jobs.route_id
@@ -3490,7 +3646,7 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
         id TEXT PRIMARY KEY,
         provider_account_id TEXT NOT NULL REFERENCES provider_accounts(id),
         service_type TEXT NOT NULL DEFAULT 'marketplace_proxy',
-        settlement_mode TEXT DEFAULT 'community_direct',
+        settlement_mode TEXT DEFAULT 'verified_escrow',
         slug TEXT NOT NULL UNIQUE,
         api_namespace TEXT UNIQUE,
         name TEXT NOT NULL,
@@ -3706,14 +3862,15 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
         currency TEXT NOT NULL,
         idempotency_key TEXT NOT NULL,
         job_token TEXT,
+        request_id TEXT,
+        payment_id TEXT,
         provider_reference TEXT,
         status TEXT NOT NULL,
         reserved_amount TEXT NOT NULL,
         captured_amount TEXT NOT NULL,
         expires_at TIMESTAMPTZ NOT NULL,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        UNIQUE(service_id, idempotency_key)
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
 
       CREATE TABLE IF NOT EXISTS credit_ledger_entries (
@@ -3885,9 +4042,24 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
       ALTER TABLE credit_reservations
       ADD COLUMN IF NOT EXISTS job_token TEXT;
 
-      CREATE UNIQUE INDEX IF NOT EXISTS credit_reservations_service_job_token_idx
+      ALTER TABLE credit_reservations
+      ADD COLUMN IF NOT EXISTS request_id TEXT;
+
+      ALTER TABLE credit_reservations
+      ADD COLUMN IF NOT EXISTS payment_id TEXT;
+
+      ALTER TABLE credit_reservations
+      DROP CONSTRAINT IF EXISTS credit_reservations_service_idempotency_key_key;
+
+      DROP INDEX IF EXISTS credit_reservations_service_job_token_idx;
+
+      CREATE UNIQUE INDEX IF NOT EXISTS credit_reservations_active_idempotency_idx
+      ON credit_reservations(service_id, idempotency_key)
+      WHERE status IN ('reserved', 'captured');
+
+      CREATE UNIQUE INDEX IF NOT EXISTS credit_reservations_active_job_token_idx
       ON credit_reservations(service_id, job_token)
-      WHERE job_token IS NOT NULL;
+      WHERE job_token IS NOT NULL AND status IN ('reserved', 'captured');
 
       UPDATE provider_services
       SET service_type = 'marketplace_proxy'
@@ -3956,7 +4128,7 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
       ALTER COLUMN api_namespace DROP NOT NULL;
 
       ALTER TABLE provider_services
-      ALTER COLUMN settlement_mode SET DEFAULT 'community_direct';
+      ALTER COLUMN settlement_mode SET DEFAULT 'verified_escrow';
 
       ALTER TABLE provider_services
       ALTER COLUMN settlement_mode DROP NOT NULL;
@@ -5165,6 +5337,7 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
 
   async recordProviderAttempt(input: {
     jobToken?: string | null;
+    paymentId?: string | null;
     routeId: string;
     requestId?: string | null;
     responseStatusCode?: number | null;
@@ -5177,14 +5350,15 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
     const result = await this.pool.query(
       `
       INSERT INTO provider_attempts (
-        id, job_token, route_id, request_id, response_status_code, phase, status, request_payload, response_payload, error_message
+        id, job_token, payment_id, route_id, request_id, response_status_code, phase, status, request_payload, response_payload, error_message
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb, $11)
       RETURNING *
       `,
       [
         randomUUID(),
         input.jobToken ?? null,
+        input.paymentId ?? null,
         input.routeId,
         input.requestId ?? null,
         input.responseStatusCode ?? null,
@@ -5211,6 +5385,23 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
       LIMIT 1
       `,
       [jobToken]
+    );
+
+    return result.rowCount ? mapAttemptRow(result.rows[0]) : null;
+  }
+
+  async getLatestSuccessfulProviderExecuteAttemptByPaymentId(paymentId: string): Promise<ProviderAttemptRecord | null> {
+    const result = await this.pool.query(
+      `
+      SELECT *
+      FROM provider_attempts
+      WHERE payment_id = $1
+        AND phase = 'execute'
+        AND status = 'succeeded'
+      ORDER BY created_at DESC
+      LIMIT 1
+      `,
+      [paymentId]
     );
 
     return result.rowCount ? mapAttemptRow(result.rows[0]) : null;
@@ -5302,6 +5493,36 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
         WHERE job_token = $1
         `,
         [jobToken, refund.id]
+      );
+    }
+
+    return refund;
+  }
+
+  async claimRefundForSend(refundId: string): Promise<RefundRecord | null> {
+    const result = await this.pool.query(
+      `
+      UPDATE refunds
+      SET status = 'sending', error_message = NULL, updated_at = NOW()
+      WHERE id = $1
+        AND status = 'pending'
+      RETURNING *
+      `,
+      [refundId]
+    );
+    if (!result.rowCount) {
+      return null;
+    }
+
+    const refund = mapRefundRow(result.rows[0]);
+    if (refund.jobToken) {
+      await this.pool.query(
+        `
+        UPDATE jobs
+        SET refund_status = 'sending', refund_id = $2, updated_at = NOW()
+        WHERE job_token = $1
+        `,
+        [refund.jobToken, refund.id]
       );
     }
 
@@ -5479,6 +5700,31 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
     return result.rows.map(mapProviderPayoutRow);
   }
 
+  async claimPendingProviderPayouts(limit: number): Promise<ProviderPayoutRecord[]> {
+    if (limit <= 0) {
+      return [];
+    }
+
+    const result = await this.pool.query(
+      `
+      WITH claimed AS (
+        SELECT id
+        FROM provider_payouts
+        WHERE status = 'pending'
+        ORDER BY created_at ASC
+        LIMIT $1
+        FOR UPDATE SKIP LOCKED
+      )
+      UPDATE provider_payouts
+      SET status = 'sending', last_error = NULL, updated_at = NOW()
+      WHERE id IN (SELECT id FROM claimed)
+      RETURNING *
+      `,
+      [limit]
+    );
+    return result.rows.map(mapProviderPayoutRow);
+  }
+
   async markProviderPayoutSendFailure(payoutIds: string[], errorMessage: string): Promise<void> {
     if (payoutIds.length === 0) {
       return;
@@ -5487,7 +5733,7 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
     await this.pool.query(
       `
       UPDATE provider_payouts
-      SET attempt_count = attempt_count + 1, last_error = $2, updated_at = NOW()
+      SET status = 'pending', attempt_count = attempt_count + 1, last_error = $2, updated_at = NOW()
       WHERE id = ANY($1::text[])
       `,
       [payoutIds, errorMessage]
@@ -5869,6 +6115,8 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
     amount: string;
     idempotencyKey: string;
     jobToken?: string | null;
+    requestId?: string | null;
+    paymentId?: string | null;
     providerReference?: string | null;
     expiresAt: string;
     metadata?: Record<string, unknown>;
@@ -5882,6 +6130,7 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
         SELECT *
         FROM credit_reservations
         WHERE service_id = $1 AND idempotency_key = $2
+          AND status IN ('reserved', 'captured')
         LIMIT 1
         FOR UPDATE
         `,
@@ -5894,6 +6143,7 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
             SELECT *
             FROM credit_reservations
             WHERE service_id = $1 AND job_token = $2
+              AND status IN ('reserved', 'captured')
             LIMIT 1
             FOR UPDATE
             `,
@@ -6038,9 +6288,9 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
         `
         INSERT INTO credit_reservations (
           id, account_id, service_id, buyer_wallet, currency, idempotency_key, job_token, provider_reference,
-          status, reserved_amount, captured_amount, expires_at
+          request_id, payment_id, status, reserved_amount, captured_amount, expires_at
         ) VALUES (
-          $1, $2, $3, $4, $5, $6, $7, $8, 'reserved', $9, '0', $10
+          $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'reserved', $11, '0', $12
         )
         RETURNING *
         `,
@@ -6053,6 +6303,8 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
           input.idempotencyKey,
           input.jobToken ?? null,
           input.providerReference ?? null,
+          input.requestId ?? null,
+          input.paymentId ?? null,
           input.amount,
           input.expiresAt
         ]
@@ -6530,6 +6782,113 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
     }
   }
 
+  async reverseCapturedCreditReservation(input: {
+    reservationId: string;
+    metadata?: Record<string, unknown>;
+  }): Promise<{ account: CreditAccountRecord; reservation: CreditReservationRecord; entry: CreditLedgerEntryRecord | null }> {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+
+      const reservationResult = await client.query(
+        `
+        SELECT *
+        FROM credit_reservations
+        WHERE id = $1
+        LIMIT 1
+        FOR UPDATE
+        `,
+        [input.reservationId]
+      );
+      if (!reservationResult.rowCount) {
+        throw new Error(`Credit reservation not found: ${input.reservationId}`);
+      }
+      const reservation = mapCreditReservationRow(reservationResult.rows[0]);
+
+      const accountResult = await client.query(
+        `
+        SELECT *
+        FROM credit_accounts
+        WHERE id = $1
+        LIMIT 1
+        FOR UPDATE
+        `,
+        [reservation.accountId]
+      );
+      if (!accountResult.rowCount) {
+        throw new Error(`Credit account not found: ${reservation.accountId}`);
+      }
+      const account = mapCreditAccountRow(accountResult.rows[0]);
+
+      if (reservation.status !== "captured") {
+        await client.query("COMMIT");
+        return {
+          account,
+          reservation,
+          entry: null
+        };
+      }
+
+      const updatedAccountResult = await client.query(
+        `
+        UPDATE credit_accounts
+        SET
+          available_amount = (available_amount::numeric + $2::numeric)::text,
+          updated_at = NOW()
+        WHERE id = $1
+        RETURNING *
+        `,
+        [account.id, reservation.capturedAmount]
+      );
+      const updatedAccount = mapCreditAccountRow(updatedAccountResult.rows[0]);
+
+      const updatedReservationResult = await client.query(
+        `
+        UPDATE credit_reservations
+        SET status = 'reversed', updated_at = NOW()
+        WHERE id = $1
+        RETURNING *
+        `,
+        [reservation.id]
+      );
+      const updatedReservation = mapCreditReservationRow(updatedReservationResult.rows[0]);
+
+      const entryResult = await client.query(
+        `
+        INSERT INTO credit_ledger_entries (
+          id, account_id, service_id, buyer_wallet, currency, kind, amount, reservation_id, payment_id, metadata
+        ) VALUES (
+          $1, $2, $3, $4, $5, 'restore', $6, $7, $8, $9::jsonb
+        )
+        RETURNING *
+        `,
+        [
+          randomUUID(),
+          updatedAccount.id,
+          updatedReservation.serviceId,
+          updatedReservation.buyerWallet,
+          updatedReservation.currency,
+          updatedReservation.capturedAmount,
+          updatedReservation.id,
+          updatedReservation.paymentId,
+          JSON.stringify(input.metadata ?? {})
+        ]
+      );
+
+      await client.query("COMMIT");
+      return {
+        account: updatedAccount,
+        reservation: updatedReservation,
+        entry: mapCreditLedgerEntryRow(entryResult.rows[0])
+      };
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
   async getCreditReservationById(reservationId: string): Promise<CreditReservationRecord | null> {
     const result = await this.pool.query("SELECT * FROM credit_reservations WHERE id = $1 LIMIT 1", [reservationId]);
     return result.rowCount ? mapCreditReservationRow(result.rows[0]) : null;
@@ -6537,7 +6896,7 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
 
   async getCreditReservationByIdempotencyKey(serviceId: string, idempotencyKey: string): Promise<CreditReservationRecord | null> {
     const result = await this.pool.query(
-      "SELECT * FROM credit_reservations WHERE service_id = $1 AND idempotency_key = $2 LIMIT 1",
+      "SELECT * FROM credit_reservations WHERE service_id = $1 AND idempotency_key = $2 ORDER BY created_at DESC LIMIT 1",
       [serviceId, idempotencyKey]
     );
     return result.rowCount ? mapCreditReservationRow(result.rows[0]) : null;
@@ -6545,7 +6904,7 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
 
   async getCreditReservationByJobToken(serviceId: string, jobToken: string): Promise<CreditReservationRecord | null> {
     const result = await this.pool.query(
-      "SELECT * FROM credit_reservations WHERE service_id = $1 AND job_token = $2 LIMIT 1",
+      "SELECT * FROM credit_reservations WHERE service_id = $1 AND job_token = $2 ORDER BY created_at DESC LIMIT 1",
       [serviceId, jobToken]
     );
     return result.rowCount ? mapCreditReservationRow(result.rows[0]) : null;
@@ -6632,6 +6991,7 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
         secret_ciphertext = EXCLUDED.secret_ciphertext,
         iv = EXCLUDED.iv,
         auth_tag = EXCLUDED.auth_tag,
+        created_at = NOW(),
         updated_at = NOW()
       RETURNING *
       `,
@@ -7726,7 +8086,7 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
     const settlementMode = service.service.serviceType === "marketplace_proxy"
       ? normalizeSettlementMode(
         input?.settlementMode ?? service.service.settlementMode,
-        service.service.settlementMode ?? "community_direct"
+        service.service.settlementMode ?? "verified_escrow"
       )
       : null;
 
@@ -7786,7 +8146,7 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
       return this.getProviderServiceDetailById(serviceId);
     }
 
-    const settlementMode = normalizeSettlementMode(input.settlementMode, service.service.settlementMode ?? "community_direct");
+    const settlementMode = normalizeSettlementMode(input.settlementMode, service.service.settlementMode ?? "verified_escrow");
     const versionIds = Array.from(
       new Set(
         [
@@ -8214,6 +8574,7 @@ function mapAttemptRow(row: Record<string, unknown>): ProviderAttemptRecord {
   return {
     id: row.id as string,
     jobToken: (row.job_token as string | null) ?? null,
+    paymentId: (row.payment_id as string | null) ?? null,
     routeId: row.route_id as string,
     requestId: (row.request_id as string | null) ?? null,
     responseStatusCode: (row.response_status_code as number | null) ?? null,
@@ -8292,7 +8653,7 @@ function mapProviderServiceRow(row: Record<string, unknown>): ProviderServiceRec
     providerAccountId: row.provider_account_id as string,
     serviceType: ((row.service_type as ProviderServiceType | null) ?? "marketplace_proxy"),
     settlementMode: row.settlement_mode
-      ? normalizeSettlementMode(row.settlement_mode as SettlementMode | null | undefined, "community_direct")
+      ? normalizeSettlementMode(row.settlement_mode as SettlementMode | null | undefined, "verified_escrow")
       : null,
     slug: row.slug as string,
     apiNamespace: (row.api_namespace as string | null) ?? null,
@@ -8582,6 +8943,8 @@ function mapCreditReservationRow(row: Record<string, unknown>): CreditReservatio
     currency: row.currency as CreditReservationRecord["currency"],
     idempotencyKey: row.idempotency_key as string,
     jobToken: (row.job_token as string | null) ?? null,
+    requestId: (row.request_id as string | null) ?? null,
+    paymentId: (row.payment_id as string | null) ?? null,
     providerReference: (row.provider_reference as string | null) ?? null,
     status: row.status as CreditReservationRecord["status"],
     reservedAmount: row.reserved_amount as string,
