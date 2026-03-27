@@ -46,7 +46,7 @@ Before acting, identify:
 - the service or domain the user wants
 - the endpoint or outcome they need
 - whether the route is free, `fixed_x402`, `topup_x402_variable`, or `prepaid_credit`
-- whether the service settlement tier is `community_direct` or `verified_escrow`
+- whether the service uses `verified_escrow` settlement
 - whether the route is sync or async
 - whether they want browser login only, browser execution, or a CLI/agent-wallet flow
 - whether they already have a funded Fast wallet
@@ -269,10 +269,9 @@ Polling guidance:
 8. If the route returns `202 Accepted`, store the `jobToken` and switch to wallet-bound retrieval.
 9. If the marketplace does not have the needed capability, submit a suggestion for an endpoint or source.
 
-Settlement implications:
+Settlement implication:
 
-- `community_direct`: the x402 payment goes directly to the provider wallet; refunds and reimbursements are provider-owned
-- `verified_escrow`: the x402 payment goes to marketplace treasury; the marketplace can refund failures, reconcile stale payments, and settle provider payouts later
+- marketplace-executed routes use `verified_escrow`: the x402 payment goes to marketplace treasury, and the marketplace can refund failures, reconcile stale payments, and settle provider payouts later
 
 ## Billing flows
 
@@ -327,7 +326,6 @@ Important constraints:
 - use the same request body when retrying a payable route
 - for safe retries, keep the same payment identifier for the same normalized request only
 - prepaid-credit routes require funded service credit and wallet-session bearer auth instead of per-call x402
-- Community/direct services still use verified provider onboarding and domain verification; the difference is money flow, not trust requirements
 - marketplace v1 is Fast-only; do not invent AllSet bridge, hosted ramp, or generic EVM payment steps from this skill
 - if the user needs direct SDK or package-level guidance instead of marketplace route execution, hand off to the main FAST skill
 
@@ -356,26 +354,24 @@ Important constraints:
 
 1. If the service is `verified_escrow`, a sync paid trigger can refund immediately after payment verification failure.
 2. If the service is `verified_escrow` and an async job permanently fails after acceptance, the worker issues a treasury refund.
-3. If the service is `community_direct`, reimbursement is provider-owned because the buyer paid the provider wallet directly.
-4. Read the job retrieval payload or sync error payload for refund status, transaction hash, and any refund error details.
+3. Read the job retrieval payload or sync error payload for refund status, transaction hash, and any refund error details.
 
 ## Provider workflow
 
 1. Prefer the CLI path for agent-driven provider onboarding: create a spec JSON and run `npm run cli -- provider sync --spec <path>`.
 2. The provider commands default to `AGENT_WALLET_KEY` from repo-root `.env`; use `--keyfile` only when you need to override that wallet.
 3. `provider sync` upserts the provider profile, creates or updates the owned service draft by slug, reconciles endpoint drafts, and creates a runtime key only when a `marketplace_proxy` service does not already have one.
-4. New provider services default to `community_direct`; providers cannot self-assign `verified_escrow` in v1.
-5. For `community_direct`, publish only sync HTTP `fixed_x402` routes and keep the provider runtime key available so the marketplace can forward signed buyer identity headers.
-6. For `verified_escrow`, `fixed_x402`, `topup_x402_variable`, `prepaid_credit`, and async routes are allowed only after review promotes the service.
-7. For `topup_x402_variable` endpoints, set `minAmount` and `maxAmount`; the marketplace owns the top-up crediting flow.
-8. For async HTTP endpoints, require a provider runtime key and implement the marketplace async contract: execute returns `202` with `providerJobId`, poll routes expose `pollPath`, and webhook routes complete through the marketplace callback endpoint.
-9. For `prepaid_credit` endpoints, verify marketplace identity headers upstream and use the provider runtime credit APIs to reserve, capture, release, and when needed extend buyer credit reservations.
-10. Run `npm run cli -- provider verify --service <slug-or-id>` to mint a fresh verification challenge and show the exact URL and token the website must serve.
-11. If verification requires touching deploy, DNS, or cloud env outside this repo, ask the user before taking that action. For arbitrary external sites, the agent should hand off the token and wait for confirmation rather than mutating infrastructure on its own.
-12. After the user confirms the verification token is live, continue the same `provider verify` flow so the marketplace performs the ownership check.
-13. Run `npm run cli -- provider submit --service <slug-or-id>` only after verification succeeds; this flow stops at `pending_review`, not admin publish.
-14. If building from marketplace demand, review provider-visible request intake and claim the request you want to build before syncing the draft.
-15. After admin publish, use the public service page and paid proxy routes as the canonical execution surface.
+4. Marketplace-executed provider services publish under `verified_escrow` in the current marketplace cutover.
+5. For `fixed_x402`, `topup_x402_variable`, `prepaid_credit`, and async marketplace routes, complete the draft and submit it for review; admin publish keeps the service in `verified_escrow`.
+6. For `topup_x402_variable` endpoints, set `minAmount` and `maxAmount`; the marketplace owns the top-up crediting flow.
+7. For async HTTP endpoints, require a provider runtime key and implement the marketplace async contract: execute returns `202` with `providerJobId`, poll routes expose `pollPath`, and webhook routes complete through the marketplace callback endpoint.
+8. For `prepaid_credit` endpoints, verify marketplace identity headers upstream and use the provider runtime credit APIs to reserve, capture, release, and when needed extend buyer credit reservations.
+9. Run `npm run cli -- provider verify --service <slug-or-id>` to mint a fresh verification challenge and show the exact URL and token the website must serve.
+10. If verification requires touching deploy, DNS, or cloud env outside this repo, ask the user before taking that action. For arbitrary external sites, the agent should hand off the token and wait for confirmation rather than mutating infrastructure on its own.
+11. After the user confirms the verification token is live, continue the same `provider verify` flow so the marketplace performs the ownership check.
+12. Run `npm run cli -- provider submit --service <slug-or-id>` only after verification succeeds; this flow stops at `pending_review`, not admin publish.
+13. If building from marketplace demand, review provider-visible request intake and claim the request you want to build before syncing the draft.
+14. After admin publish, use the public service page and paid proxy routes as the canonical execution surface.
 
 ### Provider spec shape
 
@@ -480,7 +476,7 @@ Example top-up billing:
 - `provider sync` creates a runtime key automatically for a `marketplace_proxy` service when one does not already exist
 - the sync result includes the plaintext key only on creation; store it immediately
 - after the draft exists, the provider web editor at `https://marketplace.fast.xyz/providers/services` can rotate the runtime key
-- community-direct, async, and prepaid-credit marketplace services require a runtime key before publish/use
+- async and prepaid-credit marketplace services require a runtime key before publish/use
 
 ### Website verification details
 
@@ -500,7 +496,6 @@ Important provider constraints:
 
 - provider drafts are scoped to the wallet that owns the provider profile
 - payout wallet validation happens at draft/update time
-- community-direct services need a provider runtime key before publish
 - async `marketplace_proxy` services need a provider runtime key before publish
 - top-up and prepaid-credit routes are Verified/escrow only
 - prepaid-credit services need a provider runtime key before they can debit marketplace-held credit
@@ -516,11 +511,8 @@ Important provider constraints:
 2. Open the internal review surfaces for suggestions and submitted provider services.
 3. Review suggestion intake, update statuses, and add operator notes as needed.
 4. Review submitted provider services for correctness, pricing, ownership verification, and marketplace fit.
-5. Assign the settlement tier during publish:
-   `community_direct` for direct provider payment and provider-owned refunds
-   `verified_escrow` for marketplace escrow, refunds, prepaid credit, and provider payout settlement
-6. Publish approved services so they appear in the public catalog and route registry.
-7. Suspend services when they should no longer be publicly executable.
+5. Publish approved services under `verified_escrow` so they appear in the public catalog and route registry.
+6. Suspend services when they should no longer be publicly executable.
 
 ## Troubleshooting
 
@@ -532,7 +524,6 @@ Important provider constraints:
 - insufficient prepaid credit: buy more service credit through the top-up route before retrying
 - permanent async failure after acceptance: escrow services use the marketplace refund policy; community/direct services require provider support
 - provider submission blocked: complete website verification or fix draft validation errors
-- provider community route blocked from publish: create a runtime key or switch the service to Verified during review
 - provider prepaid route failing upstream: confirm the runtime key, signed identity header verification, and reserve/capture/release flow
 - service website host changed: generate a new verification challenge and verify again
 - provider request claim conflict: another provider already claimed the request

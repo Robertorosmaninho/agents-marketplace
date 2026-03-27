@@ -41,7 +41,7 @@ function buildServiceDetail(overrides?: {
       id: "service_1",
       providerAccountId: "provider_1",
       serviceType: "marketplace_proxy" as const,
-      settlementMode: "community_direct" as const,
+      settlementMode: "verified_escrow" as const,
       slug: "signal-labs",
       apiNamespace: "signals",
       name: "Signal Labs",

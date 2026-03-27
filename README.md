@@ -23,18 +23,17 @@ Marketplace-executed routes use one of four billing modes:
 
 Discovery-only `external_registry` listings do not use marketplace billing. They publish direct provider URLs and the provider defines payment and auth outside the marketplace.
 
-## Settlement Tiers
+## Settlement Model
 
-Only `marketplace_proxy` services publish under settlement tiers:
+Marketplace-executed `marketplace_proxy` services publish under `verified_escrow`:
 
-- `community_direct`: buyer pays the provider wallet directly through x402, the provider owns reimbursements/refunds, and the route must be sync HTTP `fixed_x402`
 - `verified_escrow`: buyer pays marketplace treasury, marketplace can refund failures, reconcile stale payments, support free routes, variable top-ups, prepaid credit, async jobs, and settle provider payouts later
 
-New `marketplace_proxy` drafts default to `community_direct`. Marketplace-operated seeded services remain `verified_escrow`, and only `verified_escrow` services can publish `free`, `topup_x402_variable`, `prepaid_credit`, async, or marketplace-executed routes.
+Marketplace-operated and provider-authored `marketplace_proxy` services use `verified_escrow` in the current cutover, and can publish `fixed_x402`, `free`, `topup_x402_variable`, `prepaid_credit`, and async routes.
 
-For `verified_escrow`, successful route charges and top-ups create provider payout records, and the worker batches and sends those payouts on Fast. `community_direct` does not create treasury payout records because the buyer already paid the provider wallet directly.
+For `verified_escrow`, successful route charges and top-ups create provider payout records, and the worker batches and sends those payouts on Fast.
 
-`external_registry` services do not use settlement tiers. They are discovery-only listings and are never executed by the marketplace.
+`external_registry` services do not use marketplace settlement. They are discovery-only listings and are never executed by the marketplace.
 
 ## Persona Flows
 
@@ -46,17 +45,6 @@ For `verified_escrow`, successful route charges and top-ups create provider payo
 - Submits for admin review
 - After publish, appears in the catalog as a discovery-only external API
 - Marketplace does not proxy calls, collect payment, mint runtime auth, or track execution analytics
-
-### Community API Provider
-
-- Creates a service as `marketplace_proxy`
-- Adds marketplace-hosted endpoints
-- Configures payout wallet and provider runtime key
-- Verifies website ownership
-- Submits for admin review
-- Admin publishes with `community_direct`
-- Buyers call the marketplace route, but payment settles directly to the provider
-- Only sync HTTP `fixed_x402` endpoints are allowed
 
 ### Verified Escrow API Provider
 
@@ -72,7 +60,7 @@ For `verified_escrow`, successful route charges and top-ups create provider payo
 - Checks website verification and service completeness
 - Requests changes or publishes
 - Publishes discovery-only metadata for `external_registry` services
-- Chooses `community_direct` or `verified_escrow` for `marketplace_proxy` services
+- Publishes `marketplace_proxy` services as `verified_escrow`
 - Can later suspend live services
 
 ### Human User
@@ -296,7 +284,7 @@ Keep the web, API, and worker on the same network value inside each stack. The f
 
 Provider runtime keys are used in three cases:
 
-- `community_direct` HTTP routes: the marketplace forwards signed buyer identity headers so the provider can trust the requester wallet and `X-MARKETPLACE-REQUEST-ID`
+- `verified_escrow` HTTP routes that require signed marketplace identity: the marketplace forwards signed buyer identity headers so the provider can trust the requester wallet and `X-MARKETPLACE-REQUEST-ID`
 - `verified_escrow` async HTTP routes: the marketplace signs async execute and poll requests, injects `X-MARKETPLACE-JOB-TOKEN`, and can inject webhook callback auth for provider completion
 - `verified_escrow` prepaid-credit routes: the provider uses the runtime credit APIs to reserve, capture, and release marketplace-held credit
 
