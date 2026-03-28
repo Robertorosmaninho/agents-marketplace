@@ -33,7 +33,7 @@
       "title": "Scrape Products",
       "description": "Extract product and pricing data from retail sites using product URLs, category URLs, or search terms.",
       "billingType": "fixed_x402",
-      "price": "$0.50",
+      "price": "$0.0001",
       "method": "POST",
       "mode": "async",
       "asyncStrategy": "poll",

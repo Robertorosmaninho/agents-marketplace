@@ -61,10 +61,10 @@ function buildQuickInsightRoute(config: MarketplaceNetworkConfig): MarketplaceRo
     settlementMode: "verified_escrow",
     mode: "sync",
     network: config.paymentNetwork,
-    price: "$0.05",
+    price: "$0.0001",
     billing: {
       type: "fixed_x402",
-      price: "$0.05"
+      price: "$0.0001"
     },
     title: "Quick Insight",
     description: "Return a paid single-shot mock insight response.",
@@ -128,10 +128,10 @@ function buildAsyncReportRoute(config: MarketplaceNetworkConfig): MarketplaceRou
     settlementMode: "verified_escrow",
     mode: "async",
     network: config.paymentNetwork,
-    price: "$0.15",
+    price: "$0.0001",
     billing: {
       type: "fixed_x402",
-      price: "$0.15"
+      price: "$0.0001"
     },
     title: "Async Report",
     description: "Create a paid async mock report job and return a job token.",

@@ -1,0 +1,118 @@
+{
+  "suspend": [
+    {
+      "slug": "stablesocial",
+      "serviceId": "bdfb1796-63ec-4ef9-a15a-fca5fd1a197f",
+      "ok": true,
+      "status": 200,
+      "serviceStatus": "suspended"
+    },
+    {
+      "slug": "stableenrich",
+      "serviceId": "1e82560d-082e-4d8b-a1b6-860aec5d3c2a",
+      "ok": true,
+      "status": 200,
+      "serviceStatus": "suspended"
+    }
+  ],
+  "publish": [
+    {
+      "slug": "stablesocial-facebook",
+      "serviceId": "b1eacb3f-8130-4f7f-9b2f-cb0a3d57c5af",
+      "ok": true,
+      "status": 200,
+      "serviceStatus": "published"
+    },
+    {
+      "slug": "stablesocial-instagram",
+      "serviceId": "d395c006-1a8d-404e-ab5d-abc2cbe975e9",
+      "ok": true,
+      "status": 200,
+      "serviceStatus": "published"
+    },
+    {
+      "slug": "stablesocial-tiktok",
+      "serviceId": "488e196f-249f-466a-8641-8a80f78ac23b",
+      "ok": true,
+      "status": 200,
+      "serviceStatus": "published"
+    },
+    {
+      "slug": "stablesocial-reddit",
+      "serviceId": "d6e7bf9d-6255-46d4-b43d-36571fb268b6",
+      "ok": true,
+      "status": 200,
+      "serviceStatus": "published"
+    },
+    {
+      "slug": "stableenrich-apollo",
+      "serviceId": "97e6e847-fa11-4d37-bb37-c776e98df5d8",
+      "ok": true,
+      "status": 200,
+      "serviceStatus": "published"
+    },
+    {
+      "slug": "stableenrich-clado",
+      "serviceId": "ba448951-7851-4765-a531-4c2c14bbf737",
+      "ok": true,
+      "status": 200,
+      "serviceStatus": "published"
+    },
+    {
+      "slug": "stableenrich-exa",
+      "serviceId": "e08550d3-7cdf-431d-9202-e7f21d2c496f",
+      "ok": true,
+      "status": 200,
+      "serviceStatus": "published"
+    },
+    {
+      "slug": "stableenrich-firecrawl",
+      "serviceId": "4de88efa-bfa0-445f-9588-c5b28ddf7606",
+      "ok": true,
+      "status": 200,
+      "serviceStatus": "published"
+    },
+    {
+      "slug": "stableenrich-google-maps",
+      "serviceId": "78497f21-afc6-42b2-8d1e-616eadec08a1",
+      "ok": true,
+      "status": 200,
+      "serviceStatus": "published"
+    },
+    {
+      "slug": "stableenrich-serper",
+      "serviceId": "1ad700d7-8614-40db-b3b0-1db01af65f3a",
+      "ok": true,
+      "status": 200,
+      "serviceStatus": "published"
+    },
+    {
+      "slug": "stableenrich-reddit",
+      "serviceId": "dedc1cde-1b63-4df3-9ff3-d10fd0d7b09d",
+      "ok": true,
+      "status": 200,
+      "serviceStatus": "published"
+    },
+    {
+      "slug": "stableenrich-whitepages",
+      "serviceId": "826fd9f2-9a06-4fac-ad4c-e01186002bab",
+      "ok": true,
+      "status": 200,
+      "serviceStatus": "published"
+    },
+    {
+      "slug": "stableenrich-hunter",
+      "serviceId": "ac79a281-1a50-4c66-85b7-fd763706f41f",
+      "ok": true,
+      "status": 200,
+      "serviceStatus": "published"
+    },
+    {
+      "slug": "stableenrich-influencer",
+      "serviceId": "a58ec3b9-aff0-458b-b389-73628f3175cf",
+      "ok": true,
+      "status": 200,
+      "serviceStatus": "published"
+    }
+  ]
+}

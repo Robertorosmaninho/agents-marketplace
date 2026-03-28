@@ -573,13 +573,13 @@ describe("shared marketplace helpers", () => {
       webBaseUrl: "https://marketplace.example.com"
     });
 
-    expect(buildPriceRange(endpoints)).toBe("$0.05 testUSDC - $0.15 testUSDC");
+    expect(buildPriceRange(endpoints)).toBe("$0.0001 testUSDC");
     expect(detail.skillUrl).toBe("https://marketplace.example.com/skill.md");
     expect(detail.summary.endpointCount).toBe(2);
     expect(detail.summary.settlementToken).toBe("testUSDC");
     expect(detail.useThisServicePrompt).toContain('I want to use the "Mock Research Signals" service');
     expect(detail.useThisServicePrompt).toContain("https://api.marketplace.example.com/api/mock/quick-insight");
-    expect(detail.useThisServicePrompt).toContain("($0.05 testUSDC)");
+    expect(detail.useThisServicePrompt).toContain("($0.0001 testUSDC)");
   });
 
   it("derives explicit auth requirements for marketplace routes", () => {

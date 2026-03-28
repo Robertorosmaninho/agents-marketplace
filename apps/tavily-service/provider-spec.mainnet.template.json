@@ -33,7 +33,7 @@
       "title": "Search",
       "description": "Run a Tavily search request with the provider-side Tavily API key.",
       "billingType": "fixed_x402",
-      "price": "$0.05",
+      "price": "$0.0001",
       "method": "POST",
       "mode": "sync",
       "requestSchemaJson": {
@@ -78,7 +78,7 @@
       "title": "Extract",
       "description": "Extract content from one or more URLs through Tavily.",
       "billingType": "fixed_x402",
-      "price": "$0.08",
+      "price": "$0.0001",
       "method": "POST",
       "mode": "sync",
       "requestSchemaJson": {
@@ -125,7 +125,7 @@
       "title": "Crawl",
       "description": "Crawl a target website through Tavily.",
       "billingType": "fixed_x402",
-      "price": "$0.15",
+      "price": "$0.0001",
       "method": "POST",
       "mode": "sync",
       "requestSchemaJson": {
@@ -169,7 +169,7 @@
       "title": "Map",
       "description": "Discover URLs from a target website through Tavily.",
       "billingType": "fixed_x402",
-      "price": "$0.05",
+      "price": "$0.0001",
       "method": "POST",
       "mode": "sync",
       "requestSchemaJson": {

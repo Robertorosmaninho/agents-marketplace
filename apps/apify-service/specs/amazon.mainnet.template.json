@@ -33,7 +33,7 @@
       "title": "Scrape Products",
       "description": "Extract Amazon product, pricing, and review data from one or more product or category URLs.",
       "billingType": "fixed_x402",
-      "price": "$0.60",
+      "price": "$0.0001",
       "method": "POST",
       "mode": "async",
       "asyncStrategy": "poll",
@@ -100,7 +100,7 @@
           }
         ]
       },
-      "usageNotes": "Use this for Amazon-specific product and category scraping when you need ASIN-aware output and Amazon pricing data.",
+      "usageNotes": "Use this for Amazon-specific product and category scraping when you need ASIN-aware output and Amazon pricing data. ASIN-aware means the results include Amazon Standard Identification Numbers, the unique product IDs Amazon uses for listings.",
       "upstreamBaseUrl": "https://fastmainnetapifyamazon.8o.vc",
       "upstreamPath": "/scrape-products",
       "upstreamAuthMode": "none"

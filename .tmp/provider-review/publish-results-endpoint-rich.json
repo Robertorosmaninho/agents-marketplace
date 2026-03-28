@@ -1,0 +1,51 @@
+[
+  {
+    "slug": "stableemail",
+    "serviceId": "88aa0317-b2d4-4234-a504-eeed51108698",
+    "ok": true,
+    "status": 200,
+    "serviceStatus": "published"
+  },
+  {
+    "slug": "stableenrich",
+    "serviceId": "1e82560d-082e-4d8b-a1b6-860aec5d3c2a",
+    "ok": true,
+    "status": 200,
+    "serviceStatus": "published"
+  },
+  {
+    "slug": "stablesocial",
+    "serviceId": "bdfb1796-63ec-4ef9-a15a-fca5fd1a197f",
+    "ok": true,
+    "status": 200,
+    "serviceStatus": "published"
+  },
+  {
+    "slug": "stablestudio",
+    "serviceId": "6723b605-659a-43d2-a314-b27bb781c765",
+    "ok": true,
+    "status": 200,
+    "serviceStatus": "published"
+  },
+  {
+    "slug": "stableupload",
+    "serviceId": "0694662a-cdec-4b54-93f2-3a645f778c7f",
+    "ok": true,
+    "status": 200,
+    "serviceStatus": "published"
+  },
+  {
+    "slug": "zapper-x402",
+    "serviceId": "c596a398-3301-4ef5-b957-8657ea2eb5c3",
+    "ok": true,
+    "status": 200,
+    "serviceStatus": "published"
+  },
+  {
+    "slug": "zerion-api",
+    "serviceId": "3b79b910-7887-4c94-a5a4-d7e00656374b",
+    "ok": true,
+    "status": 200,
+    "serviceStatus": "published"
+  }
+]

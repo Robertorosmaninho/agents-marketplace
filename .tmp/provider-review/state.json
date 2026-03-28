@@ -1,0 +1,409 @@
+{
+  "version": 1,
+  "updatedAt": "2026-03-28T04:42:29Z",
+  "providers": [
+    {
+      "providerKey": "messari.io",
+      "providerName": "Messari",
+      "slug": "messari-x402",
+      "serviceId": "c95d8b4a-9602-4b41-be08-3fc3e67da75a",
+      "status": "submitted",
+      "sourceUrls": [
+        "https://messari.io/x402",
+        "https://docs.messari.io"
+      ],
+      "websiteUrl": "https://messari.io/x402",
+      "docsUrl": "https://docs.messari.io",
+      "notes": "Submitted successfully after API reachability was restored.",
+      "specPath": ".tmp/provider-seeds/specs/messari-x402.json",
+      "lastSubmittedAt": "2026-03-28T00:16:47Z",
+      "reviewDecision": "publish",
+      "reviewNotes": "Strong branded provider, clear docs, and canonical x402 entrypoint.",
+      "duplicateOf": [],
+      "firstReviewedAt": "2026-03-28T02:08:05Z",
+      "lastReviewedAt": "2026-03-28T02:08:05Z"
+    },
+    {
+      "providerKey": "agents.nansen.ai",
+      "providerName": "Nansen for Agents",
+      "slug": "nansen-agents",
+      "serviceId": "2ce84b69-ff21-44bf-944a-5a148a89175d",
+      "status": "submitted",
+      "sourceUrls": [
+        "https://agents.nansen.ai/"
+      ],
+      "websiteUrl": "https://agents.nansen.ai/",
+      "docsUrl": "https://agents.nansen.ai/",
+      "notes": "Curated x402 discovery listing for Nansen agent access.",
+      "specPath": ".tmp/provider-seeds/specs/nansen-agents.json",
+      "lastSubmittedAt": "2026-03-28T00:17:07Z",
+      "reviewDecision": "publish",
+      "reviewNotes": "Strong branded provider with clear agent-facing docs and canonical domain.",
+      "duplicateOf": [],
+      "firstReviewedAt": "2026-03-28T02:08:05Z",
+      "lastReviewedAt": "2026-03-28T02:08:05Z"
+    },
+    {
+      "providerKey": "developers.zerion.io",
+      "providerName": "Zerion API",
+      "slug": "zerion-api",
+      "serviceId": "3b79b910-7887-4c94-a5a4-d7e00656374b",
+      "status": "submitted",
+      "sourceUrls": [
+        "https://developers.zerion.io/"
+      ],
+      "websiteUrl": "https://developers.zerion.io/",
+      "docsUrl": "https://developers.zerion.io/",
+      "notes": "Curated x402 discovery listing for Zerion developer APIs.",
+      "specPath": ".tmp/provider-seeds/specs/zerion-api.json",
+      "lastSubmittedAt": "2026-03-28T00:17:19Z",
+      "reviewDecision": "publish",
+      "reviewNotes": "Published after endpoint-level rebuild.",
+      "duplicateOf": [],
+      "firstReviewedAt": "2026-03-28T02:08:05Z",
+      "lastReviewedAt": "2026-03-28T04:42:29Z"
+    },
+    {
+      "providerKey": "build.zapper.xyz",
+      "providerName": "Zapper x402 API",
+      "slug": "zapper-x402",
+      "serviceId": "c596a398-3301-4ef5-b957-8657ea2eb5c3",
+      "status": "submitted",
+      "sourceUrls": [
+        "https://build.zapper.xyz/x402"
+      ],
+      "websiteUrl": "https://build.zapper.xyz/x402",
+      "docsUrl": "https://build.zapper.xyz/x402",
+      "notes": "Curated x402 discovery listing for Zapper APIs.",
+      "specPath": ".tmp/provider-seeds/specs/zapper-x402.json",
+      "lastSubmittedAt": "2026-03-28T00:17:34Z",
+      "reviewDecision": "publish",
+      "reviewNotes": "Published after endpoint-level rebuild.",
+      "duplicateOf": [],
+      "firstReviewedAt": "2026-03-28T02:08:05Z",
+      "lastReviewedAt": "2026-03-28T04:42:29Z"
+    },
+    {
+      "providerKey": "heurist.ai",
+      "providerName": "Heurist Mesh",
+      "slug": "heurist-mesh",
+      "serviceId": "31f44283-fae4-438a-9a46-dfc6f8bdd2c6",
+      "status": "submitted",
+      "sourceUrls": [
+        "https://mesh.heurist.ai/",
+        "https://docs.heurist.ai/heurist-mesh/api"
+      ],
+      "websiteUrl": "https://heurist.ai/",
+      "docsUrl": "https://docs.heurist.ai/heurist-mesh/api",
+      "notes": "Curated x402 discovery listing for Heurist Mesh.",
+      "specPath": ".tmp/provider-seeds/specs/heurist-mesh.json",
+      "lastSubmittedAt": "2026-03-28T00:17:53Z",
+      "reviewDecision": "edit",
+      "reviewNotes": "Useful listing, but the marketplace-versus-underlying-agent positioning should be tightened before publish.",
+      "duplicateOf": [],
+      "firstReviewedAt": "2026-03-28T02:08:06Z",
+      "lastReviewedAt": "2026-03-28T02:08:06Z"
+    },
+    {
+      "providerKey": "aura.adex.network",
+      "providerName": "AdEx AURA API",
+      "slug": "adex-aura",
+      "serviceId": "ab0cb84b-c6d1-4500-8e1e-25793472572b",
+      "status": "submitted",
+      "sourceUrls": [
+        "https://aura.adex.network/"
+      ],
+      "websiteUrl": "https://aura.adex.network/",
+      "docsUrl": "https://aura.adex.network/",
+      "notes": "Curated x402 discovery listing for AdEx AURA.",
+      "specPath": ".tmp/provider-seeds/specs/adex-aura.json",
+      "lastSubmittedAt": "2026-03-28T00:18:12Z",
+      "reviewDecision": "edit",
+      "reviewNotes": "Worth keeping, but the docs and positioning should be tightened before first-wave publish.",
+      "duplicateOf": [],
+      "firstReviewedAt": "2026-03-28T02:08:06Z",
+      "lastReviewedAt": "2026-03-28T02:08:06Z"
+    },
+    {
+      "providerKey": "t54.ai",
+      "providerName": "x402-secure / Trustline",
+      "slug": "t54-x402-secure",
+      "serviceId": "188d03f3-e037-4a28-b155-6b09d68ed26c",
+      "status": "submitted",
+      "sourceUrls": [
+        "https://docs.t54.ai/docs/risk-fraud/x402-secure",
+        "https://x402-secure-api.t54.ai/"
+      ],
+      "websiteUrl": "https://t54.ai/",
+      "docsUrl": "https://docs.t54.ai/docs/risk-fraud/x402-secure",
+      "notes": "Curated x402 discovery listing for Trustline security and fraud tooling.",
+      "specPath": ".tmp/provider-seeds/specs/t54-x402-secure.json",
+      "lastSubmittedAt": "2026-03-28T00:18:40Z",
+      "reviewDecision": "publish",
+      "reviewNotes": "Distinct security category with strong docs and clear operator identity.",
+      "duplicateOf": [],
+      "firstReviewedAt": "2026-03-28T02:08:05Z",
+      "lastReviewedAt": "2026-03-28T02:08:05Z"
+    },
+    {
+      "providerKey": "aeon.xyz",
+      "providerName": "AEON AI Payment",
+      "slug": "aeon-ai-payment",
+      "serviceId": "9f1a7b9d-f561-4736-a233-07ede19065db",
+      "status": "submitted",
+      "sourceUrls": [
+        "https://aeon.xyz/AIPayment"
+      ],
+      "websiteUrl": "https://aeon.xyz/AIPayment",
+      "docsUrl": "https://aeon.xyz/AIPayment",
+      "notes": "Curated x402 discovery listing for AEON AI Payment.",
+      "specPath": ".tmp/provider-seeds/specs/aeon-ai-payment.json",
+      "lastSubmittedAt": "2026-03-28T00:18:54Z",
+      "reviewDecision": "hold",
+      "reviewNotes": "Real product, but more merchant-workflow shaped than API-discovery shaped for the first wave.",
+      "duplicateOf": [],
+      "firstReviewedAt": "2026-03-28T02:08:06Z",
+      "lastReviewedAt": "2026-03-28T02:08:06Z"
+    },
+    {
+      "providerKey": "questflow.ai",
+      "providerName": "Questflow / Tars API",
+      "slug": "questflow-api",
+      "serviceId": "78a1e9c0-8844-4fcc-b914-b85c1ff2ae84",
+      "status": "submitted",
+      "sourceUrls": [
+        "https://api.questflow.ai/",
+        "https://facilitator.questflow.ai/"
+      ],
+      "websiteUrl": "https://questflow.ai/",
+      "docsUrl": "https://facilitator.questflow.ai/",
+      "notes": "Curated x402 discovery listing for Questflow APIs and facilitator-backed tools.",
+      "specPath": ".tmp/provider-seeds/specs/questflow-api.json",
+      "lastSubmittedAt": "2026-03-28T00:19:06Z",
+      "reviewDecision": "hold",
+      "reviewNotes": "Facilitator-backed and broader than a clean first-wave provider listing.",
+      "duplicateOf": [],
+      "firstReviewedAt": "2026-03-28T02:08:06Z",
+      "lastReviewedAt": "2026-03-28T02:08:06Z"
+    },
+    {
+      "providerKey": "alchemy.com",
+      "providerName": "Alchemy Agents",
+      "slug": "alchemy-agents",
+      "serviceId": "c613da2b-f200-4116-9762-b6af5ee90af6",
+      "status": "submitted",
+      "sourceUrls": [
+        "https://agents.alchemy.com/"
+      ],
+      "websiteUrl": "https://alchemy.com/",
+      "docsUrl": "https://agents.alchemy.com/",
+      "notes": "Curated x402 discovery listing for Alchemy Agents.",
+      "specPath": ".tmp/provider-seeds/specs/alchemy-agents.json",
+      "lastSubmittedAt": "2026-03-28T00:19:24Z",
+      "reviewDecision": "hold",
+      "reviewNotes": "Strong brand but credits/top-up shape is less clean than direct per-route providers.",
+      "duplicateOf": [],
+      "firstReviewedAt": "2026-03-28T02:08:06Z",
+      "lastReviewedAt": "2026-03-28T02:08:06Z"
+    },
+    {
+      "providerKey": "lucyos.ai",
+      "providerName": "Lucyos x402",
+      "slug": "lucyos-x402",
+      "serviceId": "56e50223-50d0-43b2-bdf7-2f7eb9226a30",
+      "status": "submitted",
+      "sourceUrls": [
+        "https://x402.lucyos.ai/x402/tools/analyze_token"
+      ],
+      "websiteUrl": "https://lucyos.ai/",
+      "docsUrl": "https://x402.lucyos.ai/x402/tools/analyze_token",
+      "notes": "Metric-led watchlist import candidate with limited public docs.",
+      "specPath": ".tmp/provider-seeds/specs/lucyos-x402.json",
+      "lastSubmittedAt": "2026-03-28T00:19:36Z",
+      "reviewDecision": "hold",
+      "reviewNotes": "High-volume watchlist candidate but weaker public provenance than the first wave.",
+      "duplicateOf": [],
+      "firstReviewedAt": "2026-03-28T02:08:06Z",
+      "lastReviewedAt": "2026-03-28T02:08:06Z"
+    },
+    {
+      "providerKey": "ainalyst-api.xyz",
+      "providerName": "Ainalyst API",
+      "slug": "ainalyst-api",
+      "serviceId": "1bc2c387-26d2-400d-8e1e-fd56bb4e6e3a",
+      "status": "submitted",
+      "sourceUrls": [
+        "http://ainalyst-api.xyz/touch"
+      ],
+      "websiteUrl": "http://ainalyst-api.xyz/touch",
+      "docsUrl": "http://ainalyst-api.xyz/touch",
+      "notes": "Metric-led watchlist import candidate with thin public docs.",
+      "specPath": ".tmp/provider-seeds/specs/ainalyst-api.json",
+      "lastSubmittedAt": "2026-03-28T00:19:58Z",
+      "reviewDecision": "hold",
+      "reviewNotes": "Thin public docs and weak provenance despite volume signals.",
+      "duplicateOf": [],
+      "firstReviewedAt": "2026-03-28T02:08:06Z",
+      "lastReviewedAt": "2026-03-28T02:08:06Z"
+    },
+    {
+      "providerKey": "lnpay.ai",
+      "providerName": "AISA / LNPay",
+      "slug": "aisa-lnpay",
+      "serviceId": "ebc91dc9-3e93-4f0f-b4f3-01cdd2e6d33c",
+      "status": "submitted",
+      "sourceUrls": [
+        "https://market.lnpay.ai/",
+        "https://pay.lnpay.ai/",
+        "https://openapi.aisa.one/"
+      ],
+      "websiteUrl": "https://lnpay.ai/",
+      "docsUrl": "https://market.lnpay.ai/",
+      "notes": "Watchlist import candidate for fragmented x402 commerce and marketplace surfaces.",
+      "specPath": ".tmp/provider-seeds/specs/aisa-lnpay.json",
+      "lastSubmittedAt": "2026-03-28T00:20:11Z",
+      "reviewDecision": "hold",
+      "reviewNotes": "Fragmented product surface; useful later but not a clean first-wave publish.",
+      "duplicateOf": [],
+      "firstReviewedAt": "2026-03-28T02:08:06Z",
+      "lastReviewedAt": "2026-03-28T02:08:06Z"
+    },
+    {
+      "providerKey": "agentcash.dev",
+      "providerName": "AgentCash",
+      "slug": "agentcash-dev",
+      "serviceId": "79651a6b-53a3-4751-9ff3-831455cb0d60",
+      "status": "submitted",
+      "sourceUrls": [
+        "https://agentcash.dev/",
+        "https://agentcash.dev/docs/introduction"
+      ],
+      "websiteUrl": "https://agentcash.dev/",
+      "docsUrl": "https://agentcash.dev/docs/introduction",
+      "notes": "Marketplace shell listing for AgentCash; sourced from AgentCash docs and MPP feed context.",
+      "specPath": ".tmp/provider-seeds/specs/agentcash-dev.json",
+      "lastSubmittedAt": "2026-03-28T00:41:54Z",
+      "reviewDecision": "hold",
+      "reviewNotes": "Hold marketplace shell until the linked Stable* child listings are live and deduplicated.",
+      "duplicateOf": [
+        "stableemail",
+        "stableenrich",
+        "stablesocial",
+        "stablestudio",
+        "stableupload"
+      ],
+      "firstReviewedAt": "2026-03-28T02:08:06Z",
+      "lastReviewedAt": "2026-03-28T02:08:06Z"
+    },
+    {
+      "providerKey": "stableemail.dev",
+      "providerName": "StableEmail",
+      "slug": "stableemail",
+      "serviceId": "88aa0317-b2d4-4234-a504-eeed51108698",
+      "status": "submitted",
+      "sourceUrls": [
+        "https://stableemail.dev",
+        "https://stableemail.dev/llms.txt",
+        "https://agentcash.dev/docs/introduction"
+      ],
+      "websiteUrl": "https://stableemail.dev",
+      "docsUrl": "https://stableemail.dev",
+      "notes": "AgentCash-linked provider domain confirmed in AgentCash docs and MPP feed.",
+      "specPath": ".tmp/provider-seeds/specs/stableemail.json",
+      "lastSubmittedAt": "2026-03-28T00:42:07Z",
+      "reviewDecision": "publish",
+      "reviewNotes": "Published after endpoint-level rebuild.",
+      "duplicateOf": [],
+      "firstReviewedAt": "2026-03-28T02:08:05Z",
+      "lastReviewedAt": "2026-03-28T04:42:29Z"
+    },
+    {
+      "providerKey": "stableenrich.dev",
+      "providerName": "StableEnrich",
+      "slug": "stableenrich",
+      "serviceId": "1e82560d-082e-4d8b-a1b6-860aec5d3c2a",
+      "status": "submitted",
+      "sourceUrls": [
+        "https://stableenrich.dev",
+        "https://stableenrich.dev/llms.txt",
+        "https://agentcash.dev/docs/introduction"
+      ],
+      "websiteUrl": "https://stableenrich.dev",
+      "docsUrl": "https://stableenrich.dev",
+      "notes": "AgentCash-linked provider domain confirmed in AgentCash docs and MPP feed.",
+      "specPath": ".tmp/provider-seeds/specs/stableenrich.json",
+      "lastSubmittedAt": "2026-03-28T00:43:22Z",
+      "reviewDecision": "publish",
+      "reviewNotes": "Published after endpoint-level rebuild.",
+      "duplicateOf": [],
+      "firstReviewedAt": "2026-03-28T02:08:05Z",
+      "lastReviewedAt": "2026-03-28T04:42:29Z"
+    },
+    {
+      "providerKey": "stablesocial.dev",
+      "providerName": "StableSocial",
+      "slug": "stablesocial",
+      "serviceId": "bdfb1796-63ec-4ef9-a15a-fca5fd1a197f",
+      "status": "submitted",
+      "sourceUrls": [
+        "https://stablesocial.dev",
+        "https://stablesocial.dev/llms.txt",
+        "https://agentcash.dev/docs/introduction"
+      ],
+      "websiteUrl": "https://stablesocial.dev",
+      "docsUrl": "https://stablesocial.dev",
+      "notes": "AgentCash-linked provider domain confirmed in AgentCash docs and MPP feed.",
+      "specPath": ".tmp/provider-seeds/specs/stablesocial.json",
+      "lastSubmittedAt": "2026-03-28T00:43:35Z",
+      "reviewDecision": "publish",
+      "reviewNotes": "Published after endpoint-level rebuild.",
+      "duplicateOf": [],
+      "firstReviewedAt": "2026-03-28T02:08:05Z",
+      "lastReviewedAt": "2026-03-28T04:42:29Z"
+    },
+    {
+      "providerKey": "stablestudio.dev",
+      "providerName": "StableStudio",
+      "slug": "stablestudio",
+      "serviceId": "6723b605-659a-43d2-a314-b27bb781c765",
+      "status": "submitted",
+      "sourceUrls": [
+        "https://stablestudio.dev",
+        "https://stablestudio.dev/llms.txt",
+        "https://agentcash.dev/docs/introduction"
+      ],
+      "websiteUrl": "https://stablestudio.dev",
+      "docsUrl": "https://stablestudio.dev",
+      "notes": "AgentCash-linked provider domain confirmed in AgentCash docs and MPP feed.",
+      "specPath": ".tmp/provider-seeds/specs/stablestudio.json",
+      "lastSubmittedAt": "2026-03-28T00:43:47Z",
+      "reviewDecision": "publish",
+      "reviewNotes": "Published after endpoint-level rebuild.",
+      "duplicateOf": [],
+      "firstReviewedAt": "2026-03-28T02:08:05Z",
+      "lastReviewedAt": "2026-03-28T04:42:29Z"
+    },
+    {
+      "providerKey": "stableupload.dev",
+      "providerName": "StableUpload",
+      "slug": "stableupload",
+      "serviceId": "0694662a-cdec-4b54-93f2-3a645f778c7f",
+      "status": "submitted",
+      "sourceUrls": [
+        "https://stableupload.dev",
+        "https://stableupload.dev/llms.txt",
+        "https://agentcash.dev/docs/introduction"
+      ],
+      "websiteUrl": "https://stableupload.dev",
+      "docsUrl": "https://stableupload.dev",
+      "notes": "AgentCash-linked provider domain confirmed in AgentCash docs and MPP feed.",
+      "specPath": ".tmp/provider-seeds/specs/stableupload.json",
+      "lastSubmittedAt": "2026-03-28T00:43:59Z",
+      "reviewDecision": "publish",
+      "reviewNotes": "Published after endpoint-level rebuild.",
+      "duplicateOf": [],
+      "firstReviewedAt": "2026-03-28T02:08:06Z",
+      "lastReviewedAt": "2026-03-28T04:42:29Z"
+    }
+  ]
+}

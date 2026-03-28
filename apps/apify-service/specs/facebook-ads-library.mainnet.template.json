@@ -33,7 +33,7 @@
       "title": "Search Ads",
       "description": "Extract ads from a Facebook Ad Library search result URL or from a list of Facebook pages.",
       "billingType": "fixed_x402",
-      "price": "$0.35",
+      "price": "$0.0001",
       "method": "POST",
       "mode": "async",
       "asyncStrategy": "poll",

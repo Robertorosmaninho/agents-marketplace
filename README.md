@@ -246,7 +246,7 @@ npm run cli -- provider verify --service <slug-or-id>
 
 `provider verify` always creates a fresh verification challenge and prompts before the marketplace attempts verification. For arbitrary external sites, host the token outside this repo first; the CLI will not mutate deploy, DNS, or cloud env settings on its own. Discovery-only `external_registry` services can submit without verification and still wait in `pending_review` until an admin publishes them.
 
-For curated x402 imports, keep local `ProviderSyncSpec` seed files under a gitignored path such as `.tmp/provider-seeds/` and use the normal `provider sync` plus `provider submit` flow with a Fast-operated provider account.
+For curated x402 imports, keep local `ProviderSyncSpec` seed files under a gitignored path and use the normal `provider sync` plus `provider submit` flow with a Fast-operated provider account.
 
 9. Build runtime artifacts:
 

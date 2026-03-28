@@ -33,7 +33,7 @@
       "title": "Profile Enrichment",
       "description": "Extract LinkedIn profile details, work history, education, and discovered contact info from profile URLs.",
       "billingType": "fixed_x402",
-      "price": "$0.75",
+      "price": "$0.0001",
       "method": "POST",
       "mode": "async",
       "asyncStrategy": "poll",

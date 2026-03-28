@@ -425,7 +425,7 @@ describe("marketplace api", () => {
     expect(response.body.operation).toBe("quick-insight");
 
     const record = await store.getIdempotencyByPaymentId("payment_sync_1");
-    expect(record?.payoutSplit.marketplaceAmount).toBe("50000");
+    expect(record?.payoutSplit.marketplaceAmount).toBe("100");
     expect(record?.payoutSplit.providerAmount).toBe("0");
     expect(record?.payoutSplit.providerAccountId).toBe("provider_marketplace");
   });
@@ -625,7 +625,7 @@ describe("marketplace api", () => {
     expect(polled.body.status).toBe("pending");
 
     const job = await store.getJob(jobToken);
-    expect(job?.payoutSplit.marketplaceAmount).toBe("150000");
+    expect(job?.payoutSplit.marketplaceAmount).toBe("100");
     expect(job?.payoutSplit.providerAmount).toBe("0");
     expect(job?.payoutSplit.providerAccountId).toBe("provider_marketplace");
   });
@@ -826,9 +826,9 @@ describe("marketplace api", () => {
     expect(response.status).toBe(200);
     expect(response.body.wallet).toBe(buyer.address);
     expect(response.body.summary).toMatchObject({
-      totalSpend: "0.20",
+      totalSpend: "0.00",
       totalRefunded: "0.05",
-      netSpend: "0.15",
+      netSpend: "-0.05",
       paidCallCount: 2,
       serviceCount: 1
     });

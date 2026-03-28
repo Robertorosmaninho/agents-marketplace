@@ -33,7 +33,7 @@
       "title": "Crawl Pages",
       "description": "Crawl websites in a browser, follow links, and extract structured data with a JavaScript page function.",
       "billingType": "fixed_x402",
-      "price": "$0.40",
+      "price": "$0.0001",
       "method": "POST",
       "mode": "async",
       "asyncStrategy": "poll",

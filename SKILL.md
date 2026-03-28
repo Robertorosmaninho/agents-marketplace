@@ -416,7 +416,7 @@ Important constraints:
 12. Run `npm run cli -- provider submit --service <slug-or-id>` when the draft is ready. `marketplace_proxy` requires verification first; `external_registry` can submit without verification and then wait in `pending_review` for admin publish.
 13. If building from marketplace demand, review provider-visible request intake and claim the request you want to build before syncing the draft.
 14. After admin publish, use the public service page and paid proxy routes as the canonical execution surface.
-15. For curated external imports, keep local `ProviderSyncSpec` seed files under a gitignored path such as `.tmp/provider-seeds/` and use the normal sync plus submit flow with a Fast-operated provider account.
+15. For curated external imports, keep local `ProviderSyncSpec` seed files under a gitignored path and use the normal provider sync plus submit flow with a Fast-operated provider account.
 
 ### Provider spec shape
 

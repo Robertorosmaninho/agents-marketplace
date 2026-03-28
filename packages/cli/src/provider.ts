@@ -368,7 +368,6 @@ export async function submitProviderService(input: {
     throw error;
   }
 }
-
 async function readProviderSpec(specPath: string): Promise<ProviderSyncSpec> {
   const resolved = expandHome(specPath);
   const raw = await readFile(resolved, "utf8");
@@ -382,7 +381,6 @@ async function readProviderSpec(specPath: string): Promise<ProviderSyncSpec> {
 
   return providerSyncSpecSchema.parse(parsed);
 }
-
 async function loadProviderWallet(input: {
   keyfilePath?: string;
   configPath?: string;

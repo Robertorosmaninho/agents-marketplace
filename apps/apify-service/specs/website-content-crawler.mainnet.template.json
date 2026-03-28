@@ -33,7 +33,7 @@
       "title": "Crawl Content",
       "description": "Deep crawl one or more websites and return cleaned text, Markdown, or HTML for downstream indexing.",
       "billingType": "fixed_x402",
-      "price": "$0.35",
+      "price": "$0.0001",
       "method": "POST",
       "mode": "async",
       "asyncStrategy": "poll",

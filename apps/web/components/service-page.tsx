@@ -87,17 +87,11 @@ export function ServicePage({
                     icon={<Command className="h-4 w-4" />}
                   />
                 </div>
-              ) : (
-                <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-                  <StatCard label="Endpoints" value={String(service.summary.endpointCount)} icon={<ArrowLeftRight className="h-4 w-4" />} />
-                  <StatCard label="Access" value="Direct API" icon={<ArrowUpRight className="h-4 w-4" />} />
-                  <StatCard label="Marketplace role" value="Discovery" icon={<Command className="h-4 w-4" />} />
-                </div>
-              )}
+              ) : null}
             </div>
 
             {isMarketplaceService ? (
-              <Card variant="frosted">
+              <Card>
                 <CardHeader>
                   <Badge variant="eyebrow">Transaction volume</Badge>
                   <CardTitle className="text-3xl">Marketplace call flow over time</CardTitle>
@@ -108,7 +102,7 @@ export function ServicePage({
                 </CardContent>
               </Card>
             ) : (
-              <Card variant="frosted">
+              <Card>
                 <CardHeader>
                   <Badge variant="eyebrow">Direct Access</Badge>
                   <CardTitle className="text-3xl">Provider-owned integration</CardTitle>
@@ -180,7 +174,7 @@ export function ServicePage({
 
       <section className="section-sep">
         <div className="section-container section-stack">
-          <Card variant="frosted">
+          <Card>
             <CardHeader>
               <Badge variant="eyebrow">Available endpoints ({service.endpoints.length})</Badge>
               <CardTitle className="text-3xl">
@@ -290,7 +284,7 @@ function StatCard({
   icon: ReactNode;
 }) {
   return (
-    <Card variant="frosted">
+    <Card>
       <CardContent className="p-6">
         <div className="flex items-center justify-between gap-3 text-muted-foreground">
           <div className="metric-label">{label}</div>
