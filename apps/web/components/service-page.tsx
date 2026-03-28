@@ -2,14 +2,12 @@
 
 import React from "react";
 import Link from "next/link";
-import type { ReactNode } from "react";
-import { ArrowLeftRight, ArrowUpRight, Command, DatabaseZap, Sparkle } from "lucide-react";
+import { ArrowUpRight } from "lucide-react";
 import type { MarketplaceServiceCatalogEndpoint, ServiceDetail } from "@marketplace/shared";
 import type { WebDeploymentNetwork } from "@/lib/network";
 
 import { CopyButton } from "@/components/copy-button";
 import { EndpointBrowserRunner } from "@/components/endpoint-browser-runner";
-import { VolumeChart } from "@/components/volume-chart";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -36,7 +34,7 @@ export function ServicePage({
     <main className="page-shell">
       <section className="section-sep">
         <div className="section-container section-stack">
-          <div className={`grid gap-10 ${isMarketplaceService ? "lg:grid-cols-[1.12fr_0.88fr]" : "lg:grid-cols-[1fr_0.9fr]"}`}>
+          <div className={isMarketplaceService ? "section-stack" : "grid gap-10 lg:grid-cols-[1fr_0.9fr]"}>
             <div className="space-y-8">
               <div className="flex flex-wrap items-center gap-3 text-sm text-muted-foreground">
                 <Link href="/" className="fast-link">
@@ -75,33 +73,9 @@ export function ServicePage({
                   </p>
                 </div>
               </div>
-
-              {isMarketplaceService ? (
-                <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-                  <StatCard label="Total Calls" value={String(service.summary.totalCalls)} icon={<Sparkle className="h-4 w-4" />} />
-                  <StatCard label="Revenue" value={`$${service.summary.revenue}`} icon={<DatabaseZap className="h-4 w-4" />} />
-                  <StatCard label="Endpoints" value={String(service.summary.endpointCount)} icon={<ArrowLeftRight className="h-4 w-4" />} />
-                  <StatCard
-                    label="Success Rate (30d)"
-                    value={`${service.summary.successRate30d.toFixed(1)}%`}
-                    icon={<Command className="h-4 w-4" />}
-                  />
-                </div>
-              ) : null}
             </div>
 
-            {isMarketplaceService ? (
-              <Card>
-                <CardHeader>
-                  <Badge variant="eyebrow">Transaction volume</Badge>
-                  <CardTitle className="text-3xl">Marketplace call flow over time</CardTitle>
-                  <CardDescription>Thirty-day volume across live marketplace traffic.</CardDescription>
-                </CardHeader>
-                <CardContent>
-                  <VolumeChart points={service.summary.volume30d} tokenSymbol={service.summary.settlementToken} />
-                </CardContent>
-              </Card>
-            ) : (
+            {isMarketplaceService ? null : (
               <Card>
                 <CardHeader>
                   <Badge variant="eyebrow">Direct Access</Badge>
@@ -271,28 +245,6 @@ export function ServicePage({
         </div>
       </section>
     </main>
-  );
-}
-
-function StatCard({
-  label,
-  value,
-  icon
-}: {
-  label: string;
-  value: string;
-  icon: ReactNode;
-}) {
-  return (
-    <Card>
-      <CardContent className="p-6">
-        <div className="flex items-center justify-between gap-3 text-muted-foreground">
-          <div className="metric-label">{label}</div>
-          {icon}
-        </div>
-        <div className="mt-4 text-3xl font-medium tracking-m">{value}</div>
-      </CardContent>
-    </Card>
   );
 }
 
