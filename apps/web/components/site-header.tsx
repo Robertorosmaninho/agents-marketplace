@@ -1,4 +1,3 @@
-/* eslint-disable @next/next/no-img-element */
 "use client";
 
 import React, { useState } from "react";
@@ -6,6 +5,7 @@ import Link from "next/link";
 import type { MarketplaceDeploymentNetwork } from "@marketplace/shared";
 import { Menu, X } from "lucide-react";
 
+import { FastLogo } from "@/components/fast-logo";
 import { ModeToggle } from "@/components/mode-toggle";
 import { WalletLoginButton } from "@/components/wallet-login-button";
 
@@ -22,9 +22,6 @@ export function SiteHeader({
 
   const navigationLinks = (
     <>
-      <Link href="/" className="fast-nav-link" onClick={() => setMobileMenuOpen(false)}>
-        Marketplace
-      </Link>
       <Link href="/stats" className="fast-nav-link" onClick={() => setMobileMenuOpen(false)}>
         Stats
       </Link>
@@ -45,59 +42,54 @@ export function SiteHeader({
 
   return (
     <header
-      className="sticky top-0 z-[100] border-b border-border bg-background/85"
-      style={{ backdropFilter: "blur(16px)" }}
+      className="border-b border-border/80 bg-background/85 text-foreground backdrop-blur-[16px]"
+      style={{
+        position: "sticky",
+        top: 0,
+        zIndex: 100,
+        backdropFilter: "blur(16px)",
+        WebkitBackdropFilter: "blur(16px)"
+      }}
     >
       <div className="nav-shell">
-        <Link href="/" aria-label="Fast Marketplace" className="flex shrink-0 items-center">
-          <img
-            src="/brand/fast-logo-dark.svg"
-            alt=""
-            aria-hidden="true"
-            width={146}
-            height={52}
-            className="block h-5 w-auto dark:hidden"
-          />
-          <img
-            src="/brand/fast-logo-light.svg"
-            alt=""
-            aria-hidden="true"
-            width={146}
-            height={52}
-            className="hidden h-5 w-auto dark:block"
-          />
-          <span className="sr-only">Fast Marketplace</span>
-        </Link>
+        <div className="flex min-h-16 items-center justify-between gap-6">
+          <Link href="/" aria-label="Fast Marketplace" className="inline-flex shrink-0 items-center gap-3 text-foreground">
+            <FastLogo height={16} />
+            <span
+              aria-hidden="true"
+              className="inline-block h-[14px] w-px bg-border"
+            />
+            <span className="text-[12px] font-medium uppercase tracking-[3px] text-muted-foreground">
+              Marketplace
+            </span>
+          </Link>
 
-        <nav className="hidden flex-1 items-center justify-center gap-6 lg:flex">{navigationLinks}</nav>
+          <nav className="hidden items-center gap-1 md:flex">{navigationLinks}</nav>
 
-        <div className="flex shrink-0 items-start justify-end gap-2">
-          <button
-            type="button"
-            aria-label={mobileMenuOpen ? "Close navigation menu" : "Open navigation menu"}
-            aria-expanded={mobileMenuOpen}
-            aria-controls="mobile-site-navigation"
-            className="inline-flex h-10 w-10 items-center justify-center rounded-full border border-border bg-background text-foreground transition hover:border-foreground/40 lg:hidden"
-            onClick={() => setMobileMenuOpen((open) => !open)}
-          >
-            {mobileMenuOpen ? <X className="h-4 w-4" /> : <Menu className="h-4 w-4" />}
-          </button>
-          <ModeToggle />
-          <WalletLoginButton
-            apiBaseUrl={apiBaseUrl}
-            deploymentNetwork={deploymentNetwork}
-            networkLabel={networkLabel}
-          />
+          <div className="flex items-center justify-end gap-2">
+            <button
+              type="button"
+              aria-label={mobileMenuOpen ? "Close navigation menu" : "Open navigation menu"}
+              aria-expanded={mobileMenuOpen}
+              aria-controls="mobile-site-navigation"
+              className="btn-fast btn-fast-secondary btn-fast-icon md:hidden"
+              onClick={() => setMobileMenuOpen((open) => !open)}
+            >
+              {mobileMenuOpen ? <X className="h-4 w-4" /> : <Menu className="h-4 w-4" />}
+            </button>
+            <ModeToggle />
+            <WalletLoginButton
+              apiBaseUrl={apiBaseUrl}
+              deploymentNetwork={deploymentNetwork}
+              networkLabel={networkLabel}
+            />
+          </div>
         </div>
       </div>
 
       {mobileMenuOpen ? (
-        <nav
-          id="mobile-site-navigation"
-          className="border-t border-border px-5 py-4 lg:hidden"
-          aria-label="Mobile"
-        >
-          <div className="mx-auto flex w-full max-w-6xl flex-col items-start gap-4">{navigationLinks}</div>
+        <nav id="mobile-site-navigation" className="nav-shell pb-4 md:hidden" aria-label="Mobile">
+          <div className="grid gap-2">{navigationLinks}</div>
         </nav>
       ) : null}
     </header>

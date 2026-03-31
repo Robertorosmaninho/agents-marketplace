@@ -26,7 +26,7 @@ describe("MarketplaceHome", () => {
           {
             serviceType: "marketplace_proxy",
             slug: "mock-research-signals",
-            name: "Mock Research Signals",
+            name: "Amazon Product Scraper",
             ownerName: "Fast Marketplace",
             tagline: "Synthetic paid research endpoints.",
             categories: ["Research", "Testing"],
@@ -39,43 +39,72 @@ describe("MarketplaceHome", () => {
             totalCalls: 12,
             revenue: "0.42",
             successRate30d: 66.7,
-            volume30d: []
+            volume30d: [],
+            websiteUrl: "https://www.amazon.com"
           },
           {
-            serviceType: "marketplace_proxy",
-            slug: "weather-wire",
-            name: "Weather Wire",
-            ownerName: "Sky Data",
-            tagline: "Forecast and alert APIs for agents.",
-            categories: ["Weather"],
-            settlementMode: "verified_escrow",
-            settlementLabel: "Verified",
-            settlementDescription: "Marketplace escrow, refunds, and payout reconciliation.",
-            priceRange: "$0.01 USDC",
-            settlementToken: "USDC",
+            serviceType: "external_registry",
+            slug: "instagram-scraper",
+            name: "Instagram Scraper",
+            ownerName: "Fast Marketplace",
+            tagline: "Scrape public Instagram data.",
+            categories: ["Social"],
+            settlementMode: null,
+            settlementLabel: "External API",
+            settlementDescription: "Calls go directly to the provider. The marketplace lists discovery metadata only.",
+            priceRange: "See provider docs",
+            settlementToken: null,
             endpointCount: 1,
-            totalCalls: 4,
-            revenue: "0.04",
-            successRate30d: 100,
-            volume30d: []
+            totalCalls: null,
+            revenue: null,
+            successRate30d: null,
+            volume30d: [],
+            accessModelLabel: "External API",
+            accessModelDescription: "Calls go directly to the provider. The marketplace only lists docs and direct endpoints.",
+            websiteUrl: "https://www.instagram.com"
+          },
+          {
+            serviceType: "external_registry",
+            slug: "stableenrich-apollo-api",
+            name: "StableEnrich Apollo API",
+            ownerName: "StableEnrich",
+            tagline: "Apollo enrichment proxy.",
+            categories: ["Sales"],
+            settlementMode: null,
+            settlementLabel: "External API",
+            settlementDescription: "Calls go directly to the provider. The marketplace lists discovery metadata only.",
+            priceRange: "See provider docs",
+            settlementToken: null,
+            endpointCount: 1,
+            totalCalls: null,
+            revenue: null,
+            successRate30d: null,
+            volume30d: [],
+            accessModelLabel: "External API",
+            accessModelDescription: "Calls go directly to the provider. The marketplace only lists docs and direct endpoints.",
+            websiteUrl: "https://www.apollo.io"
           }
         ]}
       />
     );
 
     expect(screen.getByRole("heading", { name: "APIs for agents" })).toBeTruthy();
-    expect(screen.queryByText("Explore marketplace")).toBeNull();
-    expect(screen.queryByText("Suggest supply")).toBeNull();
-    expect(screen.queryByText("FAST-native supply snapshot")).toBeNull();
-    expect(screen.getByText("Mock Research Signals")).toBeTruthy();
-    expect(screen.getByText("Weather Wire")).toBeTruthy();
+    expect(screen.getByRole("table")).toBeTruthy();
+    expect(screen.getByRole("columnheader", { name: /service/i })).toBeTruthy();
+    expect(screen.getByRole("columnheader", { name: /pricing/i })).toBeTruthy();
+    expect(screen.getByText("Amazon Product Scraper")).toBeTruthy();
+    expect(screen.getByText("Instagram Scraper")).toBeTruthy();
+    expect(screen.getByText("StableEnrich Apollo API")).toBeTruthy();
+    expect(screen.getByRole("img", { name: "Amazon Product Scraper favicon" }).getAttribute("src")).toBe("https://www.google.com/s2/favicons?domain=www.amazon.com&sz=64");
+    expect(screen.getByRole("img", { name: "Instagram Scraper favicon" }).getAttribute("src")).toBe("https://www.google.com/s2/favicons?domain=www.instagram.com&sz=64");
+    expect(screen.getByRole("img", { name: "StableEnrich Apollo API favicon" }).getAttribute("src")).toBe("https://www.google.com/s2/favicons?domain=www.apollo.io&sz=64");
 
-    await user.type(screen.getByPlaceholderText("Search services, owners, or categories"), "weather");
+    await user.type(screen.getByPlaceholderText("Search services, owners, or categories"), "instagram");
 
     await waitFor(() => {
-      expect(screen.queryByText("Mock Research Signals")).toBeNull();
+      expect(screen.queryByText("Amazon Product Scraper")).toBeNull();
     });
 
-    expect(screen.getByText("Weather Wire")).toBeTruthy();
+    expect(screen.getByText("Instagram Scraper")).toBeTruthy();
   });
 });

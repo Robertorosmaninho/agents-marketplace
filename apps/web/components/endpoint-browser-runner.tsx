@@ -310,7 +310,7 @@ export function EndpointBrowserRunner({
       </div>
 
       <div className="terminal-body space-y-5">
-        <p className="max-w-3xl text-sm leading-7 text-white/70">{runnerDescription}</p>
+        <p className="max-w-3xl text-sm leading-7 text-background/70">{runnerDescription}</p>
 
         <div className="space-y-3">
           <div className="flex items-center justify-between gap-3">
@@ -345,13 +345,13 @@ export function EndpointBrowserRunner({
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
                 <div className="terminal-kicker">Latest response</div>
-                <div className="mt-1 text-sm font-medium text-white">HTTP {result.statusCode}</div>
+                <div className="mt-1 text-sm font-medium text-background">HTTP {result.statusCode}</div>
               </div>
               <CopyButton value={formatResponseBody(result.body)} className="terminal-copy" />
             </div>
 
             {result.payment ? (
-              <div className="grid gap-3 rounded-card border border-white/10 bg-white/5 p-4 sm:grid-cols-3">
+              <div className="grid gap-3 rounded-card border border-background/10 bg-background/5 p-4 sm:grid-cols-3">
                 <Detail label="Amount" value={`${formatRawAmount(result.payment.amountRaw)} ${endpoint.tokenSymbol}`} />
                 <Detail label="Recipient" value={shorten(result.payment.recipient)} />
                 <Detail label="Transaction" value={result.payment.txHash} />
@@ -380,13 +380,13 @@ export function EndpointBrowserRunner({
             <div className="flex items-center justify-between gap-3">
               <div>
                 <div className="terminal-kicker">Async job</div>
-                <div className="mt-1 text-sm font-medium text-white">{job.jobToken}</div>
+                <div className="mt-1 text-sm font-medium text-background">{job.jobToken}</div>
               </div>
-              <div className="rounded-pill border border-white/10 px-3 py-1 text-xs font-medium uppercase tracking-eyebrow text-silicon">
+              <div className="rounded-pill border border-background/10 px-3 py-1 text-xs font-medium uppercase tracking-eyebrow text-silicon">
                 {job.status}
               </div>
             </div>
-            <p className="text-sm text-white/70">
+            <p className="text-sm text-background/70">
               Async retrieval uses the same paying wallet to sign a job-specific challenge before polling the result.
             </p>
             {job.updatedAt ? <div className="terminal-kicker">Updated: {job.updatedAt}</div> : null}
@@ -426,7 +426,7 @@ function Detail({ label, value }: { label: string; value: string }) {
   return (
     <div>
       <div className="terminal-kicker">{label}</div>
-      <div className="mt-2 break-all text-sm font-medium text-white">{value}</div>
+      <div className="mt-2 break-all text-sm font-medium text-background">{value}</div>
     </div>
   );
 }
