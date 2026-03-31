@@ -212,10 +212,10 @@ function PromptBlock({
       </div>
       <div className="terminal-body">
         <div className="terminal-label">Setup and exact call parameters</div>
-        <p className="max-w-3xl text-sm leading-7 text-white/70">{description}</p>
+        <p className="max-w-3xl text-sm leading-7 text-background/70">{description}</p>
         <pre className="terminal-code overflow-x-auto whitespace-pre-wrap">{prompt}</pre>
         {skillUrl ? (
-          <Link href={skillUrl} className="inline-flex items-center gap-2 text-sm text-white/72 transition-opacity hover:opacity-100">
+          <Link href={skillUrl} className="inline-flex items-center gap-2 text-sm text-background/72 transition-opacity hover:opacity-100">
             Open canonical SKILL.md
             <ArrowUpRight className="size-4" />
           </Link>

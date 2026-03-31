@@ -2,7 +2,7 @@ import React from "react";
 
 export function FastLogo({
   height = 16,
-  fill = "#2B2C2F",
+  fill = "currentColor",
   className = ""
 }: {
   height?: number;

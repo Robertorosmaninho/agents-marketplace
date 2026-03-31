@@ -10,10 +10,12 @@ const socialLinks = [
 
 export function SiteFooter() {
   return (
-    <footer style={{ borderTop: "1px solid rgba(0,0,0,0.05)" }}>
+    <footer className="border-t border-border/80 text-foreground">
       <div className="footer-shell py-6">
         <div className="flex flex-col items-center justify-between gap-4 sm:flex-row">
-          <FastLogo height={16} fill="#2B2C2F" />
+          <div className="text-foreground">
+            <FastLogo height={16} />
+          </div>
           <div className="flex items-center gap-5">
             <span className="footer-label">Socials</span>
             {socialLinks.map((link) => (

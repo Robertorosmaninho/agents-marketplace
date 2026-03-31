@@ -32,7 +32,7 @@ export function MarketplaceHome({ services }: { services: ServiceSummary[] }) {
         <div className="page-main page-stack">
           <div className="page-header">
             <h1 className="section-title">APIs for agents</h1>
-            <p className="page-copy">Search and sort every public service through the AllSet-inspired marketplace shell.</p>
+            <p className="page-copy">Browse live web services, compare pricing and performance, and pay with USDC on Fast.xyz</p>
           </div>
 
           <div className="glass-card-elevated p-6">

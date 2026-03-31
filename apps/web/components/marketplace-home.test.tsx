@@ -26,7 +26,7 @@ describe("MarketplaceHome", () => {
           {
             serviceType: "marketplace_proxy",
             slug: "mock-research-signals",
-            name: "Mock Research Signals",
+            name: "Amazon Product Scraper",
             ownerName: "Fast Marketplace",
             tagline: "Synthetic paid research endpoints.",
             categories: ["Research", "Testing"],
@@ -44,11 +44,11 @@ describe("MarketplaceHome", () => {
           },
           {
             serviceType: "external_registry",
-            slug: "weather-wire",
-            name: "Weather Wire",
-            ownerName: "Sky Data",
-            tagline: "Forecast and alert APIs for agents.",
-            categories: ["Weather"],
+            slug: "instagram-scraper",
+            name: "Instagram Scraper",
+            ownerName: "Fast Marketplace",
+            tagline: "Scrape public Instagram data.",
+            categories: ["Social"],
             settlementMode: null,
             settlementLabel: "External API",
             settlementDescription: "Calls go directly to the provider. The marketplace lists discovery metadata only.",
@@ -61,7 +61,28 @@ describe("MarketplaceHome", () => {
             volume30d: [],
             accessModelLabel: "External API",
             accessModelDescription: "Calls go directly to the provider. The marketplace only lists docs and direct endpoints.",
-            websiteUrl: "https://weather.example.com"
+            websiteUrl: "https://www.instagram.com"
+          },
+          {
+            serviceType: "external_registry",
+            slug: "stableenrich-apollo-api",
+            name: "StableEnrich Apollo API",
+            ownerName: "StableEnrich",
+            tagline: "Apollo enrichment proxy.",
+            categories: ["Sales"],
+            settlementMode: null,
+            settlementLabel: "External API",
+            settlementDescription: "Calls go directly to the provider. The marketplace lists discovery metadata only.",
+            priceRange: "See provider docs",
+            settlementToken: null,
+            endpointCount: 1,
+            totalCalls: null,
+            revenue: null,
+            successRate30d: null,
+            volume30d: [],
+            accessModelLabel: "External API",
+            accessModelDescription: "Calls go directly to the provider. The marketplace only lists docs and direct endpoints.",
+            websiteUrl: "https://www.apollo.io"
           }
         ]}
       />
@@ -71,17 +92,19 @@ describe("MarketplaceHome", () => {
     expect(screen.getByRole("table")).toBeTruthy();
     expect(screen.getByRole("columnheader", { name: /service/i })).toBeTruthy();
     expect(screen.getByRole("columnheader", { name: /pricing/i })).toBeTruthy();
-    expect(screen.getByText("Mock Research Signals")).toBeTruthy();
-    expect(screen.getByText("Weather Wire")).toBeTruthy();
-    expect(screen.getByRole("img", { name: "Mock Research Signals favicon" }).getAttribute("src")).toBe("https://www.amazon.com/favicon.ico");
-    expect(screen.getByRole("img", { name: "Weather Wire favicon" }).getAttribute("src")).toBe("https://weather.example.com/favicon.ico");
+    expect(screen.getByText("Amazon Product Scraper")).toBeTruthy();
+    expect(screen.getByText("Instagram Scraper")).toBeTruthy();
+    expect(screen.getByText("StableEnrich Apollo API")).toBeTruthy();
+    expect(screen.getByRole("img", { name: "Amazon Product Scraper favicon" }).getAttribute("src")).toBe("https://www.google.com/s2/favicons?domain=www.amazon.com&sz=64");
+    expect(screen.getByRole("img", { name: "Instagram Scraper favicon" }).getAttribute("src")).toBe("https://www.google.com/s2/favicons?domain=www.instagram.com&sz=64");
+    expect(screen.getByRole("img", { name: "StableEnrich Apollo API favicon" }).getAttribute("src")).toBe("https://www.google.com/s2/favicons?domain=www.apollo.io&sz=64");
 
-    await user.type(screen.getByPlaceholderText("Search services, owners, or categories"), "weather");
+    await user.type(screen.getByPlaceholderText("Search services, owners, or categories"), "instagram");
 
     await waitFor(() => {
-      expect(screen.queryByText("Mock Research Signals")).toBeNull();
+      expect(screen.queryByText("Amazon Product Scraper")).toBeNull();
     });
 
-    expect(screen.getByText("Weather Wire")).toBeTruthy();
+    expect(screen.getByText("Instagram Scraper")).toBeTruthy();
   });
 });

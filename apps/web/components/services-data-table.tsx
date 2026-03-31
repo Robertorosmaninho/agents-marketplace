@@ -40,6 +40,33 @@ function serviceWebsiteUrl(service: ServiceSummary): string | null {
 function inferWebsiteUrlFromServiceName(serviceName: string): string | null {
   const normalized = serviceName.toLowerCase();
 
+  const exactMappings: Array<[string, string]> = [
+    ["cheerio scraper", "https://cheerio.js.org"],
+    ["tweet scraper", "https://x.com"],
+    ["tavily proxy", "https://tavily.com"],
+    ["zapper x402 api", "https://zapper.com"],
+    ["stableenrich apollo api", "https://www.apollo.io"],
+    ["stableenrich clado api", "https://clado.ai"],
+    ["stableenrich exa api", "https://exa.ai"],
+    ["stableenrich firecrawl api", "https://firecrawl.dev"],
+    ["stableenrich google maps api", "https://www.google.com"],
+    ["stableenrich hunter api", "https://hunter.io"],
+    ["stableenrich reddit api", "https://www.reddit.com"],
+    ["stableenrich serper api", "https://serper.dev"],
+    ["stableenrich whitepages api", "https://www.whitepages.com"],
+    ["stablesocial facebook api", "https://www.facebook.com"],
+    ["stablesocial instagram api", "https://www.instagram.com"],
+    ["stablesocial reddit api", "https://www.reddit.com"],
+    ["stablesocial tiktok api", "https://www.tiktok.com"]
+  ];
+
+  for (const [serviceFragment, websiteUrl] of exactMappings) {
+    if (normalized.includes(serviceFragment)) {
+      return websiteUrl;
+    }
+  }
+
+  if (normalized.includes("linkedin")) return "https://www.linkedin.com";
   if (normalized.includes("amazon")) return "https://www.amazon.com";
   if (normalized.includes("facebook")) return "https://www.facebook.com";
   if (normalized.includes("instagram")) return "https://www.instagram.com";
@@ -49,8 +76,18 @@ function inferWebsiteUrlFromServiceName(serviceName: string): string | null {
   if (normalized.includes("indeed")) return "https://www.indeed.com";
   if (normalized.includes("reddit")) return "https://www.reddit.com";
   if (normalized.includes("g2")) return "https://www.g2.com";
+  if (normalized.includes("x.com") || normalized.includes("tweet")) return "https://x.com";
 
   return null;
+}
+
+function faviconUrlFromWebsiteUrl(websiteUrl: string): string | null {
+  try {
+    const hostname = new URL(websiteUrl).hostname;
+    return `https://www.google.com/s2/favicons?domain=${encodeURIComponent(hostname)}&sz=64`;
+  } catch {
+    return null;
+  }
 }
 
 const columns: ColumnDef<ServiceSummary>[] = [
@@ -62,7 +99,7 @@ const columns: ColumnDef<ServiceSummary>[] = [
       const websiteUrl = serviceWebsiteUrl(service) ?? inferWebsiteUrlFromServiceName(service.name);
 
       return (
-        <div className="flex items-start gap-3">
+        <div className="flex items-center gap-3">
           <ServiceFavicon
             serviceName={service.name}
             websiteUrl={websiteUrl}
@@ -180,15 +217,7 @@ export function ServicesDataTable({ services }: { services: ServiceSummary[] }) 
 function ServiceFavicon({ serviceName, websiteUrl }: { serviceName: string; websiteUrl: string | null }) {
   const [imageFailed, setImageFailed] = React.useState(false);
 
-  let faviconUrl: string | null = null;
-
-  if (websiteUrl && !imageFailed) {
-    try {
-      faviconUrl = `${new URL(websiteUrl).origin}/favicon.ico`;
-    } catch {
-      faviconUrl = null;
-    }
-  }
+  const faviconUrl = websiteUrl && !imageFailed ? faviconUrlFromWebsiteUrl(websiteUrl) : null;
 
   return (
     <div className="flex items-center gap-3">

@@ -161,7 +161,7 @@
 
 @layer components {
   .gradient-text {
-    background: linear-gradient(135deg, #2b2c2f 0%, #8a9ab5 100%);
+    background: linear-gradient(135deg, var(--foreground) 0%, var(--accent) 100%);
     -webkit-background-clip: text;
     background-clip: text;
     color: transparent;
@@ -246,7 +246,6 @@
 
   .nav-shell,
   .footer-shell {
-    width: min(100%, var(--page-width));
     margin: 0 auto;
     padding-left: 24px;
     padding-right: 24px;
@@ -262,7 +261,7 @@
   }
 
   .fast-nav-link:hover {
-    background: rgba(0, 0, 0, 0.03);
+    background: var(--secondary);
   }
 
   .btn-fast {
@@ -284,22 +283,22 @@
   }
 
   .btn-fast-primary {
-    background: #2b2c2f;
-    border-color: #2b2c2f;
-    color: #f6f8fa;
+    background: var(--primary);
+    border-color: var(--primary);
+    color: var(--primary-foreground);
   }
 
   .btn-fast-secondary {
-    background: #ffffff;
-    border-color: rgba(0, 0, 0, 0.08);
-    color: #2b2c2f;
+    background: var(--card);
+    border-color: var(--border);
+    color: var(--foreground);
   }
 
   .btn-fast-muted,
   .btn-fast-ghost {
     background: transparent;
-    border-color: rgba(0, 0, 0, 0.06);
-    color: #2b2c2f;
+    border-color: var(--border);
+    color: var(--foreground);
   }
 
   .btn-fast-sm {
@@ -316,10 +315,10 @@
   .fast-card,
   .glass-card,
   .glass-card-elevated {
-    background: #ffffff;
-    border: 1px solid rgba(0, 0, 0, 0.05);
+    background: var(--card);
+    border: 1px solid var(--border);
     border-radius: 24px;
-    color: #2b2c2f;
+    color: var(--card-foreground);
   }
 
   .fast-card,
@@ -334,10 +333,10 @@
 
   .fast-card-dark,
   .terminal-surface {
-    background: #0d0f13;
-    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: var(--foreground);
+    border: 1px solid color-mix(in srgb, var(--foreground) 80%, white 20%);
     border-radius: 24px;
-    color: #f6f8fa;
+    color: var(--background);
   }
 
   .badge-fast {
@@ -352,35 +351,35 @@
   }
 
   .badge-fast-default {
-    background: #2b2c2f;
-    color: #f6f8fa;
+    background: var(--primary);
+    color: var(--primary-foreground);
   }
 
   .badge-fast-secondary {
-    background: rgba(0, 0, 0, 0.04);
-    color: #5f6672;
+    background: var(--secondary);
+    color: var(--muted-foreground);
   }
 
   .badge-fast-outline {
     background: transparent;
-    border: 1px solid rgba(0, 0, 0, 0.08);
-    color: #5f6672;
+    border: 1px solid var(--border);
+    color: var(--muted-foreground);
   }
 
   .badge-fast-eyebrow {
     padding: 0;
     background: transparent;
-    color: #5f6672;
+    color: var(--muted-foreground);
   }
 
   .fast-input,
   .fast-textarea,
   .native-select {
     width: 100%;
-    border: 1px solid rgba(0, 0, 0, 0.08);
+    border: 1px solid var(--border);
     border-radius: 18px;
-    background: #ffffff;
-    color: #2b2c2f;
+    background: var(--input);
+    color: var(--foreground);
     padding: 0.9rem 1rem;
     line-height: 1.5;
   }
@@ -393,15 +392,15 @@
   .metric-tile,
   .detail-pair,
   .status-banner {
-    background: #ffffff;
-    border: 1px solid rgba(0, 0, 0, 0.05);
+    background: var(--card);
+    border: 1px solid var(--border);
     border-radius: 18px;
     padding: 1rem 1.1rem;
   }
 
   .status-banner-error {
     border-color: rgba(224, 112, 112, 0.3);
-    color: #a33d3d;
+    color: color-mix(in srgb, var(--destructive) 80%, black 20%);
   }
 
   .metric-value,
@@ -417,7 +416,7 @@
     justify-content: space-between;
     gap: 1rem;
     padding: 1rem 1.5rem;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    border-bottom: 1px solid color-mix(in srgb, var(--background) 16%, transparent);
   }
 
   .terminal-body {
@@ -426,7 +425,7 @@
 
   .terminal-code {
     margin: 0;
-    color: #f6f8fa;
+    color: var(--background);
     white-space: pre-wrap;
   }
 

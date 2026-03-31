@@ -45,33 +45,24 @@ export function SiteHeader({
 
   return (
     <header
+      className="border-b border-border/80 bg-background/85 text-foreground backdrop-blur-[16px]"
       style={{
         position: "sticky",
         top: 0,
         zIndex: 100,
-        background: "rgba(246,248,250,0.85)",
         backdropFilter: "blur(16px)",
-        WebkitBackdropFilter: "blur(16px)",
-        borderBottom: "1px solid rgba(0,0,0,0.05)"
+        WebkitBackdropFilter: "blur(16px)"
       }}
     >
       <div className="nav-shell">
         <div className="flex min-h-16 items-center justify-between gap-6">
-          <Link href="/" aria-label="Fast Marketplace" className="inline-flex items-center gap-3 shrink-0">
-            <FastLogo height={16} fill="#2B2C2F" />
+          <Link href="/" aria-label="Fast Marketplace" className="inline-flex shrink-0 items-center gap-3 text-foreground">
+            <FastLogo height={16} />
             <span
               aria-hidden="true"
-              style={{ width: "1px", height: "14px", background: "rgba(0,0,0,0.08)", display: "inline-block" }}
+              className="inline-block h-[14px] w-px bg-border"
             />
-            <span
-              style={{
-                fontSize: "12px",
-                fontWeight: 500,
-                letterSpacing: "3px",
-                textTransform: "uppercase",
-                color: "#5F6672"
-              }}
-            >
+            <span className="text-[12px] font-medium uppercase tracking-[3px] text-muted-foreground">
               Marketplace
             </span>
           </Link>
