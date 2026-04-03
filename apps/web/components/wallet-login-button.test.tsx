@@ -13,6 +13,7 @@ const connectMock = vi.fn();
 const disconnectMock = vi.fn();
 const exportKeysMock = vi.fn();
 const getActiveNetworkMock = vi.fn();
+const switchNetworkMock = vi.fn();
 const signMock = vi.fn();
 const fromInjectedMock = vi.fn();
 const getInjectedFastConnectorMock = vi.fn();
@@ -42,6 +43,7 @@ describe("WalletLoginButton", () => {
       address: "fast1provider000000000000000000000000000000000000000000000000000000"
     });
     getActiveNetworkMock.mockResolvedValue("mainnet");
+    switchNetworkMock.mockImplementation(async (network: string) => network);
     signMock.mockResolvedValue({
       signature: "signed-wallet-challenge"
     });
@@ -50,6 +52,7 @@ describe("WalletLoginButton", () => {
       disconnect: disconnectMock,
       exportKeys: exportKeysMock,
       getActiveNetwork: getActiveNetworkMock,
+      switchNetwork: switchNetworkMock,
       sign: signMock
     });
     getInjectedFastConnectorMock.mockReturnValue({ provider: "injected" });
@@ -186,5 +189,51 @@ describe("WalletLoginButton", () => {
         )
       ).toBeTruthy();
     });
+  });
+
+  it("auto-switches the wallet network before site login when the extension supports it", async () => {
+    getActiveNetworkMock.mockResolvedValueOnce("mainnet").mockResolvedValueOnce("testnet");
+
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            wallet: "fast1provider000000000000000000000000000000000000000000000000000000",
+            resourceType: "site",
+            resourceId: window.location.origin,
+            nonce: "nonce-1",
+            expiresAt: "2026-03-25T00:00:00.000Z",
+            message: "Sign in to Fast Marketplace"
+          }),
+          { status: 200, headers: { "content-type": "application/json" } }
+        )
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            accessToken: "wallet-session-token",
+            wallet: "fast1provider000000000000000000000000000000000000000000000000000000",
+            resourceType: "site",
+            resourceId: window.location.origin,
+            tokenType: "Bearer"
+          }),
+          { status: 200, headers: { "content-type": "application/json" } }
+        )
+      );
+
+    render(
+      <WalletLoginButton
+        apiBaseUrl=""
+        deploymentNetwork="testnet"
+        networkLabel="Testnet"
+      />
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: /connect to fast/i }));
+
+    await waitFor(() => {
+      expect(switchNetworkMock).toHaveBeenCalledWith("testnet");
+    });
+    expect(exportKeysMock).toHaveBeenCalledTimes(1);
   });
 });

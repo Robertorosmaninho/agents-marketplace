@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import React from "react";
-import { render, screen, waitFor } from "@testing-library/react";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -14,6 +14,7 @@ const mockConnector = {
     publicKey: "pubkey"
   })),
   getActiveNetwork: vi.fn(async () => "mainnet"),
+  switchNetwork: vi.fn(async (network: string) => network),
   sign: vi.fn(async () => ({
     signature: "signed_challenge"
   })),
@@ -44,11 +45,13 @@ describe("EndpointBrowserRunner", () => {
     mockConnector.connect.mockClear();
     mockConnector.exportKeys.mockClear();
     mockConnector.getActiveNetwork.mockClear();
+    mockConnector.switchNetwork.mockClear();
     mockConnector.sign.mockClear();
     mockConnector.transfer.mockClear();
   });
 
   afterEach(() => {
+    cleanup();
     globalThis.fetch = originalFetch;
     vi.restoreAllMocks();
   });
@@ -141,5 +144,85 @@ describe("EndpointBrowserRunner", () => {
 
     expect(fetchImpl).toHaveBeenCalledTimes(3);
     expect(mockConnector.transfer).not.toHaveBeenCalled();
+  });
+
+  it("auto-switches the wallet network before running a wallet-session endpoint", async () => {
+    const user = userEvent.setup();
+    mockConnector.getActiveNetwork.mockResolvedValueOnce("mainnet").mockResolvedValueOnce("testnet");
+
+    const fetchImpl = vi.fn(async (input: string | URL | Request) => {
+      const url = typeof input === "string" ? input : input.toString();
+
+      if (url.endsWith("/auth/challenge")) {
+        return jsonResponse(200, {
+          nonce: "nonce_123",
+          expiresAt: "2026-03-21T00:05:00.000Z",
+          message: "Sign this challenge"
+        });
+      }
+
+      if (url.endsWith("/auth/session")) {
+        return jsonResponse(200, {
+          accessToken: "api_session_token"
+        });
+      }
+
+      return jsonResponse(200, {
+        orderId: "order_123",
+        status: "ready"
+      });
+    });
+    globalThis.fetch = fetchImpl as unknown as typeof fetch;
+
+    render(
+      <EndpointBrowserRunner
+        deploymentNetwork="testnet"
+        endpoint={{
+          endpointType: "marketplace_proxy",
+          routeId: "orders.lookup.v1",
+          title: "Lookup order",
+          description: "Read one prepaid order.",
+          price: "Prepaid credit",
+          billingType: "prepaid_credit",
+          tokenSymbol: "testUSDC",
+          mode: "sync",
+          method: "GET",
+          path: "/api/orders/lookup",
+          proxyUrl: "https://api.marketplace.example.com/api/orders/lookup",
+          requestSchemaJson: {
+            type: "object",
+            properties: {
+              id: { type: "string" }
+            },
+            required: ["id"],
+            additionalProperties: false
+          },
+          responseSchemaJson: {
+            type: "object",
+            properties: {
+              orderId: { type: "string" },
+              status: { type: "string" }
+            },
+            required: ["orderId", "status"],
+            additionalProperties: false
+          },
+          requestExample: {
+            id: "order_123"
+          },
+          responseExample: {
+            orderId: "order_123",
+            status: "ready"
+          },
+          usageNotes: undefined
+        }}
+      />
+    );
+
+    await user.click(screen.getByRole("button", { name: /authorize and run in browser/i }));
+
+    await waitFor(() => {
+      expect(mockConnector.switchNetwork).toHaveBeenCalledWith("testnet");
+    });
+    expect(mockConnector.exportKeys).toHaveBeenCalledTimes(1);
   });
 });

@@ -3,7 +3,7 @@
 import React from "react";
 import Link from "next/link";
 import { AlertCircle, LoaderCircle, LogOut, Wallet } from "lucide-react";
-import type { MarketplaceDeploymentNetwork } from "@marketplace/shared";
+import type { MarketplaceDeploymentNetwork } from "@/lib/marketplace-shared";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -16,11 +16,11 @@ import {
 import {
   WALLET_SESSION_CHANGE_EVENT,
   clearStoredWalletSession,
-  normalizeWalletConnectorNetwork,
   readStoredWalletSession,
   shortenWalletAddress,
   writeStoredWalletSession
 } from "@/lib/wallet-session";
+import { ensureConnectorDeploymentNetwork } from "@/lib/browser-x402";
 
 interface WalletChallengeResponse {
   wallet: string;
@@ -130,14 +130,7 @@ export function WalletLoginButton({
         throw new Error("Wallet connection was rejected.");
       }
 
-      const activeNetwork = normalizeWalletConnectorNetwork(
-        (await connector.getActiveNetwork().catch(() => null)) ?? deploymentNetwork
-      );
-
-      if (activeNetwork && activeNetwork !== deploymentNetwork) {
-        await connector.disconnect();
-        throw new Error(`Wallet is on ${activeNetwork}. Switch it to ${deploymentNetwork} for this site.`);
-      }
+      await ensureConnectorDeploymentNetwork(connector, deploymentNetwork, "site");
 
       const account = await connector.exportKeys();
       const challengeResponse = await fetch(`${apiBaseUrl.replace(/\/$/, "")}/auth/wallet/challenge`, {

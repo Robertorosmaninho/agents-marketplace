@@ -2,7 +2,7 @@
 
 import React from "react";
 import { LoaderCircle, RefreshCcw, TriangleAlert, Wallet } from "lucide-react";
-import type { MarketplaceServiceCatalogEndpoint } from "@marketplace/shared";
+import type { MarketplaceServiceCatalogEndpoint } from "@/lib/marketplace-shared";
 import { serializeQueryInput } from "@marketplace/shared/browser-request-input";
 import type { WebDeploymentNetwork } from "@/lib/network";
 
@@ -14,6 +14,7 @@ import {
   createApiAccessToken,
   createJobAccessToken,
   createPaymentIdentifier,
+  ensureConnectorDeploymentNetwork,
   encodeBrowserPaymentPayload,
   formatResponseBody,
   paymentNetworkForDeployment,
@@ -456,25 +457,10 @@ async function ensureConnector(
     throw new Error("Wallet connection was rejected.");
   }
 
-  if (connector.getActiveNetwork) {
-    const active = await connector.getActiveNetwork().catch(() => null);
-    if (active && !matchesDeploymentNetwork(active, deploymentNetwork)) {
-      throw new Error(`Wallet is on ${active}. Switch it to ${deploymentNetwork} for this endpoint.`);
-    }
-  }
+  await ensureConnectorDeploymentNetwork(connector, deploymentNetwork, "endpoint");
 
   connectorRef.current = connector;
   return connector;
-}
-
-function matchesDeploymentNetwork(active: string, deploymentNetwork: WebDeploymentNetwork): boolean {
-  const normalized = active.trim().toLowerCase();
-
-  if (deploymentNetwork === "testnet") {
-    return normalized === "testnet" || normalized === "fast-testnet";
-  }
-
-  return normalized === "mainnet" || normalized === "fast-mainnet";
 }
 
 async function safeJson(response: Response): Promise<unknown> {

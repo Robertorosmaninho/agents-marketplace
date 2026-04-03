@@ -22,6 +22,7 @@ export interface BrowserConnectorLike {
   connect(): Promise<boolean>;
   exportKeys(): Promise<{ address: string; publicKey: string }>;
   getActiveNetwork?(): Promise<string>;
+  switchNetwork?(network: WebDeploymentNetwork): Promise<string>;
   sign(params: { message: string | Uint8Array }): Promise<{ signature: string }>;
   transfer(params: {
     amount: string;
@@ -94,6 +95,44 @@ export function formatResponseBody(body: unknown): string {
   }
 
   return JSON.stringify(body, null, 2);
+}
+
+export function matchesDeploymentNetwork(
+  active: string,
+  deploymentNetwork: WebDeploymentNetwork
+): boolean {
+  const normalized = active.trim().toLowerCase();
+
+  if (deploymentNetwork === "testnet") {
+    return normalized === "testnet" || normalized === "fast-testnet";
+  }
+
+  return normalized === "mainnet" || normalized === "fast-mainnet";
+}
+
+export async function ensureConnectorDeploymentNetwork(
+  connector: BrowserConnectorLike,
+  deploymentNetwork: WebDeploymentNetwork,
+  targetLabel: "site" | "endpoint"
+): Promise<void> {
+  if (!connector.getActiveNetwork) {
+    return;
+  }
+
+  const active = await connector.getActiveNetwork().catch(() => null);
+  if (!active || matchesDeploymentNetwork(active, deploymentNetwork)) {
+    return;
+  }
+
+  if (!connector.switchNetwork) {
+    throw new Error(`Wallet is on ${active}. Switch it to ${deploymentNetwork} for this ${targetLabel}.`);
+  }
+
+  await connector.switchNetwork(deploymentNetwork);
+  const updated = await connector.getActiveNetwork().catch(() => null);
+  if (!updated || !matchesDeploymentNetwork(updated, deploymentNetwork)) {
+    throw new Error(`Wallet is on ${updated ?? active}. Switch it to ${deploymentNetwork} for this ${targetLabel}.`);
+  }
 }
 
 async function createScopedAccessToken(input: {
