@@ -14,6 +14,7 @@
     "build:web": "npm run build --workspace @marketplace/web",
     "build": "npm run typecheck && npm run build:runtime && npm run build:web",
     "test": "vitest run",
+    "test:mcp:ci-smoke": "node --import tsx scripts/verify-fast-pay-mcp-ci.ts",
     "test:web:smoke": "npm run build:web && playwright test --config apps/web/playwright.config.ts",
     "dev:api": "tsx apps/api/src/index.ts",
     "dev:apify-service": "tsx apps/apify-service/src/index.ts",
@@ -36,8 +37,8 @@
     "@fastxyz/x402-client": "^0.1.2",
     "@fastxyz/x402-facilitator": "^0.1.2",
     "@fastxyz/x402-server": "^0.1.2",
-    "@noble/ed25519": "^3.0.1",
-    "@noble/hashes": "^2.0.1",
+    "@noble/ed25519": "^2.3.0",
+    "@noble/hashes": "^1.8.0",
     "ajv": "^8.18.0",
     "commander": "^14.0.3",
     "dotenv": "^17.3.1",
@@ -48,9 +49,9 @@
   },
   "optionalDependencies": {
     "@next/swc-linux-x64-gnu": "^16.1.7",
+    "@tailwindcss/oxide-linux-x64-gnu": "4.2.1",
     "@rollup/rollup-linux-x64-gnu": "^4.59.0",
-    "@tailwindcss/oxide-linux-x64-gnu": "^4.2.2",
-    "lightningcss-linux-x64-gnu": "^1.32.0"
+    "lightningcss-linux-x64-gnu": "1.31.1"
   },
   "devDependencies": {
     "@playwright/test": "^1.54.2",

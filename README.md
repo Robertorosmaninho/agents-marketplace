@@ -225,6 +225,14 @@ V1 MCP tools:
 
 The MCP server reuses the CLI wallet loader and spend controls. If `FAST_MARKETPLACE_CONFIG` points at a CLI config with spend controls, MCP calls enforce the same limits.
 
+For GitHub Actions and Claude Code runner setup, use:
+
+- [docs/claude-code-fast-pay.md](docs/claude-code-fast-pay.md)
+- [examples/github-actions/claude-code-fast-pay.yml](examples/github-actions/claude-code-fast-pay.yml)
+- [examples/github-actions/codex-fast-pay.yml](examples/github-actions/codex-fast-pay.yml)
+- [examples/github-actions/gemini-fast-pay.yml](examples/github-actions/gemini-fast-pay.yml)
+- [examples/fast-marketplace.ci.config.json](examples/fast-marketplace.ci.config.json)
+
 Provider-agent workflow:
 
 ```bash
