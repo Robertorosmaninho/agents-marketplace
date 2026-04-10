@@ -30,6 +30,7 @@
 - If pricing changes, update payout split handling and related tests in the same change.
 - Persist payout split data at charge time; do not defer that calculation to payout time.
 - Keep Postgres and the in-memory test store behavior aligned.
+- Pin `@fastxyz/*` dependencies to exact versions in `package.json` files; do not use caret ranges for the Fast package set.
 
 ## Deployment Assumptions
 

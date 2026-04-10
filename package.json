@@ -34,11 +34,11 @@
     "start:cli": "node dist/packages/cli/index.js"
   },
   "dependencies": {
-    "@fastxyz/fast-connector": "^0.1.2",
-    "@fastxyz/sdk": "^1.0.1",
-    "@fastxyz/x402-client": "^0.1.3",
-    "@fastxyz/x402-facilitator": "^1.0.1",
-    "@fastxyz/x402-server": "^1.0.1",
+    "@fastxyz/fast-connector": "0.1.2",
+    "@fastxyz/sdk": "1.0.1",
+    "@fastxyz/x402-client": "0.1.3",
+    "@fastxyz/x402-facilitator": "1.0.1",
+    "@fastxyz/x402-server": "1.0.1",
     "@noble/ed25519": "^2.3.0",
     "@noble/hashes": "^1.8.0",
     "ajv": "^8.18.0",
