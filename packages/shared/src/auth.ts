@@ -1,8 +1,7 @@
 import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 
 import { verifyAsync } from "@noble/ed25519";
-import { decodeFastAddress, encodeFastAddress, hexToBytes } from "@fastxyz/sdk";
-import { utf8ToBytes } from "@fastxyz/sdk/core";
+import { fromFastAddress, fromHex, toFastAddress } from "@fastxyz/sdk";
 
 import {
   AUTH_CHALLENGE_TTL_MS,
@@ -24,8 +23,7 @@ function signValue(value: string, secret: string): string {
 
 export function normalizeFastWalletAddress(addressOrHex: string): string {
   if (addressOrHex.startsWith("fast1")) {
-    const decoded = decodeFastAddress(addressOrHex);
-    return encodeFastAddress(decoded.bytes);
+    return toFastAddress(fromFastAddress(addressOrHex));
   }
 
   const normalized = addressOrHex.startsWith("0x") ? addressOrHex.slice(2) : addressOrHex;
@@ -34,7 +32,7 @@ export function normalizeFastWalletAddress(addressOrHex: string): string {
     throw new Error("Fast wallet payer must be a canonical fast address or 32-byte hex public key.");
   }
 
-  return encodeFastAddress(hexToBytes(normalized));
+  return toFastAddress(fromHex(normalized));
 }
 
 export function createChallenge(input: {
@@ -86,9 +84,9 @@ export async function verifyWalletChallenge(input: {
     return false;
   }
 
-  const publicKey = decodeFastAddress(normalizedWallet).bytes;
-  const message = utf8ToBytes(challengeMessage(input.challenge));
-  const signature = hexToBytes(input.signature.startsWith("0x") ? input.signature.slice(2) : input.signature);
+  const publicKey = fromFastAddress(normalizedWallet);
+  const message = new TextEncoder().encode(challengeMessage(input.challenge));
+  const signature = fromHex(input.signature);
 
   return verifyAsync(signature, message, publicKey);
 }

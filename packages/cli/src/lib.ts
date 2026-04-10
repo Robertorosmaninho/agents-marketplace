@@ -4,10 +4,10 @@ import { dirname, resolve } from "node:path";
 import { stderr, stdin as input } from "node:process";
 import { createInterface } from "node:readline/promises";
 
-import { getPublicKeyAsync } from "@noble/ed25519";
-import { FastProvider, FastWallet, encodeFastAddress } from "@fastxyz/sdk";
+import { FastProvider } from "@fastxyz/sdk";
 import { x402Pay } from "@fastxyz/x402-client";
 import {
+  MarketplaceFastWallet,
   PAYMENT_IDENTIFIER_HEADER,
   buildRouteRef,
   createOpaqueToken,
@@ -43,7 +43,7 @@ export interface CliConfig {
 
 export interface LoadedWallet {
   keyfilePath: string;
-  wallet: FastWallet;
+  wallet: MarketplaceFastWallet;
   paymentWallet: {
     type: "fast";
     privateKey: string;
@@ -166,7 +166,7 @@ export async function initializeWallet(input: {
     deploymentNetwork: input.network,
     rpcUrl: input.rpcUrl
   });
-  const wallet = await FastWallet.generate(provider);
+  const wallet = await MarketplaceFastWallet.generate(provider);
   await wallet.saveToKeyfile(keyfilePath);
 
   const config = await readCliConfig(input.configPath);
@@ -176,7 +176,7 @@ export async function initializeWallet(input: {
 
   return {
     keyfilePath,
-    address: wallet.address
+    address: await wallet.address
   };
 }
 
@@ -247,13 +247,12 @@ export async function loadWalletFromPrivateKey(input: {
   const config = await readCliConfig(input.configPath);
   const network = resolveCliNetwork(input.network, config.defaultNetwork, input.rpcUrl);
   const privateKey = normalizePrivateKeyHex(input.privateKey);
-  const publicKey = Buffer.from(await getPublicKeyAsync(Buffer.from(privateKey, "hex"))).toString("hex");
-  const address = encodeFastAddress(Buffer.from(publicKey, "hex"));
   const provider = createProvider({
     deploymentNetwork: network.deploymentNetwork,
     rpcUrl: network.rpcUrl
   });
-  const wallet = await FastWallet.fromPrivateKey(privateKey, provider);
+  const wallet = await MarketplaceFastWallet.fromPrivateKey(privateKey, provider);
+  const exported = await wallet.exportKeys();
 
   return {
     keyfilePath: input.sourceLabel ?? "env:private-key",
@@ -261,8 +260,8 @@ export async function loadWalletFromPrivateKey(input: {
     paymentWallet: {
       type: "fast",
       privateKey,
-      publicKey,
-      address: normalizeFastWalletAddress(address),
+      publicKey: exported.publicKey,
+      address: normalizeFastWalletAddress(exported.address),
       rpcUrl: network.rpcUrl
     }
   };
@@ -293,7 +292,7 @@ export async function walletBalance(input: {
   const config = await readCliConfig(input.configPath);
   const loaded = await loadWallet(input);
   const network = resolveCliNetwork(input.network, config.defaultNetwork, input.rpcUrl);
-  return loaded.wallet.balance(input.token ?? network.tokenSymbol);
+  return loaded.wallet.balance((input.token ?? network.tokenSymbol) as "USDC" | "testUSDC");
 }
 
 export async function searchMarketplace(
@@ -885,13 +884,7 @@ function createProvider(input: {
     rpcUrl: input.rpcUrl
   });
   return new FastProvider({
-    network: network.deploymentNetwork,
-    networks: {
-      [network.deploymentNetwork]: {
-        rpc: network.rpcUrl,
-        explorer: network.explorerUrl
-      }
-    }
+    rpcUrl: network.rpcUrl
   });
 }
 

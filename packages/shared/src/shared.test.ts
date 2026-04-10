@@ -1,8 +1,9 @@
-import { FastProvider, FastWallet } from "@fastxyz/sdk";
+import { FastProvider } from "@fastxyz/sdk";
 import { describe, expect, it } from "vitest";
 
 import {
   InMemoryMarketplaceStore,
+  MarketplaceFastWallet,
   PostgresMarketplaceStore,
   buildCatalogSearchResults,
   buildMarketplaceRouteDetail,
@@ -41,20 +42,14 @@ const TESTNET_SERVICE_DEFINITIONS = listServiceDefinitions(TESTNET_NETWORK_CONFI
 
 async function createTestWallet() {
   const provider = new FastProvider({
-    network: "mainnet",
-    networks: {
-      mainnet: {
-        rpc: "https://api.fast.xyz/proxy",
-        explorer: "https://explorer.fast.xyz"
-      }
-    }
+    rpcUrl: "https://api.fast.xyz/proxy"
   });
 
-  const wallet = await FastWallet.fromPrivateKey(TEST_PRIVATE_KEY, provider);
+  const wallet = await MarketplaceFastWallet.fromPrivateKey(TEST_PRIVATE_KEY, provider);
   const exported = await wallet.exportKeys();
   return {
     wallet,
-    address: wallet.address,
+    address: await wallet.address,
     publicKey: exported.publicKey
   };
 }

@@ -1,6 +1,7 @@
-import { FastProvider, FastWallet } from "@fastxyz/sdk";
+import { FastProvider } from "@fastxyz/sdk";
 
 import { rawToDecimalString } from "./amounts.js";
+import { MarketplaceFastWallet } from "./fast-wallet.js";
 import { resolveMarketplaceNetworkConfig } from "./network.js";
 import type { MarketplaceDeploymentNetwork } from "./network.js";
 import type { PayoutService, RefundService } from "./types.js";
@@ -18,23 +19,17 @@ function createFastTreasurySender(input: FastTreasuryServiceInput) {
     rpcUrl: input.rpcUrl
   });
   const provider = new FastProvider({
-    network: network.deploymentNetwork,
-    networks: {
-      [network.deploymentNetwork]: {
-        rpc: network.rpcUrl,
-        explorer: network.explorerUrl
-      }
-    }
+    rpcUrl: network.rpcUrl
   });
 
-  let walletPromise: Promise<FastWallet> | null = null;
+  let walletPromise: Promise<MarketplaceFastWallet> | null = null;
 
   const getWallet = async () => {
     if (!walletPromise) {
       if (input.privateKey) {
-        walletPromise = FastWallet.fromPrivateKey(input.privateKey, provider);
+        walletPromise = MarketplaceFastWallet.fromPrivateKey(input.privateKey, provider);
       } else if (input.keyfilePath) {
-        walletPromise = FastWallet.fromKeyfile(
+        walletPromise = MarketplaceFastWallet.fromKeyfile(
           { keyFile: input.keyfilePath, createIfMissing: false },
           provider
         );

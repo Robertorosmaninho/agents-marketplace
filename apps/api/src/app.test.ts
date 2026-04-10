@@ -1,9 +1,10 @@
 import type { Express } from "express";
-import { FastProvider, FastWallet } from "@fastxyz/sdk";
+import { FastProvider } from "@fastxyz/sdk";
 import request from "supertest";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  MarketplaceFastWallet,
   buildMarketplaceCallbackHeaders,
   InMemoryMarketplaceStore,
   MARKETPLACE_JOB_TOKEN_HEADER,
@@ -21,19 +22,13 @@ const OTHER_PRIVATE_KEY = "44".repeat(32);
 
 async function createTestWallet(privateKey = TEST_PRIVATE_KEY) {
   const provider = new FastProvider({
-    network: "mainnet",
-    networks: {
-      mainnet: {
-        rpc: "https://api.fast.xyz/proxy",
-        explorer: "https://explorer.fast.xyz"
-      }
-    }
+    rpcUrl: "https://api.fast.xyz/proxy"
   });
-  const wallet = await FastWallet.fromPrivateKey(privateKey, provider);
+  const wallet = await MarketplaceFastWallet.fromPrivateKey(privateKey, provider);
   const exported = await wallet.exportKeys();
   return {
     wallet,
-    address: wallet.address,
+    address: await wallet.address,
     payerHex: `0x${exported.publicKey}`
   };
 }

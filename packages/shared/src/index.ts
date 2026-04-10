@@ -5,6 +5,7 @@ export * from "./billing.js";
 export * from "./catalog.js";
 export * from "./constants.js";
 export * from "./docs.js";
+export * from "./fast-wallet.js";
 export * from "./hashing.js";
 export * from "./json-schema.js";
 export * from "./mock-provider.js";

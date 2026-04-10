@@ -50,6 +50,10 @@ export function buildPaymentRequirementForRoute(route: MarketplaceRoute, payTo: 
     {
       price: quotedPriceString(route, requestBody),
       network: route.network,
+      networkConfig: {
+        asset: getMarketplaceAssetId(route.network),
+        decimals: 6
+      },
       config: {
         description: route.description,
         mimeType: "application/json",
@@ -66,6 +70,10 @@ export function buildPaymentRequiredResponse(route: MarketplaceRoute, payTo: str
     {
       price: quotedPriceString(route, requestBody),
       network: route.network,
+      networkConfig: {
+        asset: getMarketplaceAssetId(route.network),
+        decimals: 6
+      },
       config: {
         description: route.description,
         mimeType: "application/json",
