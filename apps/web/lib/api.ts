@@ -3,6 +3,7 @@ import type {
   CreateProviderEndpointDraftInput,
   CreateProviderServiceInput,
   OpenApiImportPreview,
+  UcpImportPreview,
   ProviderRequestRecord,
   ProviderAccountRecord,
   ProviderEndpointDraftRecord,
@@ -472,6 +473,28 @@ export async function importProviderOpenApi(
       },
       body: JSON.stringify({
         documentUrl
+      })
+    }
+  });
+}
+
+export async function importProviderUcp(
+  apiBaseUrl: string,
+  accessToken: string,
+  serviceId: string,
+  profileUrl: string
+): Promise<UcpImportPreview> {
+  return fetchMarketplace<UcpImportPreview>({
+    apiBaseUrl,
+    accessToken,
+    path: `/provider/services/${serviceId}/ucp/import`,
+    init: {
+      method: "POST",
+      headers: {
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({
+        profileUrl
       })
     }
   });

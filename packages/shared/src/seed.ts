@@ -1,8 +1,10 @@
 import type {
+  ExternalProviderEndpointDraftRecord,
   MarketplaceProviderEndpointDraftRecord,
   MarketplaceRoute,
   ProviderAccountRecord,
   ProviderEndpointDraftRecord,
+  PublishedExternalEndpointVersionRecord,
   ProviderServiceRecord,
   PublishedEndpointVersionRecord,
   PublishedServiceVersionRecord
@@ -49,7 +51,33 @@ export const MOCK_PROVIDER_SERVICE_SEED: ProviderServiceRecord = {
   updatedAt: SEEDED_AT
 };
 
-export const SEEDED_PROVIDER_SERVICE_IDS = [MOCK_PROVIDER_SERVICE_SEED.id];
+export const SHOP_FAST_SERVICE_SEED: ProviderServiceRecord = {
+  id: "service_shop_fast_amazon",
+  providerAccountId: MARKETPLACE_PROVIDER_ACCOUNT_SEED.id,
+  serviceType: "external_registry",
+  settlementMode: null,
+  slug: "shop-fast-amazon",
+  apiNamespace: null,
+  name: "Shop Fast Amazon",
+  tagline: "Amazon product discovery and quote endpoints for USDC purchases on Fast.",
+  about:
+    "Shop Fast Amazon is the commerce surface for buying Amazon items with USDC on the Fast network. The marketplace lists the search and quote operations as discovery-only endpoints until commerce quote, consent, order, and fulfillment records are first-class marketplace primitives.",
+  categories: ["Commerce", "Shopping", "Fast"],
+  featured: true,
+  promptIntro: 'I want to use the "Shop Fast Amazon" service.',
+  setupInstructions: [
+    "Use amazon-search to find Amazon products by query.",
+    "Use amazon-quote to price a selected product before purchase.",
+    "Do not use amazon-buy through the marketplace until quote, consent, and order records are supported."
+  ],
+  websiteUrl: "https://shop.fast.xyz",
+  payoutWallet: null,
+  status: "published",
+  createdAt: SEEDED_AT,
+  updatedAt: SEEDED_AT
+};
+
+export const SEEDED_PROVIDER_SERVICE_IDS = [MOCK_PROVIDER_SERVICE_SEED.id, SHOP_FAST_SERVICE_SEED.id];
 
 function buildQuickInsightRoute(config: MarketplaceNetworkConfig): MarketplaceRoute {
   return {
@@ -237,6 +265,102 @@ function buildProviderEndpointDraft(serviceId: string, route: MarketplaceRoute):
   };
 }
 
+function buildShopFastExternalEndpointDrafts(): ExternalProviderEndpointDraftRecord[] {
+  return [
+    buildExternalEndpointDraft({
+      id: "draft_shop_fast_amazon_search",
+      title: "Amazon Search",
+      description: "Search Amazon products through Shop Fast before requesting a purchase quote.",
+      publicUrl: "https://shop.fast.xyz/api/amazon/search",
+      requestExample: {
+        query: "usb-c charger",
+        country: "US"
+      },
+      responseExample: {
+        products: [
+          {
+            id: "B000EXAMPLE",
+            title: "Example USB-C Charger",
+            price: {
+              amount: 1999,
+              currency: "USD"
+            }
+          }
+        ]
+      },
+      usageNotes: "Use the returned product identifier with amazon-quote before any purchase attempt."
+    }),
+    buildExternalEndpointDraft({
+      id: "draft_shop_fast_amazon_quote",
+      title: "Amazon Quote",
+      description: "Create a purchase quote for an Amazon product before buyer consent and payment.",
+      publicUrl: "https://shop.fast.xyz/api/amazon/quote",
+      requestExample: {
+        productId: "B000EXAMPLE",
+        quantity: 1,
+        shipToCountry: "US",
+        paymentCurrency: "USDC"
+      },
+      responseExample: {
+        quoteId: "quote_example",
+        expiresAt: "2026-03-19T00:15:00.000Z",
+        total: {
+          amount: 2499,
+          currency: "USD"
+        },
+        payment: {
+          amount: "24.99",
+          currency: "USDC",
+          network: "fast"
+        }
+      },
+      usageNotes: "Treat the quote as provisional until Shop Fast returns a confirmed order."
+    })
+  ];
+}
+
+function buildExternalEndpointDraft(input: {
+  id: string;
+  title: string;
+  description: string;
+  publicUrl: string;
+  requestExample: unknown;
+  responseExample: unknown;
+  usageNotes: string;
+}): ExternalProviderEndpointDraftRecord {
+  return {
+    endpointType: "external_registry",
+    id: input.id,
+    serviceId: SHOP_FAST_SERVICE_SEED.id,
+    routeId: null,
+    operation: null,
+    title: input.title,
+    description: input.description,
+    price: null,
+    billing: null,
+    mode: null,
+    requestSchemaJson: null,
+    responseSchemaJson: null,
+    method: "POST",
+    publicUrl: input.publicUrl,
+    docsUrl: "https://shop.fast.xyz/.well-known/ucp",
+    authNotes: "Discovery-only listing. Marketplace execution is not enabled yet.",
+    requestExample: input.requestExample,
+    responseExample: input.responseExample,
+    usageNotes: input.usageNotes,
+    executorKind: null,
+    upstreamBaseUrl: null,
+    upstreamPath: null,
+    upstreamAuthMode: null,
+    upstreamAuthHeaderName: null,
+    upstreamSecretRef: null,
+    hasUpstreamSecret: false,
+    payout: null,
+    createdAt: SEEDED_AT,
+    updatedAt: SEEDED_AT
+  };
+}
+
 function buildPublishedServiceVersion(input: {
   service: ProviderServiceRecord;
   routeIds: string[];
@@ -271,13 +395,27 @@ function buildPublishedServiceVersion(input: {
 }
 
 function buildSeededServiceGroups(config: MarketplaceNetworkConfig) {
+  const groups = [
+    {
+      service: SHOP_FAST_SERVICE_SEED,
+      publishedService: buildPublishedServiceVersion({
+        service: SHOP_FAST_SERVICE_SEED,
+        routeIds: [],
+        versionId: "published_service_shop_fast_amazon_v1"
+      }),
+      routes: [],
+      externalEndpoints: buildShopFastExternalEndpointDrafts()
+    }
+  ];
+
   if (!shouldSeedMarketplaceMocks(config)) {
-    return [];
+    return groups;
   }
 
   const mockRoutes = [buildQuickInsightRoute(config), buildAsyncReportRoute(config)];
 
   return [
+    ...groups,
     {
       service: MOCK_PROVIDER_SERVICE_SEED,
       publishedService: buildPublishedServiceVersion({
@@ -285,7 +423,8 @@ function buildSeededServiceGroups(config: MarketplaceNetworkConfig) {
         routeIds: mockRoutes.map((route) => route.routeId),
         versionId: "published_service_mock_research_signals_v1"
       }),
-      routes: mockRoutes
+      routes: mockRoutes,
+      externalEndpoints: []
     }
   ];
 }
@@ -308,7 +447,10 @@ export function buildSeededProviderEndpointDrafts(
   config: MarketplaceNetworkConfig = getDefaultMarketplaceNetworkConfig()
 ): ProviderEndpointDraftRecord[] {
   return buildSeededServiceGroups(config).flatMap((group) =>
-    group.routes.map((route) => buildProviderEndpointDraft(group.service.id, route))
+    [
+      ...group.routes.map((route) => buildProviderEndpointDraft(group.service.id, route)),
+      ...group.externalEndpoints.map((endpoint) => structuredClone(endpoint))
+    ]
   );
 }
 
@@ -362,5 +504,48 @@ export function buildSeededPublishedEndpointVersions(
         updatedAt: SEEDED_AT
       };
     })
+  );
+}
+
+export function buildSeededPublishedExternalEndpointVersions(
+  config: MarketplaceNetworkConfig = getDefaultMarketplaceNetworkConfig()
+): PublishedExternalEndpointVersionRecord[] {
+  return buildSeededServiceGroups(config).flatMap((group) =>
+    group.externalEndpoints.map((endpoint) => ({
+      endpointType: "external_registry",
+      endpointVersionId: `published_${endpoint.id}`,
+      serviceId: endpoint.serviceId,
+      serviceVersionId: group.publishedService.versionId,
+      endpointDraftId: endpoint.id,
+      routeId: null,
+      provider: null,
+      operation: null,
+      version: null,
+      settlementMode: null,
+      mode: null,
+      network: null,
+      price: null,
+      billing: null,
+      title: endpoint.title,
+      description: endpoint.description,
+      payout: null,
+      method: endpoint.method,
+      publicUrl: endpoint.publicUrl,
+      docsUrl: endpoint.docsUrl,
+      authNotes: endpoint.authNotes,
+      requestExample: structuredClone(endpoint.requestExample),
+      responseExample: structuredClone(endpoint.responseExample),
+      usageNotes: endpoint.usageNotes ?? undefined,
+      requestSchemaJson: null,
+      responseSchemaJson: null,
+      executorKind: null,
+      upstreamBaseUrl: null,
+      upstreamPath: null,
+      upstreamAuthMode: null,
+      upstreamAuthHeaderName: null,
+      upstreamSecretRef: null,
+      createdAt: SEEDED_AT,
+      updatedAt: SEEDED_AT
+    }))
   );
 }

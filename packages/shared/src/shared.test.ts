@@ -14,12 +14,14 @@ import {
   buildServiceDetail,
   buildOpenApiDocument,
   buildPayoutSplit,
+  buildUcpDiscoveryProfile,
   coerceQueryInput,
   createChallenge,
   hashNormalizedRequest,
   listServiceDefinitions,
   normalizeFastWalletAddress,
   normalizePaymentHeaders,
+  parseUcpImportProfile,
   resolveMarketplaceNetworkConfig,
   serializeQueryInput,
   validateJsonSchema,
@@ -535,13 +537,13 @@ describe("shared marketplace helpers", () => {
     expect(testnetRequirement.asset).toBe("0xd73a0679a2be46981e2a8aedecd951c8b6690e7d5f8502b34ed3ff4cc2163b46");
   });
 
-  it("does not seed mock marketplace services on mainnet", () => {
+  it("does not seed mock executable marketplace routes on mainnet", () => {
     const mainnetConfig = resolveMarketplaceNetworkConfig({
       deploymentNetwork: "mainnet"
     });
 
     expect(buildMarketplaceRoutes(mainnetConfig)).toEqual([]);
-    expect(listServiceDefinitions(mainnetConfig)).toEqual([]);
+    expect(listServiceDefinitions(mainnetConfig).map((service) => service.slug)).toEqual(["shop-fast-amazon"]);
   });
 
   it("freezes payout split amounts from the quoted price", () => {
@@ -1446,6 +1448,98 @@ describe("shared marketplace helpers", () => {
 
     const route = await store.findPublishedRoute("signal-labs-direct", "status", "fast-mainnet");
     expect(route).toBeNull();
+  });
+
+  it("seeds Shop Fast as a discovery-only commerce provider", async () => {
+    const store = new InMemoryMarketplaceStore();
+
+    const published = await store.getPublishedServiceBySlug("shop-fast-amazon");
+    expect(published?.service.serviceType).toBe("external_registry");
+    expect(published?.service.categories).toContain("Commerce");
+    expect(published?.service.routeIds).toEqual([]);
+    expect(published?.endpoints.map((endpoint) => endpoint.endpointType === "external_registry" ? endpoint.title : null))
+      .toEqual(["Amazon Search", "Amazon Quote"]);
+
+    const route = await store.findPublishedRoute("shop-fast-amazon", "amazon-buy", "fast-mainnet");
+    expect(route).toBeNull();
+  });
+
+  it("builds a UCP discovery profile from marketplace and commerce listings", async () => {
+    const store = new InMemoryMarketplaceStore(TESTNET_NETWORK_CONFIG);
+    const services = (await Promise.all(
+      (await store.listPublishedServices()).map((service) => store.getPublishedServiceBySlug(service.slug))
+    )).filter((serviceDetail): serviceDetail is NonNullable<typeof serviceDetail> => Boolean(serviceDetail));
+
+    const profile = buildUcpDiscoveryProfile({
+      baseUrl: "https://marketplace.fast.xyz",
+      services
+    });
+
+    expect(profile.ucp.services["dev.ucp.shopping"]).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "shop-fast-amazon:amazon-search",
+          endpoint: "https://shop.fast.xyz/api/amazon/search"
+        }),
+        expect.objectContaining({
+          id: "shop-fast-amazon:amazon-quote",
+          endpoint: "https://shop.fast.xyz/api/amazon/quote"
+        })
+      ])
+    );
+    expect(profile.ucp.payment_handlers["xyz.fast.usdc"][0]?.config).toMatchObject({
+      paymentProtocol: "x402",
+      settlementAsset: "USDC"
+    });
+    const capabilities = profile.ucp.capabilities as Record<string, unknown>;
+    expect(capabilities["dev.ucp.shopping.checkout"]).toBeUndefined();
+    expect(capabilities["dev.ucp.shopping.order"]).toBeUndefined();
+  });
+
+  it("parses UCP REST service bindings into external registry import candidates", () => {
+    const preview = parseUcpImportProfile({
+      profileUrl: "https://merchant.example.com/.well-known/ucp",
+      profile: {
+        ucp: {
+          version: "2026-01-01",
+          services: {
+            "dev.ucp.shopping": [
+              {
+                version: "2026-01-01",
+                id: "merchant:catalog-search",
+                spec: "https://merchant.example.com/docs/ucp",
+                transport: "rest",
+                endpoint: "https://merchant.example.com/ucp/catalog/search"
+              },
+              {
+                version: "2026-01-01",
+                transport: "mcp",
+                endpoint: "https://merchant.example.com/mcp"
+              }
+            ]
+          },
+          capabilities: {
+            "dev.ucp.shopping.catalog.search": [
+              {
+                version: "2026-01-01"
+              }
+            ]
+          }
+        }
+      }
+    });
+
+    expect(preview.services).toEqual(["dev.ucp.shopping"]);
+    expect(preview.capabilities).toEqual(["dev.ucp.shopping.catalog.search"]);
+    expect(preview.endpoints).toHaveLength(1);
+    expect(preview.endpoints[0]).toMatchObject({
+      endpointType: "external_registry",
+      title: "Merchant Catalog Search",
+      method: "POST",
+      publicUrl: "https://merchant.example.com/ucp/catalog/search",
+      docsUrl: "https://merchant.example.com/docs/ucp"
+    });
+    expect(preview.warnings[0]).toContain("only REST imports are supported");
   });
 
   it("resolves published services by the published snapshot slug even after draft slug edits", async () => {

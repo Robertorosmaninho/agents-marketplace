@@ -157,6 +157,34 @@ describe("marketplace api", () => {
     expect(response.text).toBe("verify-proof-token");
   });
 
+  it("serves UCP discovery metadata for marketplace and commerce listings", async () => {
+    const { app } = await createTestApp({
+      deploymentNetwork: "testnet",
+      baseUrl: "https://marketplace.fast.xyz"
+    });
+
+    const response = await request(app).get("/.well-known/ucp");
+
+    expect(response.status).toBe(200);
+    expect(response.body.ucp.services["dev.ucp.shopping"]).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "shop-fast-amazon:amazon-search",
+          endpoint: "https://shop.fast.xyz/api/amazon/search"
+        }),
+        expect.objectContaining({
+          id: "shop-fast-amazon:amazon-quote",
+          endpoint: "https://shop.fast.xyz/api/amazon/quote"
+        })
+      ])
+    );
+    expect(response.body.ucp.payment_handlers["xyz.fast.usdc"][0].config).toMatchObject({
+      paymentProtocol: "x402"
+    });
+    expect(response.body.ucp.capabilities["dev.ucp.shopping.checkout"]).toBeUndefined();
+    expect(response.body.ucp.capabilities["dev.ucp.shopping.order"]).toBeUndefined();
+  });
+
   it("returns catalog services and service details with generated prompts", async () => {
     const { app } = await createTestApp({
       deploymentNetwork: "testnet"
@@ -3097,6 +3125,84 @@ describe("marketplace api", () => {
       .send({});
 
     expect(routeResponse.status).toBe(404);
+  });
+
+  it("previews UCP profile imports as discovery-only external endpoints", async () => {
+    const providerWallet = await createTestWallet(PROVIDER_PRIVATE_KEY);
+    const { app } = await createTestApp();
+    const providerToken = await createSiteSession(app, providerWallet);
+
+    const profile = await createProviderProfile(app, providerToken, "https://merchant.example.com");
+    expect(profile.status).toBe(201);
+
+    const createdService = await request(app)
+      .post("/provider/services")
+      .set("Authorization", `Bearer ${providerToken}`)
+      .send({
+        serviceType: "external_registry",
+        slug: "merchant-ucp",
+        name: "Merchant UCP",
+        tagline: "UCP commerce endpoints",
+        about: "Discovery-only UCP commerce endpoints that the marketplace lists before proxy execution is supported.",
+        categories: ["Commerce"],
+        promptIntro: 'I want to use the "Merchant UCP" service.',
+        setupInstructions: ["Read the UCP profile first."],
+        websiteUrl: "https://merchant.example.com"
+      });
+
+    expect(createdService.status).toBe(201);
+
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      if (String(input) === "https://merchant.example.com/.well-known/ucp") {
+        return new Response(JSON.stringify({
+          ucp: {
+            version: "2026-01-01",
+            services: {
+              "dev.ucp.shopping": [
+                {
+                  version: "2026-01-01",
+                  id: "merchant:catalog-search",
+                  spec: "https://merchant.example.com/docs/ucp",
+                  transport: "rest",
+                  endpoint: "https://merchant.example.com/ucp/catalog/search"
+                }
+              ]
+            },
+            capabilities: {
+              "dev.ucp.shopping.catalog.search": [
+                {
+                  version: "2026-01-01"
+                }
+              ]
+            }
+          }
+        }), {
+          status: 200,
+          headers: {
+            "content-type": "application/json"
+          }
+        });
+      }
+
+      return new Response("not found", { status: 404 });
+    });
+
+    const preview = await request(app)
+      .post(`/provider/services/${createdService.body.service.id}/ucp/import`)
+      .set("Authorization", `Bearer ${providerToken}`)
+      .send({
+        profileUrl: "https://merchant.example.com/.well-known/ucp"
+      });
+
+    expect(preview.status).toBe(200);
+    expect(preview.body.services).toEqual(["dev.ucp.shopping"]);
+    expect(preview.body.endpoints[0]).toMatchObject({
+      endpointType: "external_registry",
+      title: "Merchant Catalog Search",
+      method: "POST",
+      publicUrl: "https://merchant.example.com/ucp/catalog/search",
+      docsUrl: "https://merchant.example.com/docs/ucp"
+    });
   });
 
   it("rejects invalid external registry drafts without requiring website verification", async () => {

@@ -13,6 +13,7 @@ import {
   SEEDED_PROVIDER_SERVICE_IDS,
   buildSeededProviderServices,
   buildSeededProviderEndpointDrafts,
+  buildSeededPublishedExternalEndpointVersions,
   buildSeededPublishedEndpointVersions,
   buildSeededPublishedServiceVersions
 } from "./seed.js";
@@ -863,6 +864,7 @@ export class InMemoryMarketplaceStore implements MarketplaceStore {
     const draftEndpoints = buildSeededProviderEndpointDrafts(network).map((endpoint) => clone(endpoint));
     const publishedServices = buildSeededPublishedServiceVersions(network).map((service) => clone(service));
     const publishedEndpoints = buildSeededPublishedEndpointVersions(network).map((endpoint) => clone(endpoint));
+    const publishedExternalEndpoints = buildSeededPublishedExternalEndpointVersions(network).map((endpoint) => clone(endpoint));
     const publishedServiceVersionByServiceId = new Map(
       publishedServices.map((service) => [service.serviceId, service.versionId])
     );
@@ -875,6 +877,8 @@ export class InMemoryMarketplaceStore implements MarketplaceStore {
     for (const endpoint of draftEndpoints) {
       if (isMarketplaceEndpointDraft(endpoint)) {
         this.endpointDraftsById.set(endpoint.id, endpoint);
+      } else {
+        this.externalEndpointDraftsById.set(endpoint.id, endpoint);
       }
     }
     for (const publishedService of publishedServices) {
@@ -882,6 +886,9 @@ export class InMemoryMarketplaceStore implements MarketplaceStore {
     }
     for (const endpoint of publishedEndpoints) {
       this.publishedEndpointsByVersionId.set(endpoint.endpointVersionId, endpoint);
+    }
+    for (const endpoint of publishedExternalEndpoints) {
+      this.publishedExternalEndpointsByVersionId.set(endpoint.endpointVersionId, endpoint);
     }
     for (const service of services) {
       const versionId = publishedServiceVersionByServiceId.get(service.id);
@@ -4569,6 +4576,7 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
     const draftEndpoints = buildSeededProviderEndpointDrafts(network);
     const publishedServices = buildSeededPublishedServiceVersions(network);
     const publishedEndpoints = buildSeededPublishedEndpointVersions(network);
+    const publishedExternalEndpoints = buildSeededPublishedExternalEndpointVersions(network);
     const publishedServiceByServiceId = new Map(publishedServices.map((service) => [service.serviceId, service]));
     const activeSeededServiceIds = new Set(services.map((service) => service.id));
     const staleSeededServiceIds = SEEDED_PROVIDER_SERVICE_IDS.filter((serviceId) => !activeSeededServiceIds.has(serviceId));
@@ -4729,6 +4737,45 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
         );
       }
 
+      for (const endpoint of draftEndpoints.filter(isExternalEndpointDraft)) {
+        await client.query(
+          `
+          INSERT INTO provider_external_endpoint_drafts (
+            id, service_id, title, description, method, public_url, docs_url, auth_notes, request_example, response_example,
+            usage_notes, created_at, updated_at
+          ) VALUES (
+            $1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb, $11, $12, $13
+          )
+          ON CONFLICT (id) DO UPDATE SET
+            title = EXCLUDED.title,
+            description = EXCLUDED.description,
+            method = EXCLUDED.method,
+            public_url = EXCLUDED.public_url,
+            docs_url = EXCLUDED.docs_url,
+            auth_notes = EXCLUDED.auth_notes,
+            request_example = EXCLUDED.request_example,
+            response_example = EXCLUDED.response_example,
+            usage_notes = EXCLUDED.usage_notes,
+            updated_at = EXCLUDED.updated_at
+          `,
+          [
+            endpoint.id,
+            endpoint.serviceId,
+            endpoint.title,
+            endpoint.description,
+            endpoint.method,
+            endpoint.publicUrl,
+            endpoint.docsUrl,
+            endpoint.authNotes,
+            JSON.stringify(endpoint.requestExample),
+            JSON.stringify(endpoint.responseExample),
+            endpoint.usageNotes ?? null,
+            endpoint.createdAt,
+            endpoint.updatedAt
+          ]
+        );
+      }
+
       for (const publishedService of publishedServices) {
         await client.query(
           `
@@ -4856,6 +4903,47 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
             endpoint.upstreamAuthMode,
             endpoint.upstreamAuthHeaderName,
             endpoint.upstreamSecretRef,
+            endpoint.createdAt,
+            endpoint.updatedAt
+          ]
+        );
+      }
+
+      for (const endpoint of publishedExternalEndpoints) {
+        await client.query(
+          `
+          INSERT INTO published_external_endpoint_versions (
+            endpoint_version_id, service_id, service_version_id, endpoint_draft_id, title, description, method, public_url,
+            docs_url, auth_notes, request_example, response_example, usage_notes, created_at, updated_at
+          ) VALUES (
+            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12::jsonb, $13, $14, $15
+          )
+          ON CONFLICT (endpoint_version_id) DO UPDATE SET
+            title = EXCLUDED.title,
+            description = EXCLUDED.description,
+            method = EXCLUDED.method,
+            public_url = EXCLUDED.public_url,
+            docs_url = EXCLUDED.docs_url,
+            auth_notes = EXCLUDED.auth_notes,
+            request_example = EXCLUDED.request_example,
+            response_example = EXCLUDED.response_example,
+            usage_notes = EXCLUDED.usage_notes,
+            updated_at = EXCLUDED.updated_at
+          `,
+          [
+            endpoint.endpointVersionId,
+            endpoint.serviceId,
+            endpoint.serviceVersionId,
+            endpoint.endpointDraftId,
+            endpoint.title,
+            endpoint.description,
+            endpoint.method,
+            endpoint.publicUrl,
+            endpoint.docsUrl,
+            endpoint.authNotes,
+            JSON.stringify(endpoint.requestExample),
+            JSON.stringify(endpoint.responseExample),
+            endpoint.usageNotes ?? null,
             endpoint.createdAt,
             endpoint.updatedAt
           ]
