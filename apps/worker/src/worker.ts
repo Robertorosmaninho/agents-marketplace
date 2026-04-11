@@ -8,6 +8,7 @@ import {
   decryptProviderRuntimeKey,
   decryptSecret,
   isPrepaidCreditBilling,
+  requiresX402Payment,
   resolveAsyncJobFailure,
   type AsyncExecuteResult,
   type IdempotencyRecord,
@@ -19,7 +20,8 @@ import {
   type ProviderRegistry,
   type RefundRecord,
   type RefundService,
-  type UpstreamAuthMode
+  type UpstreamAuthMode,
+  type UpstreamPaymentService
 } from "@marketplace/shared";
 
 export interface MarketplaceWorkerOptions {
@@ -28,6 +30,7 @@ export interface MarketplaceWorkerOptions {
   payoutService?: PayoutService;
   providers?: ProviderRegistry;
   secretsKey: string;
+  upstreamPaymentService?: UpstreamPaymentService;
   limit?: number;
 }
 
@@ -136,7 +139,8 @@ export async function runMarketplaceWorkerCycle(options: MarketplaceWorkerOption
         pollResult = await pollHttpRoute({
           job: currentJob,
           store: options.store,
-          secretsKey: options.secretsKey
+          secretsKey: options.secretsKey,
+          upstreamPaymentService: shouldPayUpstreamForRoute(route) ? options.upstreamPaymentService : undefined
         });
       } else {
         await options.store.recordProviderAttempt({
@@ -241,6 +245,10 @@ export async function runMarketplaceWorkerCycle(options: MarketplaceWorkerOption
   }
 }
 
+function shouldPayUpstreamForRoute(route: JobRecord["routeSnapshot"]): boolean {
+  return requiresX402Payment(route) || isPrepaidCreditBilling(route);
+}
+
 async function recoverAcceptedAsyncPlaceholder(
   store: MarketplaceStore,
   job: JobRecord,
@@ -310,6 +318,7 @@ async function pollHttpRoute(input: {
   job: JobRecord;
   store: MarketplaceStore;
   secretsKey: string;
+  upstreamPaymentService?: UpstreamPaymentService;
 }): Promise<PollResult> {
   const route = input.job.routeSnapshot;
   if (!route.asyncConfig || route.asyncConfig.strategy !== "poll" || !route.asyncConfig.pollPath) {
@@ -396,15 +405,17 @@ async function pollHttpRoute(input: {
     applyUpstreamAuthHeaders(headers, route.upstreamAuthMode, decrypted, route.upstreamAuthHeaderName ?? null);
   }
 
+  const url = joinUrl(route.upstreamBaseUrl, route.asyncConfig.pollPath);
+  const body = JSON.stringify({
+    providerJobId: input.job.providerJobId,
+    providerState: input.job.providerState ?? null
+  });
   let response: globalThis.Response;
   try {
-    response = await fetch(joinUrl(route.upstreamBaseUrl, route.asyncConfig.pollPath), {
+    response = await fetch(url, {
       method: "POST",
       headers,
-      body: JSON.stringify({
-        providerJobId: input.job.providerJobId,
-        providerState: input.job.providerState ?? null
-      })
+      body
     });
   } catch (error) {
     return {
@@ -413,6 +424,43 @@ async function pollHttpRoute(input: {
       error: error instanceof Error ? error.message : "Upstream poll failed.",
       providerState: input.job.providerState ?? undefined
     };
+  }
+
+  if (response.status === 402) {
+    if (!input.upstreamPaymentService) {
+      return {
+        status: "failed",
+        permanent: false,
+        error: "Upstream poll requested payment, but marketplace upstream x402 payment is not configured.",
+        providerState: input.job.providerState ?? undefined
+      };
+    }
+
+    try {
+      const paid = await input.upstreamPaymentService.payHttp({
+        url,
+        method: "POST",
+        headers,
+        body
+      });
+      if (paid.statusCode < 200 || paid.statusCode >= 300) {
+        return {
+          status: "failed",
+          permanent: paid.statusCode >= 400 && paid.statusCode < 500 && paid.statusCode !== 408 && paid.statusCode !== 429,
+          error: `Paid upstream poll failed with status ${paid.statusCode}.`,
+          providerState: input.job.providerState ?? undefined
+        };
+      }
+
+      return parseHttpPollResponse(paid.body);
+    } catch (error) {
+      return {
+        status: "failed",
+        permanent: false,
+        error: error instanceof Error ? error.message : "Upstream poll x402 payment failed.",
+        providerState: input.job.providerState ?? undefined
+      };
+    }
   }
 
   if (!response.ok) {

@@ -96,7 +96,8 @@ import {
   type SettlementMode,
   type SuggestionRecord,
   type UpdateProviderEndpointDraftInput,
-  type UpstreamAuthMode
+  type UpstreamAuthMode,
+  type UpstreamPaymentService
 } from "@marketplace/shared";
 
 export interface MarketplaceApiOptions {
@@ -106,6 +107,7 @@ export interface MarketplaceApiOptions {
   adminToken: string;
   facilitatorClient: FacilitatorClient;
   refundService: RefundService;
+  upstreamPaymentService?: UpstreamPaymentService;
   providers?: ProviderRegistry;
   baseUrl?: string;
   webBaseUrl?: string;
@@ -2080,7 +2082,8 @@ export function createMarketplaceApi(options: MarketplaceApiOptions): Express {
         sessionSecret: options.sessionSecret,
         providers,
         store: options.store,
-        secretsKey
+        secretsKey,
+        upstreamPaymentService: isPrepaidCreditBilling(route) ? options.upstreamPaymentService : undefined
       });
     }
 
@@ -2106,7 +2109,8 @@ export function createMarketplaceApi(options: MarketplaceApiOptions): Express {
       refundService: options.refundService,
       providers,
       store: options.store,
-      secretsKey
+      secretsKey,
+      upstreamPaymentService: options.upstreamPaymentService
     });
   };
 
@@ -2164,6 +2168,7 @@ async function handleWalletSessionRoute(input: {
   providers: ProviderRegistry;
   store: MarketplaceStore;
   secretsKey: string;
+  upstreamPaymentService?: UpstreamPaymentService;
 }) {
   if (input.route.settlementMode !== "verified_escrow") {
     return input.res.status(500).json({ error: "Wallet-session routes require Verified escrow settlement." });
@@ -2239,7 +2244,8 @@ async function handleWalletSessionRoute(input: {
       marketplaceBaseUrl: input.marketplaceBaseUrl,
       providers: input.providers,
       store: input.store,
-      secretsKey: input.secretsKey
+      secretsKey: input.secretsKey,
+      upstreamPaymentService: input.upstreamPaymentService
     });
   } catch (error) {
     if (jobToken) {
@@ -2450,6 +2456,7 @@ async function handleX402Route(input: {
   providers: ProviderRegistry;
   store: MarketplaceStore;
   secretsKey: string;
+  upstreamPaymentService?: UpstreamPaymentService;
 }) {
   const requestBody = input.requestInput;
   const paymentHeaders = normalizePaymentHeaders(
@@ -2735,7 +2742,8 @@ async function handleX402Route(input: {
       marketplaceBaseUrl: input.marketplaceBaseUrl,
       providers: input.providers,
       store: input.store,
-      secretsKey: input.secretsKey
+      secretsKey: input.secretsKey,
+      upstreamPaymentService: input.upstreamPaymentService
     });
   } catch (error) {
     if (asyncJobToken) {
@@ -3078,6 +3086,7 @@ async function executeRoute(input: {
   providers: ProviderRegistry;
   store: MarketplaceStore;
   secretsKey: string;
+  upstreamPaymentService?: UpstreamPaymentService;
 }) {
   switch (input.route.executorKind) {
     case "mock":
@@ -3099,7 +3108,8 @@ async function executeRoute(input: {
         jobToken: input.jobToken,
         marketplaceBaseUrl: input.marketplaceBaseUrl,
         store: input.store,
-        secretsKey: input.secretsKey
+        secretsKey: input.secretsKey,
+        upstreamPaymentService: input.upstreamPaymentService
       });
     default:
       throw new Error(`Unsupported route executor: ${String(input.route.executorKind)}`);
@@ -3116,6 +3126,7 @@ async function executeHttpRoute(input: {
   marketplaceBaseUrl?: string;
   store: MarketplaceStore;
   secretsKey: string;
+  upstreamPaymentService?: UpstreamPaymentService;
 }) {
   if (!input.route.upstreamBaseUrl || !input.route.upstreamPath || !input.route.upstreamAuthMode) {
     throw new Error("HTTP route is missing upstream configuration.");
@@ -3217,7 +3228,7 @@ async function executeHttpRoute(input: {
     upstreamBaseUrl: input.route.upstreamBaseUrl!,
     upstreamPath: input.route.upstreamPath!,
     requestSchemaJson: input.route.requestSchemaJson
-  }, input.input, headers);
+  }, input.input, headers, input.upstreamPaymentService);
 }
 
 async function executeUpstreamHttpRequest(
@@ -3229,17 +3240,20 @@ async function executeUpstreamHttpRequest(
     requestSchemaJson: MarketplaceRoute["requestSchemaJson"];
   },
   requestInput: unknown,
-  headers: Record<string, string>
+  headers: Record<string, string>,
+  upstreamPaymentService?: UpstreamPaymentService
 ) {
   let response: globalThis.Response;
+  const url = route.method === "GET"
+    ? `${joinUrl(route.upstreamBaseUrl, route.upstreamPath)}${serializeQueryInput({
+        schema: route.requestSchemaJson,
+        value: requestInput,
+        label: "HTTP route request"
+      })}`
+    : joinUrl(route.upstreamBaseUrl, route.upstreamPath);
+  const requestBody = route.method === "POST" ? JSON.stringify(requestInput) : undefined;
+
   try {
-    const url = route.method === "GET"
-      ? `${joinUrl(route.upstreamBaseUrl, route.upstreamPath)}${serializeQueryInput({
-          schema: route.requestSchemaJson,
-          value: requestInput,
-          label: "HTTP route request"
-        })}`
-      : joinUrl(route.upstreamBaseUrl, route.upstreamPath);
     response = await fetch(url, route.method === "GET"
       ? {
           method: "GET",
@@ -3248,7 +3262,7 @@ async function executeUpstreamHttpRequest(
       : {
           method: "POST",
           headers,
-          body: JSON.stringify(requestInput)
+          body: requestBody
         });
   } catch (error) {
     return {
@@ -3261,6 +3275,43 @@ async function executeUpstreamHttpRequest(
         "content-type": "application/json"
       }
     };
+  }
+
+  if (response.status === 402) {
+    if (!upstreamPaymentService) {
+      return {
+        kind: "sync" as const,
+        statusCode: 502,
+        body: {
+          error: "Upstream requested payment, but marketplace upstream x402 payment is not configured."
+        },
+        headers: {
+          "content-type": "application/json"
+        }
+      };
+    }
+
+    try {
+      const paid = await upstreamPaymentService.payHttp({
+        url,
+        method: route.method,
+        headers,
+        ...(requestBody ? { body: requestBody } : {})
+      });
+
+      return normalizeUpstreamPaidHttpResult(route, paid);
+    } catch (error) {
+      return {
+        kind: "sync" as const,
+        statusCode: 502,
+        body: {
+          error: error instanceof Error ? error.message : "Upstream x402 payment failed."
+        },
+        headers: {
+          "content-type": "application/json"
+        }
+      };
+    }
   }
 
   if (route.mode === "async") {
@@ -3288,8 +3339,47 @@ async function executeUpstreamHttpRequest(
   };
 }
 
+function normalizeUpstreamPaidHttpResult(
+  route: {
+    mode: MarketplaceRoute["mode"];
+  },
+  paid: {
+    statusCode: number;
+    headers: Record<string, string>;
+    body: unknown;
+  }
+) {
+  const headers = {
+    "content-type": paid.headers["content-type"] ?? paid.headers["Content-Type"] ?? "application/json"
+  };
+
+  if (route.mode === "async") {
+    if (paid.statusCode !== 202) {
+      return {
+        kind: "sync" as const,
+        statusCode: paid.statusCode,
+        body: paid.body,
+        headers
+      };
+    }
+
+    return parseAsyncExecuteBody(paid.body);
+  }
+
+  return {
+    kind: "sync" as const,
+    statusCode: paid.statusCode,
+    body: paid.body,
+    headers
+  };
+}
+
 async function parseAsyncExecuteResponse(response: globalThis.Response) {
   const body = await safeResponseBody(response);
+  return parseAsyncExecuteBody(body);
+}
+
+function parseAsyncExecuteBody(body: unknown) {
   if (!body || typeof body !== "object") {
     throw new Error("Async upstream acceptance body must be a JSON object.");
   }

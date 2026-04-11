@@ -5,6 +5,7 @@ import {
   PostgresMarketplaceStore,
   createFastPayoutService,
   createFastRefundService,
+  createX402UpstreamPaymentService,
   normalizeMarketplaceDeploymentNetwork,
   resolveMarketplaceNetworkConfig
 } from "@marketplace/shared";
@@ -42,6 +43,15 @@ const payoutService = createFastPayoutService({
   privateKey: process.env.MARKETPLACE_TREASURY_PRIVATE_KEY,
   keyfilePath: process.env.MARKETPLACE_TREASURY_KEYFILE
 });
+const upstreamEvmPrivateKey = process.env.MARKETPLACE_UPSTREAM_EVM_PRIVATE_KEY as `0x${string}` | undefined;
+const upstreamEvmAddress = process.env.MARKETPLACE_UPSTREAM_EVM_ADDRESS as `0x${string}` | undefined;
+const upstreamPaymentService = upstreamEvmPrivateKey && upstreamEvmAddress
+  ? createX402UpstreamPaymentService({
+      evmPrivateKey: upstreamEvmPrivateKey,
+      evmAddress: upstreamEvmAddress,
+      verbose: process.env.MARKETPLACE_UPSTREAM_X402_VERBOSE === "true"
+    })
+  : undefined;
 
 const intervalMs = Number(process.env.WORKER_POLL_INTERVAL_MS ?? DEFAULT_JOB_POLL_INTERVAL_MS);
 let stopped = false;
@@ -57,6 +67,7 @@ async function runCycle() {
       store,
       refundService,
       payoutService,
+      upstreamPaymentService,
       secretsKey: runtimeSecretsKey
     });
   } catch (error) {

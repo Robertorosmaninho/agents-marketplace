@@ -112,6 +112,16 @@ export MARKETPLACE_TREASURY_PRIVATE_KEY=<fast-ed25519-private-key-hex>
 export FAST_RPC_URL=https://api.fast.xyz/proxy
 ```
 
+Optional upstream x402 payment variables for marketplace-proxied providers:
+
+```bash
+export MARKETPLACE_UPSTREAM_EVM_PRIVATE_KEY=<base-evm-private-key>
+export MARKETPLACE_UPSTREAM_EVM_ADDRESS=<base-evm-address>
+export MARKETPLACE_UPSTREAM_X402_VERBOSE=false
+```
+
+Set these on both the API and worker when upstream providers require Base USDC x402 payment before responding. Buyer payments still settle to the marketplace treasury on Fast; these variables fund the marketplace-owned upstream payment leg.
+
 `MARKETPLACE_SECRETS_KEY` is required. It is used for provider runtime keys, encrypted upstream secrets, and signed marketplace identity headers for Community/direct and prepaid-credit providers.
 
 Optional facilitator variables:

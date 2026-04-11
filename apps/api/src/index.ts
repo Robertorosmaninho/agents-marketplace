@@ -1,6 +1,10 @@
 import { Pool } from "pg";
 
-import { PostgresMarketplaceStore, createFastRefundService } from "@marketplace/shared";
+import {
+  PostgresMarketplaceStore,
+  createFastRefundService,
+  createX402UpstreamPaymentService
+} from "@marketplace/shared";
 
 import { createMarketplaceApi, createX402FacilitatorClient } from "./app.js";
 
@@ -16,6 +20,8 @@ const secretsKey = process.env.MARKETPLACE_SECRETS_KEY;
 const refundPrivateKey = process.env.MARKETPLACE_TREASURY_PRIVATE_KEY;
 const refundKeyfile = process.env.MARKETPLACE_TREASURY_KEYFILE;
 const refundRpcUrl = process.env.FAST_RPC_URL;
+const upstreamEvmPrivateKey = process.env.MARKETPLACE_UPSTREAM_EVM_PRIVATE_KEY as `0x${string}` | undefined;
+const upstreamEvmAddress = process.env.MARKETPLACE_UPSTREAM_EVM_ADDRESS as `0x${string}` | undefined;
 
 if (!databaseUrl) {
   throw new Error("DATABASE_URL is required.");
@@ -39,6 +45,13 @@ if (!secretsKey) {
 
 const pool = new Pool({ connectionString: databaseUrl });
 const store = new PostgresMarketplaceStore(pool);
+const upstreamPaymentService = upstreamEvmPrivateKey && upstreamEvmAddress
+  ? createX402UpstreamPaymentService({
+      evmPrivateKey: upstreamEvmPrivateKey,
+      evmAddress: upstreamEvmAddress,
+      verbose: process.env.MARKETPLACE_UPSTREAM_X402_VERBOSE === "true"
+    })
+  : undefined;
 
 await store.ensureSchema();
 
@@ -53,6 +66,7 @@ const app = createMarketplaceApi({
     privateKey: refundPrivateKey,
     keyfilePath: refundKeyfile
   }),
+  upstreamPaymentService,
   baseUrl,
   webBaseUrl,
   secretsKey,

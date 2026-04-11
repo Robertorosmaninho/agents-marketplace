@@ -72,6 +72,7 @@ async function createTestApp(
     store?: InMemoryMarketplaceStore;
     providers?: Parameters<typeof createMarketplaceApi>[0]["providers"];
     refundService?: Parameters<typeof createMarketplaceApi>[0]["refundService"];
+    upstreamPaymentService?: Parameters<typeof createMarketplaceApi>[0]["upstreamPaymentService"];
     baseUrl?: string;
     webBaseUrl?: string;
     siteProofToken?: string | null;
@@ -108,6 +109,7 @@ async function createTestApp(
           return { txHash: "0xrefund" };
         }
     },
+    upstreamPaymentService: input.upstreamPaymentService,
     providers: input.providers,
     baseUrl: input.baseUrl,
     webBaseUrl: input.webBaseUrl ?? "https://marketplace.example.com",
@@ -936,7 +938,32 @@ describe("marketplace api", () => {
   it("supports provider onboarding, review publish, and paid execution for a self-serve service", async () => {
     const providerWallet = await createTestWallet(PROVIDER_PRIVATE_KEY);
     const replacementPayoutWallet = await createTestWallet(OTHER_PRIVATE_KEY);
-    const { app, buyer, store } = await createTestApp();
+    const upstreamPayments: Array<{
+      url: string;
+      method: "GET" | "POST";
+      headers: Record<string, string>;
+      body?: string;
+    }> = [];
+    const { app, buyer, store } = await createTestApp({
+      upstreamPaymentService: {
+        async payHttp(input) {
+          upstreamPayments.push(input);
+          return {
+            statusCode: 200,
+            headers: {
+              "content-type": "application/json"
+            },
+            body: { symbol: "FAST", price: 42.5 },
+            payment: {
+              network: "base",
+              amount: "100",
+              recipient: "0x0000000000000000000000000000000000000001",
+              txHash: "0xupstream"
+            }
+          };
+        }
+      }
+    });
     const providerToken = await createSiteSession(app, providerWallet);
 
     const profile = await request(app)
@@ -1045,8 +1072,8 @@ describe("marketplace api", () => {
       }
 
       if (url === "https://provider.example.com/api/quote") {
-        return new Response(JSON.stringify({ symbol: "FAST", price: 42.5 }), {
-          status: 200,
+        return new Response(JSON.stringify({ accepts: [{ network: "base", maxAmountRequired: "0.0001" }] }), {
+          status: 402,
           headers: {
             "content-type": "application/json"
           }
@@ -1123,6 +1150,18 @@ describe("marketplace api", () => {
         })
       })
     );
+    expect(upstreamPayments).toEqual([
+      expect.objectContaining({
+        url: "https://provider.example.com/api/quote",
+        method: "POST",
+        headers: expect.objectContaining({
+          "X-MARKETPLACE-BUYER-WALLET": buyer.address,
+          "X-MARKETPLACE-SERVICE-ID": serviceId,
+          "X-MARKETPLACE-PAYMENT-ID": "payment_provider_sync_1"
+        }),
+        body: JSON.stringify({ symbol: "FAST" })
+      })
+    ]);
 
     const record = await store.getIdempotencyByPaymentId("payment_provider_sync_1");
     expect(record?.routeId).toBe("signals.quote.v1");
@@ -1138,7 +1177,21 @@ describe("marketplace api", () => {
 
   it("supports provider onboarding, publish, and free execution for a self-serve service", async () => {
     const providerWallet = await createTestWallet(PROVIDER_PRIVATE_KEY);
-    const { app, store } = await createTestApp();
+    const upstreamPayments: Array<unknown> = [];
+    const { app, store } = await createTestApp({
+      upstreamPaymentService: {
+        async payHttp(input) {
+          upstreamPayments.push(input);
+          return {
+            statusCode: 200,
+            headers: {
+              "content-type": "application/json"
+            },
+            body: { items: ["paid"] }
+          };
+        }
+      }
+    });
     const providerToken = await createSiteSession(app, providerWallet);
 
     const profile = await request(app)
@@ -1257,6 +1310,15 @@ describe("marketplace api", () => {
           });
         }
 
+        if (requestBody.query === "PAY") {
+          return new Response(JSON.stringify({ accepts: [{ network: "base", maxAmountRequired: "0.0001" }] }), {
+            status: 402,
+            headers: {
+              "content-type": "application/json"
+            }
+          });
+        }
+
         return new Response(JSON.stringify({ items: ["alpha"] }), {
           status: 200,
           headers: {
@@ -1323,6 +1385,14 @@ describe("marketplace api", () => {
     expect(analytics.totalCalls).toBe(2);
     expect(analytics.revenueRaw).toBe("0");
     expect(analytics.successRate30d).toBe(50);
+
+    const paywalledFreeResponse = await request(app)
+      .post("/api/signals-free/search")
+      .send({ query: "PAY" });
+
+    expect(paywalledFreeResponse.status).toBe(502);
+    expect(paywalledFreeResponse.body.error).toContain("upstream x402 payment is not configured");
+    expect(upstreamPayments).toHaveLength(0);
   });
 
   it("accepts webhook callbacks for async free routes after runtime-key rotation", async () => {
