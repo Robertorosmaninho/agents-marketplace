@@ -1,4 +1,5 @@
 import { FastProvider } from "@fastxyz/sdk";
+import { privateKeyToAccount } from "viem/accounts";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -9,12 +10,15 @@ import {
   buildMarketplaceRouteDetail,
   buildPriceRange,
   buildMarketplaceRoutes,
+  buildBaseUsdcUpstreamPaymentPolicy,
   buildPaymentRequirementForRoute,
   buildRouteAuthRequirement,
   buildServiceDetail,
   buildOpenApiDocument,
   buildPayoutSplit,
+  buildUcpDiscoveryProfile,
   coerceQueryInput,
+  createX402UpstreamPaymentService,
   createChallenge,
   hashNormalizedRequest,
   listServiceDefinitions,
@@ -22,6 +26,7 @@ import {
   normalizePaymentHeaders,
   resolveMarketplaceNetworkConfig,
   serializeQueryInput,
+  validateUpstreamPaymentRequirements,
   validateJsonSchema,
   verifyWalletChallenge
 } from "./index.js";
@@ -38,6 +43,8 @@ const TESTNET_NETWORK_CONFIG = resolveMarketplaceNetworkConfig({
   deploymentNetwork: "testnet"
 });
 const TESTNET_MARKETPLACE_ROUTES = buildMarketplaceRoutes(TESTNET_NETWORK_CONFIG);
+const TESTNET_QUICK_INSIGHT_ROUTE = TESTNET_MARKETPLACE_ROUTES.find((route) => route.routeId === "mock.quick-insight.v1")!;
+const TESTNET_ASYNC_REPORT_ROUTE = TESTNET_MARKETPLACE_ROUTES.find((route) => route.routeId === "mock.async-report.v1")!;
 const TESTNET_SERVICE_DEFINITIONS = listServiceDefinitions(TESTNET_NETWORK_CONFIG);
 
 async function createTestWallet() {
@@ -104,6 +111,161 @@ function expectMarketplaceCatalogEndpoint(
   >;
 }
 
+describe("upstream x402 payment policy", () => {
+  it("bounds fixed route upstream payments to Base USDC and the persisted route price", () => {
+    const route = {
+      ...TESTNET_QUICK_INSIGHT_ROUTE,
+      billing: {
+        type: "fixed_x402" as const,
+        price: "$0.0001"
+      },
+      price: "$0.0001"
+    };
+    const policy = buildBaseUsdcUpstreamPaymentPolicy({ route });
+
+    expect(policy).toEqual({
+      network: "base",
+      asset: "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+      maxAmountRaw: "100"
+    });
+
+    expect(validateUpstreamPaymentRequirements([
+      {
+        scheme: "exact",
+        network: "base",
+        maxAmountRequired: "100",
+        payTo: "0x0000000000000000000000000000000000000001",
+        asset: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+      }
+    ], policy!)).toMatchObject({
+      network: "base",
+      maxAmountRequired: "100"
+    });
+  });
+
+  it("rejects supported EVM requirements outside the route upstream payment policy", () => {
+    const policy = {
+      network: "base" as const,
+      asset: "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913" as const,
+      maxAmountRaw: "100"
+    };
+
+    expect(validateUpstreamPaymentRequirements([
+      {
+        scheme: "exact",
+        network: "arbitrum",
+        maxAmountRequired: "100",
+        payTo: "0x0000000000000000000000000000000000000001",
+        asset: policy.asset
+      },
+      {
+        scheme: "exact",
+        network: "base",
+        maxAmountRequired: "100",
+        payTo: "0x0000000000000000000000000000000000000001",
+        asset: policy.asset
+      }
+    ], policy)).toMatchObject({
+      network: "base",
+      maxAmountRequired: "100"
+    });
+
+    expect(() => validateUpstreamPaymentRequirements([
+      {
+        scheme: "exact",
+        network: "base",
+        maxAmountRequired: "101",
+        payTo: "0x0000000000000000000000000000000000000001",
+        asset: policy.asset
+      }
+    ], policy)).toThrow("did not match");
+  });
+
+  it("signs the validated Base USDC requirement without a second unvalidated 402 selection", async () => {
+    const privateKey = `0x${"11".repeat(32)}` as `0x${string}`;
+    const account = privateKeyToAccount(privateKey);
+    const service = createX402UpstreamPaymentService({
+      evmPrivateKey: privateKey,
+      evmAddress: account.address
+    });
+    const calls: Array<{ url: string; paymentHeader: string | null }> = [];
+    const previousFetch = globalThis.fetch;
+    globalThis.fetch = async (input, init) => {
+      calls.push({
+        url: String(input),
+        paymentHeader: new Headers(init?.headers).get("X-PAYMENT")
+      });
+      if (calls.length === 1) {
+        return new Response(JSON.stringify({
+          x402Version: 1,
+          accepts: [
+            {
+              scheme: "exact",
+              network: "arbitrum",
+              maxAmountRequired: "100",
+              payTo: "0x0000000000000000000000000000000000000001",
+              asset: "0x0000000000000000000000000000000000000002"
+            },
+            {
+              scheme: "exact",
+              network: "base",
+              maxAmountRequired: "100",
+              payTo: "0x0000000000000000000000000000000000000001",
+              asset: "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+            }
+          ]
+        }), {
+          status: 402,
+          headers: {
+            "content-type": "application/json"
+          }
+        });
+      }
+
+      return new Response(JSON.stringify({ ok: true, txHash: "0xsettled" }), {
+        status: 200,
+        headers: {
+          "content-type": "application/json"
+        }
+      });
+    };
+
+    try {
+      const result = await service.payHttp({
+        url: "https://provider.example.com/api",
+        method: "POST",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({ query: "FAST" }),
+        policy: {
+          network: "base",
+          asset: "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+          maxAmountRaw: "100"
+        }
+      });
+      const paidPayload = JSON.parse(Buffer.from(calls[1]!.paymentHeader!, "base64").toString("utf8")) as {
+        network: string;
+        payload: {
+          authorization: {
+            value: string;
+            to: string;
+          };
+        };
+      };
+
+      expect(result.statusCode).toBe(200);
+      expect(calls).toHaveLength(2);
+      expect(calls[0]?.paymentHeader).toBeNull();
+      expect(paidPayload.network).toBe("base");
+      expect(paidPayload.payload.authorization.value).toBe("100");
+      expect(paidPayload.payload.authorization.to).toBe("0x0000000000000000000000000000000000000001");
+    } finally {
+      globalThis.fetch = previousFetch;
+    }
+  });
+});
+
 describe("shared marketplace helpers", () => {
   it("normalizes payment headers from PAYMENT-* names", () => {
     expect(
@@ -138,7 +300,7 @@ describe("shared marketplace helpers", () => {
   });
 
   it("hashes normalized requests deterministically", () => {
-    const route = TESTNET_MARKETPLACE_ROUTES[0];
+    const route = TESTNET_QUICK_INSIGHT_ROUTE;
     const first = hashNormalizedRequest(route, {
       query: "alpha",
       nested: {
@@ -203,7 +365,7 @@ describe("shared marketplace helpers", () => {
     expect(second).toEqual(first);
 
     const route = {
-      ...TESTNET_MARKETPLACE_ROUTES[0],
+      ...TESTNET_QUICK_INSIGHT_ROUTE,
       routeId: "mock.lookup.v1",
       operation: "lookup",
       method: "GET" as const,
@@ -510,7 +672,7 @@ describe("shared marketplace helpers", () => {
     const testnetConfig = resolveMarketplaceNetworkConfig({
       deploymentNetwork: "testnet"
     });
-    const baseRoute = TESTNET_MARKETPLACE_ROUTES[0];
+    const baseRoute = TESTNET_QUICK_INSIGHT_ROUTE;
     if (!baseRoute) {
       throw new Error("Mock seeded route is missing.");
     }
@@ -535,18 +697,24 @@ describe("shared marketplace helpers", () => {
     expect(testnetRequirement.asset).toBe("0xd73a0679a2be46981e2a8aedecd951c8b6690e7d5f8502b34ed3ff4cc2163b46");
   });
 
-  it("does not seed mock marketplace services on mainnet", () => {
+  it("seeds Shop Fast executable commerce routes but no mock routes on mainnet", () => {
     const mainnetConfig = resolveMarketplaceNetworkConfig({
       deploymentNetwork: "mainnet"
     });
 
-    expect(buildMarketplaceRoutes(mainnetConfig)).toEqual([]);
-    expect(listServiceDefinitions(mainnetConfig)).toEqual([]);
+    expect(buildMarketplaceRoutes(mainnetConfig).map((route) => route.routeId)).toEqual([
+      "shop-fast-amazon.amazon-quote.v1",
+      "shop-fast-amazon.amazon-buy.v1"
+    ]);
+    expect(listServiceDefinitions(mainnetConfig).map((service) => service.slug)).toEqual([
+      "shop-fast-amazon",
+      "shop-fast-amazon-execute"
+    ]);
   });
 
   it("freezes payout split amounts from the quoted price", () => {
     const split = buildPayoutSplit({
-      route: TESTNET_MARKETPLACE_ROUTES[0],
+      route: TESTNET_QUICK_INSIGHT_ROUTE,
       treasuryWallet: "fast1marketplacetreasury000000000000000000000000000000000000",
       paymentDestinationWallet: "fast1marketplacetreasury000000000000000000000000000000000000",
       quotedPrice: "50000"
@@ -782,7 +950,7 @@ describe("shared marketplace helpers", () => {
       paymentId: "payment_async_catalog_1",
       normalizedRequestHash: "hash_async",
       buyerWallet: "fast1buyer00000000000000000000000000000000000000000000000000000000",
-      route: TESTNET_MARKETPLACE_ROUTES[1],
+      route: TESTNET_ASYNC_REPORT_ROUTE,
       quotedPrice: "150000",
       payoutSplit: buildEscrowSplit({
         providerAccountId: "mock",
@@ -1446,6 +1614,139 @@ describe("shared marketplace helpers", () => {
 
     const route = await store.findPublishedRoute("signal-labs-direct", "status", "fast-mainnet");
     expect(route).toBeNull();
+  });
+
+  it("seeds Shop Fast discovery and executable commerce providers", async () => {
+    const store = new InMemoryMarketplaceStore();
+
+    const published = await store.getPublishedServiceBySlug("shop-fast-amazon");
+    expect(published?.service.serviceType).toBe("external_registry");
+    expect(published?.service.categories).toContain("Commerce");
+    expect(published?.service.routeIds).toEqual([]);
+    expect(published?.endpoints.map((endpoint) => endpoint.endpointType === "external_registry" ? endpoint.title : null))
+      .toEqual(["Amazon Search", "Amazon Quote", "Amazon Buy", "Amazon Order Status"]);
+
+    const route = await store.findPublishedRoute("shop-fast-amazon", "amazon-buy", "fast-mainnet");
+    expect(route).toMatchObject({
+      billing: {
+        type: "commerce_quote_x402"
+      },
+      upstreamBaseUrl: "https://shop.fast.xyz",
+      upstreamPath: "/api/amazon/buy"
+    });
+
+    const executable = await store.getPublishedServiceBySlug("shop-fast-amazon-execute");
+    expect(executable?.service.serviceType).toBe("marketplace_proxy");
+    expect(executable?.service.apiNamespace).toBe("shop-fast-amazon");
+    expect(executable?.endpoints.map((endpoint) => endpoint.endpointType === "marketplace_proxy" ? endpoint.operation : null))
+      .toEqual(["amazon-quote", "amazon-buy"]);
+  });
+
+  it("persists commerce quote, consent, order, and fulfillment records", async () => {
+    const store = new InMemoryMarketplaceStore();
+
+    const quote = await store.saveCommerceQuote({
+      serviceId: "service_shop_fast_amazon_execution",
+      routeId: "shop-fast-amazon.amazon-quote.v1",
+      provider: "shop-fast-amazon",
+      operation: "amazon-quote",
+      quoteId: "quote_store_test",
+      amount: "24990000",
+      currency: "USDC",
+      expiresAt: "2026-03-19T00:15:00.000Z",
+      requestBody: { productId: "B000EXAMPLE" },
+      responseBody: { quoteId: "quote_store_test" }
+    });
+
+    expect(await store.getCommerceQuote("quote_store_test")).toMatchObject({
+      id: quote.id,
+      status: "quoted",
+      amount: "24990000"
+    });
+
+    const consent = await store.recordCommerceConsent({
+      quoteId: "quote_store_test",
+      buyerWallet: "fast1buyer00000000000000000000000000000000000000000000000000000000",
+      consentPayload: { accepted: true },
+      consentHash: "hash",
+      acceptedAt: "2026-03-19T00:10:00.000Z"
+    });
+    expect(await store.getCommerceConsentByQuote("quote_store_test", consent.buyerWallet)).toMatchObject({
+      id: consent.id
+    });
+    expect(await store.getCommerceQuote("quote_store_test")).toMatchObject({
+      status: "accepted"
+    });
+
+    const order = await store.createCommerceOrder({
+      quoteId: "quote_store_test",
+      paymentId: "payment_commerce_test",
+      buyerWallet: consent.buyerWallet,
+      routeId: "shop-fast-amazon.amazon-buy.v1",
+      requestId: "request_commerce_test",
+      requestBody: { quoteId: "quote_store_test" }
+    });
+    await store.updateCommerceOrder({
+      orderId: order.id,
+      status: "placed",
+      providerOrderId: "order_store_test",
+      responseBody: { orderId: "order_store_test" }
+    });
+    await store.recordCommerceFulfillment({
+      orderId: order.id,
+      status: "pending_shipment",
+      tracking: null,
+      rawPayload: { status: "pending_shipment" }
+    });
+
+    expect(await store.getCommerceOrderByPaymentId("payment_commerce_test")).toMatchObject({
+      id: order.id,
+      status: "placed",
+      providerOrderId: "order_store_test"
+    });
+    expect(await store.getCommerceFulfillmentByOrderId(order.id)).toMatchObject({
+      status: "pending_shipment"
+    });
+  });
+
+  it("builds a UCP discovery profile from marketplace and commerce listings", async () => {
+    const store = new InMemoryMarketplaceStore(TESTNET_NETWORK_CONFIG);
+    const services = (await Promise.all(
+      (await store.listPublishedServices()).map((service) => store.getPublishedServiceBySlug(service.slug))
+    )).filter((serviceDetail): serviceDetail is NonNullable<typeof serviceDetail> => Boolean(serviceDetail));
+
+    const profile = buildUcpDiscoveryProfile({
+      baseUrl: "https://marketplace.fast.xyz",
+      services
+    });
+
+    expect(profile.ucp.services["dev.ucp.shopping"]).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "shop-fast-amazon:amazon-search",
+          endpoint: "https://shop.fast.xyz/api/amazon/search"
+        }),
+        expect.objectContaining({
+          id: "shop-fast-amazon:amazon-quote",
+          endpoint: "https://shop.fast.xyz/api/amazon/quote"
+        }),
+        expect.objectContaining({
+          id: "shop-fast-amazon:amazon-buy",
+          endpoint: "https://shop.fast.xyz/api/amazon/buy"
+        }),
+        expect.objectContaining({
+          id: "shop-fast-amazon:amazon-order-status",
+          endpoint: "https://shop.fast.xyz/api/amazon/order-status"
+        })
+      ])
+    );
+    expect(profile.ucp.payment_handlers["xyz.fast.usdc"][0]?.config).toMatchObject({
+      paymentProtocol: "x402",
+      settlementAsset: "USDC"
+    });
+    const capabilities = profile.ucp.capabilities as Record<string, unknown>;
+    expect(capabilities["dev.ucp.shopping.checkout"]).toBeUndefined();
+    expect(capabilities["dev.ucp.shopping.order"]).toBeUndefined();
   });
 
   it("resolves published services by the published snapshot slug even after draft slug edits", async () => {

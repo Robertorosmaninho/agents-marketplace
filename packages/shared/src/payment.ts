@@ -44,11 +44,16 @@ export function normalizePaymentHeaders(headers: Record<string, string | string[
   };
 }
 
-export function buildPaymentRequirementForRoute(route: MarketplaceRoute, payTo: string, requestBody?: unknown): PaymentRequirement {
+export function buildPaymentRequirementForRoute(
+  route: MarketplaceRoute,
+  payTo: string,
+  requestBody?: unknown,
+  priceOverride?: string
+): PaymentRequirement {
   return createPaymentRequirement(
     payTo,
     {
-      price: quotedPriceString(route, requestBody),
+      price: priceOverride ?? quotedPriceString(route, requestBody),
       network: route.network,
       networkConfig: {
         asset: getMarketplaceAssetId(route.network),
@@ -64,11 +69,16 @@ export function buildPaymentRequirementForRoute(route: MarketplaceRoute, payTo: 
   );
 }
 
-export function buildPaymentRequiredResponse(route: MarketplaceRoute, payTo: string, requestBody?: unknown) {
+export function buildPaymentRequiredResponse(
+  route: MarketplaceRoute,
+  payTo: string,
+  requestBody?: unknown,
+  priceOverride?: string
+) {
   return createPaymentRequired(
     payTo,
     {
-      price: quotedPriceString(route, requestBody),
+      price: priceOverride ?? quotedPriceString(route, requestBody),
       network: route.network,
       networkConfig: {
         asset: getMarketplaceAssetId(route.network),
@@ -84,8 +94,13 @@ export function buildPaymentRequiredResponse(route: MarketplaceRoute, payTo: str
   );
 }
 
-export function buildPaymentRequiredHeaders(route: MarketplaceRoute, payTo: string, requestBody?: unknown): Record<string, string> {
-  const body = buildPaymentRequiredResponse(route, payTo, requestBody);
+export function buildPaymentRequiredHeaders(
+  route: MarketplaceRoute,
+  payTo: string,
+  requestBody?: unknown,
+  priceOverride?: string
+): Record<string, string> {
+  const body = buildPaymentRequiredResponse(route, payTo, requestBody, priceOverride);
   return {
     [PAYMENT_REQUIRED_HEADER]: encodePayload(body)
   };

@@ -72,6 +72,7 @@ async function createTestApp(
     store?: InMemoryMarketplaceStore;
     providers?: Parameters<typeof createMarketplaceApi>[0]["providers"];
     refundService?: Parameters<typeof createMarketplaceApi>[0]["refundService"];
+    upstreamPaymentService?: Parameters<typeof createMarketplaceApi>[0]["upstreamPaymentService"];
     baseUrl?: string;
     webBaseUrl?: string;
     siteProofToken?: string | null;
@@ -108,6 +109,7 @@ async function createTestApp(
           return { txHash: "0xrefund" };
         }
     },
+    upstreamPaymentService: input.upstreamPaymentService,
     providers: input.providers,
     baseUrl: input.baseUrl,
     webBaseUrl: input.webBaseUrl ?? "https://marketplace.example.com",
@@ -155,6 +157,42 @@ describe("marketplace api", () => {
 
     expect(response.status).toBe(200);
     expect(response.text).toBe("verify-proof-token");
+  });
+
+  it("serves UCP discovery metadata for marketplace and commerce listings", async () => {
+    const { app } = await createTestApp({
+      deploymentNetwork: "testnet",
+      baseUrl: "https://marketplace.fast.xyz"
+    });
+
+    const response = await request(app).get("/.well-known/ucp");
+
+    expect(response.status).toBe(200);
+    expect(response.body.ucp.services["dev.ucp.shopping"]).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "shop-fast-amazon:amazon-search",
+          endpoint: "https://shop.fast.xyz/api/amazon/search"
+        }),
+        expect.objectContaining({
+          id: "shop-fast-amazon:amazon-quote",
+          endpoint: "https://shop.fast.xyz/api/amazon/quote"
+        }),
+        expect.objectContaining({
+          id: "shop-fast-amazon:amazon-buy",
+          endpoint: "https://shop.fast.xyz/api/amazon/buy"
+        }),
+        expect.objectContaining({
+          id: "shop-fast-amazon:amazon-order-status",
+          endpoint: "https://shop.fast.xyz/api/amazon/order-status"
+        })
+      ])
+    );
+    expect(response.body.ucp.payment_handlers["xyz.fast.usdc"][0].config).toMatchObject({
+      paymentProtocol: "x402"
+    });
+    expect(response.body.ucp.capabilities["dev.ucp.shopping.checkout"]).toBeUndefined();
+    expect(response.body.ucp.capabilities["dev.ucp.shopping.order"]).toBeUndefined();
   });
 
   it("returns catalog services and service details with generated prompts", async () => {
@@ -436,6 +474,99 @@ describe("marketplace api", () => {
     expect(record?.payoutSplit.marketplaceAmount).toBe("100");
     expect(record?.payoutSplit.providerAmount).toBe("0");
     expect(record?.payoutSplit.providerAccountId).toBe("provider_marketplace");
+  });
+
+  it("records Shop Fast commerce quote, consent, order, and fulfillment around amazon-buy", async () => {
+    const { app, store } = await createTestApp();
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = String(input);
+      if (url === "https://shop.fast.xyz/api/amazon/quote") {
+        return new Response(JSON.stringify({
+          quoteId: "quote_api_test",
+          expiresAt: "2099-01-01T00:00:00.000Z",
+          payment: {
+            amount: "24.99",
+            currency: "USDC",
+            network: "fast"
+          }
+        }), {
+          status: 200,
+          headers: {
+            "content-type": "application/json"
+          }
+        });
+      }
+
+      if (url === "https://shop.fast.xyz/api/amazon/buy") {
+        return new Response(JSON.stringify({
+          orderId: "order_api_test",
+          status: "placed",
+          fulfillment: {
+            status: "pending_shipment",
+            tracking: null
+          }
+        }), {
+          status: 200,
+          headers: {
+            "content-type": "application/json"
+          }
+        });
+      }
+
+      return new Response(JSON.stringify({ error: "not found" }), { status: 404 });
+    });
+
+    const quoteResponse = await request(app)
+      .post("/api/shop-fast-amazon/amazon-quote")
+      .send({
+        productId: "B000EXAMPLE",
+        quantity: 1,
+        shipToCountry: "US",
+        paymentCurrency: "USDC"
+      });
+
+    expect(quoteResponse.status).toBe(200);
+    expect(await store.getCommerceQuote("quote_api_test")).toMatchObject({
+      amount: "24990000",
+      status: "quoted"
+    });
+
+    const buyBody = {
+      quoteId: "quote_api_test",
+      buyerConsent: {
+        accepted: true,
+        acceptedAt: "2026-03-19T00:10:00.000Z"
+      }
+    };
+    const paymentRequired = await request(app)
+      .post("/api/shop-fast-amazon/amazon-buy")
+      .send(buyBody);
+
+    expect(paymentRequired.status).toBe(402);
+    expect(paymentRequired.headers["payment-required"]).toBeDefined();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    const buyResponse = await request(app)
+      .post("/api/shop-fast-amazon/amazon-buy")
+      .set("PAYMENT-SIGNATURE", Buffer.from(JSON.stringify({ paid: true })).toString("base64"))
+      .set("PAYMENT-IDENTIFIER", "payment_commerce_api_1")
+      .send(buyBody);
+
+    expect(buyResponse.status).toBe(200);
+    expect(buyResponse.body.orderId).toBe("order_api_test");
+
+    const order = await store.getCommerceOrderByPaymentId("payment_commerce_api_1");
+    expect(order).toMatchObject({
+      quoteId: "quote_api_test",
+      status: "placed",
+      providerOrderId: "order_api_test"
+    });
+    expect(await store.getCommerceConsentByQuote("quote_api_test", order!.buyerWallet)).toMatchObject({
+      quoteId: "quote_api_test"
+    });
+    expect(await store.getCommerceFulfillmentByOrderId(order!.id)).toMatchObject({
+      status: "pending_shipment"
+    });
   });
 
   it("replays the same sync response for the same payment id and request", async () => {
@@ -908,7 +1039,32 @@ describe("marketplace api", () => {
   it("supports provider onboarding, review publish, and paid execution for a self-serve service", async () => {
     const providerWallet = await createTestWallet(PROVIDER_PRIVATE_KEY);
     const replacementPayoutWallet = await createTestWallet(OTHER_PRIVATE_KEY);
-    const { app, buyer, store } = await createTestApp();
+    const upstreamPayments: Array<{
+      url: string;
+      method: "GET" | "POST";
+      headers: Record<string, string>;
+      body?: string;
+    }> = [];
+    const { app, buyer, store } = await createTestApp({
+      upstreamPaymentService: {
+        async payHttp(input) {
+          upstreamPayments.push(input);
+          return {
+            statusCode: 200,
+            headers: {
+              "content-type": "application/json"
+            },
+            body: { symbol: "FAST", price: 42.5 },
+            payment: {
+              network: "base",
+              amount: "100",
+              recipient: "0x0000000000000000000000000000000000000001",
+              txHash: "0xupstream"
+            }
+          };
+        }
+      }
+    });
     const providerToken = await createSiteSession(app, providerWallet);
 
     const profile = await request(app)
@@ -1017,8 +1173,8 @@ describe("marketplace api", () => {
       }
 
       if (url === "https://provider.example.com/api/quote") {
-        return new Response(JSON.stringify({ symbol: "FAST", price: 42.5 }), {
-          status: 200,
+        return new Response(JSON.stringify({ accepts: [{ network: "base", maxAmountRequired: "0.0001" }] }), {
+          status: 402,
           headers: {
             "content-type": "application/json"
           }
@@ -1095,6 +1251,18 @@ describe("marketplace api", () => {
         })
       })
     );
+    expect(upstreamPayments).toEqual([
+      expect.objectContaining({
+        url: "https://provider.example.com/api/quote",
+        method: "POST",
+        headers: expect.objectContaining({
+          "X-MARKETPLACE-BUYER-WALLET": buyer.address,
+          "X-MARKETPLACE-SERVICE-ID": serviceId,
+          "X-MARKETPLACE-PAYMENT-ID": "payment_provider_sync_1"
+        }),
+        body: JSON.stringify({ symbol: "FAST" })
+      })
+    ]);
 
     const record = await store.getIdempotencyByPaymentId("payment_provider_sync_1");
     expect(record?.routeId).toBe("signals.quote.v1");
@@ -1110,7 +1278,21 @@ describe("marketplace api", () => {
 
   it("supports provider onboarding, publish, and free execution for a self-serve service", async () => {
     const providerWallet = await createTestWallet(PROVIDER_PRIVATE_KEY);
-    const { app, store } = await createTestApp();
+    const upstreamPayments: Array<unknown> = [];
+    const { app, store } = await createTestApp({
+      upstreamPaymentService: {
+        async payHttp(input) {
+          upstreamPayments.push(input);
+          return {
+            statusCode: 200,
+            headers: {
+              "content-type": "application/json"
+            },
+            body: { items: ["paid"] }
+          };
+        }
+      }
+    });
     const providerToken = await createSiteSession(app, providerWallet);
 
     const profile = await request(app)
@@ -1229,6 +1411,15 @@ describe("marketplace api", () => {
           });
         }
 
+        if (requestBody.query === "PAY") {
+          return new Response(JSON.stringify({ accepts: [{ network: "base", maxAmountRequired: "0.0001" }] }), {
+            status: 402,
+            headers: {
+              "content-type": "application/json"
+            }
+          });
+        }
+
         return new Response(JSON.stringify({ items: ["alpha"] }), {
           status: 200,
           headers: {
@@ -1295,6 +1486,14 @@ describe("marketplace api", () => {
     expect(analytics.totalCalls).toBe(2);
     expect(analytics.revenueRaw).toBe("0");
     expect(analytics.successRate30d).toBe(50);
+
+    const paywalledFreeResponse = await request(app)
+      .post("/api/signals-free/search")
+      .send({ query: "PAY" });
+
+    expect(paywalledFreeResponse.status).toBe(502);
+    expect(paywalledFreeResponse.body.error).toContain("upstream x402 payment is not configured");
+    expect(upstreamPayments).toHaveLength(0);
   });
 
   it("accepts webhook callbacks for async free routes after runtime-key rotation", async () => {

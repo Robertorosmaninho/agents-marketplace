@@ -62,7 +62,10 @@ export function EndpointBrowserRunner({
   const apiBaseUrl = React.useMemo(() => new URL(endpoint.proxyUrl).origin, [endpoint.proxyUrl]);
   const isFreeRoute = endpoint.billingType === "free";
   const usesWalletSession = endpoint.billingType === "prepaid_credit" || (endpoint.billingType === "free" && endpoint.mode === "async");
-  const usesX402 = endpoint.billingType === "fixed_x402" || endpoint.billingType === "topup_x402_variable";
+  const usesX402 =
+    endpoint.billingType === "fixed_x402"
+    || endpoint.billingType === "topup_x402_variable"
+    || endpoint.billingType === "commerce_quote_x402";
   const runnerTitle = isFreeRoute
     ? "Run this endpoint in the browser"
     : usesWalletSession

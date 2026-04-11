@@ -390,7 +390,7 @@ function MarketplaceEndpointRow({
       </Link>
       <div className="text-sm font-medium text-foreground">
         {endpoint.price}
-        {endpoint.billingType === "fixed_x402" || endpoint.billingType === "topup_x402_variable" ? ` ${endpoint.tokenSymbol}` : ""}
+        {endpoint.billingType === "fixed_x402" || endpoint.billingType === "topup_x402_variable" || endpoint.billingType === "commerce_quote_x402" ? ` ${endpoint.tokenSymbol}` : ""}
       </div>
     </div>
   );

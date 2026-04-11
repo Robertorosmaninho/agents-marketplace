@@ -1,6 +1,7 @@
 import { rawToDecimalString } from "./amounts.js";
 import {
   isFixedX402Billing,
+  isCommerceQuoteX402Billing,
   isFreeBilling,
   isPrepaidCreditBilling,
   isTopupX402Billing,
@@ -62,7 +63,7 @@ function formatPriceLabelFromRaw(rawAmount: string, tokenSymbol: MarketplaceServ
 }
 
 function billingTypeUsesTokenPrice(billingType: MarketplaceServiceCatalogEndpoint["billingType"]): boolean {
-  return billingType === "fixed_x402" || billingType === "topup_x402_variable";
+  return billingType === "fixed_x402" || billingType === "topup_x402_variable" || billingType === "commerce_quote_x402";
 }
 
 function isMarketplaceEndpoint(
@@ -239,6 +240,9 @@ export function buildPriceRange(routes: MarketplaceRoute[]): string {
   if (routes.some(isTopupX402Billing)) {
     labels.push("Variable top-up");
   }
+  if (routes.some(isCommerceQuoteX402Billing)) {
+    labels.push("Quote-bound");
+  }
   if (routes.some(isFreeBilling)) {
     labels.push("Free");
   }
@@ -374,7 +378,11 @@ function buildMarketplaceUseThisServicePrompt(input: {
     }
   }
 
-  if (input.endpoints.some((endpoint) => endpoint.billingType === "fixed_x402" || endpoint.billingType === "topup_x402_variable")) {
+  if (input.endpoints.some((endpoint) =>
+    endpoint.billingType === "fixed_x402"
+    || endpoint.billingType === "topup_x402_variable"
+    || endpoint.billingType === "commerce_quote_x402"
+  )) {
     lines.push(
       "",
       "For paid endpoints: the first call returns 402. Authorize payment with your Fast wallet and retry with the payment signature header."

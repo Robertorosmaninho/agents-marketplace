@@ -1,6 +1,7 @@
 import { decimalToRawString, rawToDecimalString } from "./amounts.js";
 import type {
   CreateMarketplaceProviderEndpointDraftInput,
+  CommerceQuoteX402Billing,
   FixedX402Billing,
   FreeBilling,
   MarketplaceRoute,
@@ -57,6 +58,12 @@ export function isTopupX402Billing(route: MarketplaceRoute | { billing: { type: 
   return route.billing.type === "topup_x402_variable";
 }
 
+export function isCommerceQuoteX402Billing(route: MarketplaceRoute | { billing: { type: string } }): route is MarketplaceRoute & {
+  billing: CommerceQuoteX402Billing;
+} {
+  return route.billing.type === "commerce_quote_x402";
+}
+
 export function isPrepaidCreditBilling(route: MarketplaceRoute | { billing: { type: string } }): route is MarketplaceRoute & {
   billing: PrepaidCreditBilling;
 } {
@@ -74,7 +81,7 @@ export function requiresWalletSession(route: MarketplaceRoute): boolean {
 }
 
 export function requiresX402Payment(route: MarketplaceRoute): boolean {
-  return isFixedX402Billing(route) || isTopupX402Billing(route);
+  return isFixedX402Billing(route) || isTopupX402Billing(route) || isCommerceQuoteX402Billing(route);
 }
 
 export function quotedPriceString(route: MarketplaceRoute, input?: unknown): string {
@@ -86,7 +93,15 @@ export function quotedPriceString(route: MarketplaceRoute, input?: unknown): str
     return quotedTopupPrice(route.billing, input);
   }
 
+  if (isCommerceQuoteX402Billing(route)) {
+    throw new Error(`Route ${route.routeId} must be priced from a saved commerce quote.`);
+  }
+
   throw new Error(`Route ${route.routeId} does not use x402 pricing.`);
+}
+
+export function quotedPriceRawFromOverride(price: string): string {
+  return decimalToRawString(price.replace(/^\$/, ""), 6);
 }
 
 export function quotedPriceRaw(route: MarketplaceRoute, input?: unknown): string {
@@ -104,6 +119,10 @@ export function routePriceLabel(route: MarketplaceRoute): string {
 
   if (isTopupX402Billing(route)) {
     return `$${route.billing.minAmount} - $${route.billing.maxAmount}`;
+  }
+
+  if (isCommerceQuoteX402Billing(route)) {
+    return "Quote-bound";
   }
 
   if (isFreeBilling(route)) {
@@ -155,6 +174,12 @@ export function buildRouteBilling(input: {
     };
   }
 
+  if (input.billingType === "commerce_quote_x402") {
+    return {
+      type: "commerce_quote_x402"
+    };
+  }
+
   if (input.billingType === "free") {
     return {
       type: "free"
@@ -173,6 +198,10 @@ export function priceLabelForBilling(billing: RouteBilling): string {
 
   if (billing.type === "topup_x402_variable") {
     return `$${billing.minAmount} - $${billing.maxAmount}`;
+  }
+
+  if (billing.type === "commerce_quote_x402") {
+    return "Quote-bound";
   }
 
   if (billing.type === "free") {

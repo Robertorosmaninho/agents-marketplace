@@ -45,7 +45,7 @@ export interface PersistedPayoutSplit {
   providerAmount: string;
 }
 
-export type RouteBillingType = "fixed_x402" | "topup_x402_variable" | "prepaid_credit" | "free";
+export type RouteBillingType = "fixed_x402" | "topup_x402_variable" | "commerce_quote_x402" | "prepaid_credit" | "free";
 
 export interface FixedX402Billing {
   type: "fixed_x402";
@@ -58,6 +58,10 @@ export interface TopupX402VariableBilling {
   maxAmount: string;
 }
 
+export interface CommerceQuoteX402Billing {
+  type: "commerce_quote_x402";
+}
+
 export interface PrepaidCreditBilling {
   type: "prepaid_credit";
 }
@@ -66,7 +70,12 @@ export interface FreeBilling {
   type: "free";
 }
 
-export type RouteBilling = FixedX402Billing | TopupX402VariableBilling | PrepaidCreditBilling | FreeBilling;
+export type RouteBilling =
+  | FixedX402Billing
+  | TopupX402VariableBilling
+  | CommerceQuoteX402Billing
+  | PrepaidCreditBilling
+  | FreeBilling;
 
 export interface RouteAsyncConfig {
   strategy: AsyncRouteStrategy;
@@ -1041,6 +1050,68 @@ export interface CreditReservationRecord {
   updatedAt: string;
 }
 
+export type CommerceQuoteStatus = "quoted" | "accepted" | "expired" | "cancelled";
+export type CommerceOrderStatus = "pending" | "placed" | "failed" | "fulfilled" | "cancelled" | "refunded";
+export type CommerceFulfillmentStatus =
+  | "pending"
+  | "pending_shipment"
+  | "shipped"
+  | "delivered"
+  | "failed"
+  | "cancelled";
+
+export interface CommerceQuoteRecord {
+  id: string;
+  serviceId: string;
+  routeId: string;
+  provider: string;
+  operation: string;
+  quoteId: string;
+  status: CommerceQuoteStatus;
+  amount: string;
+  currency: MarketplaceTokenSymbol;
+  expiresAt: string | null;
+  requestBody: unknown;
+  responseBody: unknown;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CommerceConsentRecord {
+  id: string;
+  quoteId: string;
+  buyerWallet: string;
+  consentPayload: unknown;
+  consentHash: string;
+  acceptedAt: string;
+  createdAt: string;
+}
+
+export interface CommerceOrderRecord {
+  id: string;
+  quoteId: string;
+  paymentId: string;
+  buyerWallet: string;
+  routeId: string;
+  requestId: string;
+  providerOrderId: string | null;
+  status: CommerceOrderStatus;
+  requestBody: unknown;
+  responseBody: unknown;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CommerceFulfillmentRecord {
+  id: string;
+  orderId: string;
+  status: CommerceFulfillmentStatus;
+  tracking: unknown;
+  rawPayload: unknown;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface ProviderRuntimeKeyRecord {
   id: string;
   serviceId: string;
@@ -1211,6 +1282,49 @@ export interface MarketplaceStore {
   claimPendingProviderPayouts(limit: number): Promise<ProviderPayoutRecord[]>;
   markProviderPayoutSendFailure(payoutIds: string[], errorMessage: string): Promise<void>;
   markProviderPayoutsSent(payoutIds: string[], txHash: string): Promise<ProviderPayoutRecord[]>;
+  saveCommerceQuote(input: {
+    serviceId: string;
+    routeId: string;
+    provider: string;
+    operation: string;
+    quoteId: string;
+    amount: string;
+    currency: MarketplaceTokenSymbol;
+    expiresAt?: string | null;
+    requestBody: unknown;
+    responseBody: unknown;
+  }): Promise<CommerceQuoteRecord>;
+  getCommerceQuote(quoteId: string): Promise<CommerceQuoteRecord | null>;
+  recordCommerceConsent(input: {
+    quoteId: string;
+    buyerWallet: string;
+    consentPayload: unknown;
+    consentHash: string;
+    acceptedAt: string;
+  }): Promise<CommerceConsentRecord>;
+  getCommerceConsentByQuote(quoteId: string, buyerWallet: string): Promise<CommerceConsentRecord | null>;
+  createCommerceOrder(input: {
+    quoteId: string;
+    paymentId: string;
+    buyerWallet: string;
+    routeId: string;
+    requestId: string;
+    requestBody: unknown;
+  }): Promise<CommerceOrderRecord>;
+  updateCommerceOrder(input: {
+    orderId: string;
+    status: CommerceOrderStatus;
+    providerOrderId?: string | null;
+    responseBody?: unknown;
+  }): Promise<CommerceOrderRecord>;
+  getCommerceOrderByPaymentId(paymentId: string): Promise<CommerceOrderRecord | null>;
+  recordCommerceFulfillment(input: {
+    orderId: string;
+    status: CommerceFulfillmentStatus;
+    tracking?: unknown;
+    rawPayload: unknown;
+  }): Promise<CommerceFulfillmentRecord>;
+  getCommerceFulfillmentByOrderId(orderId: string): Promise<CommerceFulfillmentRecord | null>;
   completeCreditTopupCharge(
     input: CompleteCreditTopupChargeInput
   ): Promise<{ idempotency: IdempotencyRecord; account: CreditAccountRecord; entry: CreditLedgerEntryRecord }>;

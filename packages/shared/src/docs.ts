@@ -270,6 +270,11 @@ export function buildOpenApiDocument(input: {
       get: {
         summary: "Machine-readable marketplace catalog."
       }
+    },
+    "/.well-known/ucp": {
+      get: {
+        summary: "UCP discovery profile for marketplace and commerce listings."
+      }
     }
   };
 
