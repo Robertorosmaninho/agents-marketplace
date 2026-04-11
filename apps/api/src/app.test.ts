@@ -177,6 +177,14 @@ describe("marketplace api", () => {
         expect.objectContaining({
           id: "shop-fast-amazon:amazon-quote",
           endpoint: "https://shop.fast.xyz/api/amazon/quote"
+        }),
+        expect.objectContaining({
+          id: "shop-fast-amazon:amazon-buy",
+          endpoint: "https://shop.fast.xyz/api/amazon/buy"
+        }),
+        expect.objectContaining({
+          id: "shop-fast-amazon:amazon-order-status",
+          endpoint: "https://shop.fast.xyz/api/amazon/order-status"
         })
       ])
     );

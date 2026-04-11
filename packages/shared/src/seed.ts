@@ -315,6 +315,44 @@ function buildShopFastExternalEndpointDrafts(): ExternalProviderEndpointDraftRec
         }
       },
       usageNotes: "Treat the quote as provisional until Shop Fast returns a confirmed order."
+    }),
+    buildExternalEndpointDraft({
+      id: "draft_shop_fast_amazon_buy",
+      title: "Amazon Buy",
+      description: "Place an Amazon purchase through Shop Fast after quote review and buyer consent.",
+      publicUrl: "https://shop.fast.xyz/api/amazon/buy",
+      requestExample: {
+        quoteId: "quote_example",
+        buyerConsent: {
+          accepted: true,
+          acceptedAt: "2026-03-19T00:10:00.000Z"
+        }
+      },
+      responseExample: {
+        orderId: "order_example",
+        status: "pending",
+        message: "Shop Fast accepted the purchase request and is placing the upstream order."
+      },
+      usageNotes:
+        "Discovery-only endpoint. Shop Fast owns quote validation, buyer consent, purchase execution, and order records."
+    }),
+    buildExternalEndpointDraft({
+      id: "draft_shop_fast_amazon_order_status",
+      title: "Amazon Order Status",
+      description: "Retrieve Shop Fast order and fulfillment status for an Amazon purchase.",
+      publicUrl: "https://shop.fast.xyz/api/amazon/order-status",
+      requestExample: {
+        orderId: "order_example"
+      },
+      responseExample: {
+        orderId: "order_example",
+        status: "placed",
+        fulfillment: {
+          status: "pending_shipment"
+        }
+      },
+      usageNotes:
+        "Discovery-only endpoint. Use Shop Fast as the source of truth for order, fulfillment, cancellation, and refund state."
     })
   ];
 }

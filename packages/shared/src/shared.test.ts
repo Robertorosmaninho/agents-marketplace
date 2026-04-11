@@ -1458,7 +1458,7 @@ describe("shared marketplace helpers", () => {
     expect(published?.service.categories).toContain("Commerce");
     expect(published?.service.routeIds).toEqual([]);
     expect(published?.endpoints.map((endpoint) => endpoint.endpointType === "external_registry" ? endpoint.title : null))
-      .toEqual(["Amazon Search", "Amazon Quote"]);
+      .toEqual(["Amazon Search", "Amazon Quote", "Amazon Buy", "Amazon Order Status"]);
 
     const route = await store.findPublishedRoute("shop-fast-amazon", "amazon-buy", "fast-mainnet");
     expect(route).toBeNull();
@@ -1484,6 +1484,14 @@ describe("shared marketplace helpers", () => {
         expect.objectContaining({
           id: "shop-fast-amazon:amazon-quote",
           endpoint: "https://shop.fast.xyz/api/amazon/quote"
+        }),
+        expect.objectContaining({
+          id: "shop-fast-amazon:amazon-buy",
+          endpoint: "https://shop.fast.xyz/api/amazon/buy"
+        }),
+        expect.objectContaining({
+          id: "shop-fast-amazon:amazon-order-status",
+          endpoint: "https://shop.fast.xyz/api/amazon/order-status"
         })
       ])
     );
