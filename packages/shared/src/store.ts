@@ -27,6 +27,12 @@ import type {
   ClaimPaymentExecutionInput,
   ClaimPaymentExecutionResult,
   CompleteCreditTopupChargeInput,
+  CommerceConsentRecord,
+  CommerceFulfillmentRecord,
+  CommerceFulfillmentStatus,
+  CommerceOrderRecord,
+  CommerceOrderStatus,
+  CommerceQuoteRecord,
   CreditAccountRecord,
   CreditLedgerEntryRecord,
   CreditReservationRecord,
@@ -829,6 +835,12 @@ export class InMemoryMarketplaceStore implements MarketplaceStore {
   private readonly creditReservationsById = new Map<string, CreditReservationRecord>();
   private readonly creditReservationIdByIdempotencyKey = new Map<string, string>();
   private readonly creditReservationIdByJobToken = new Map<string, string>();
+  private readonly commerceQuotesByQuoteId = new Map<string, CommerceQuoteRecord>();
+  private readonly commerceConsentsById = new Map<string, CommerceConsentRecord>();
+  private readonly commerceConsentIdByQuoteWallet = new Map<string, string>();
+  private readonly commerceOrdersById = new Map<string, CommerceOrderRecord>();
+  private readonly commerceOrderIdByPaymentId = new Map<string, string>();
+  private readonly commerceFulfillmentsById = new Map<string, CommerceFulfillmentRecord>();
   private readonly providerRuntimeKeysByServiceId = new Map<string, ProviderRuntimeKeyRecord>();
   private readonly suggestionsById = new Map<string, SuggestionRecord>();
   private readonly attempts: ProviderAttemptRecord[] = [];
@@ -1629,6 +1641,174 @@ export class InMemoryMarketplaceStore implements MarketplaceStore {
       updated.push(clone(next));
     }
     return updated;
+  }
+
+  async saveCommerceQuote(input: {
+    serviceId: string;
+    routeId: string;
+    provider: string;
+    operation: string;
+    quoteId: string;
+    amount: string;
+    currency: CommerceQuoteRecord["currency"];
+    expiresAt?: string | null;
+    requestBody: unknown;
+    responseBody: unknown;
+  }): Promise<CommerceQuoteRecord> {
+    const now = timestamp();
+    const existing = this.commerceQuotesByQuoteId.get(input.quoteId);
+    const record: CommerceQuoteRecord = {
+      id: existing?.id ?? randomUUID(),
+      serviceId: input.serviceId,
+      routeId: input.routeId,
+      provider: input.provider,
+      operation: input.operation,
+      quoteId: input.quoteId,
+      status: existing?.status === "accepted" ? "accepted" : "quoted",
+      amount: input.amount,
+      currency: input.currency,
+      expiresAt: input.expiresAt ?? null,
+      requestBody: clone(input.requestBody),
+      responseBody: clone(input.responseBody),
+      createdAt: existing?.createdAt ?? now,
+      updatedAt: now
+    };
+    this.commerceQuotesByQuoteId.set(record.quoteId, record);
+    return clone(record);
+  }
+
+  async getCommerceQuote(quoteId: string): Promise<CommerceQuoteRecord | null> {
+    return clone(this.commerceQuotesByQuoteId.get(quoteId) ?? null);
+  }
+
+  async recordCommerceConsent(input: {
+    quoteId: string;
+    buyerWallet: string;
+    consentPayload: unknown;
+    consentHash: string;
+    acceptedAt: string;
+  }): Promise<CommerceConsentRecord> {
+    const key = `${input.quoteId}:${input.buyerWallet}`;
+    const existingId = this.commerceConsentIdByQuoteWallet.get(key);
+    if (existingId) {
+      const existing = this.commerceConsentsById.get(existingId);
+      if (existing) {
+        return clone(existing);
+      }
+    }
+
+    const record: CommerceConsentRecord = {
+      id: randomUUID(),
+      quoteId: input.quoteId,
+      buyerWallet: input.buyerWallet,
+      consentPayload: clone(input.consentPayload),
+      consentHash: input.consentHash,
+      acceptedAt: input.acceptedAt,
+      createdAt: timestamp()
+    };
+    this.commerceConsentsById.set(record.id, record);
+    this.commerceConsentIdByQuoteWallet.set(key, record.id);
+    const quote = this.commerceQuotesByQuoteId.get(input.quoteId);
+    if (quote) {
+      this.commerceQuotesByQuoteId.set(input.quoteId, {
+        ...quote,
+        status: "accepted",
+        updatedAt: timestamp()
+      });
+    }
+    return clone(record);
+  }
+
+  async getCommerceConsentByQuote(quoteId: string, buyerWallet: string): Promise<CommerceConsentRecord | null> {
+    const id = this.commerceConsentIdByQuoteWallet.get(`${quoteId}:${buyerWallet}`);
+    return clone(id ? (this.commerceConsentsById.get(id) ?? null) : null);
+  }
+
+  async createCommerceOrder(input: {
+    quoteId: string;
+    paymentId: string;
+    buyerWallet: string;
+    routeId: string;
+    requestId: string;
+    requestBody: unknown;
+  }): Promise<CommerceOrderRecord> {
+    const existingId = this.commerceOrderIdByPaymentId.get(input.paymentId);
+    if (existingId) {
+      const existing = this.commerceOrdersById.get(existingId);
+      if (existing) {
+        return clone(existing);
+      }
+    }
+
+    const now = timestamp();
+    const record: CommerceOrderRecord = {
+      id: randomUUID(),
+      quoteId: input.quoteId,
+      paymentId: input.paymentId,
+      buyerWallet: input.buyerWallet,
+      routeId: input.routeId,
+      requestId: input.requestId,
+      providerOrderId: null,
+      status: "pending",
+      requestBody: clone(input.requestBody),
+      responseBody: null,
+      createdAt: now,
+      updatedAt: now
+    };
+    this.commerceOrdersById.set(record.id, record);
+    this.commerceOrderIdByPaymentId.set(record.paymentId, record.id);
+    return clone(record);
+  }
+
+  async updateCommerceOrder(input: {
+    orderId: string;
+    status: CommerceOrderStatus;
+    providerOrderId?: string | null;
+    responseBody?: unknown;
+  }): Promise<CommerceOrderRecord> {
+    const existing = this.commerceOrdersById.get(input.orderId);
+    if (!existing) {
+      throw new Error("Commerce order not found.");
+    }
+    const updated: CommerceOrderRecord = {
+      ...existing,
+      status: input.status,
+      providerOrderId: input.providerOrderId === undefined ? existing.providerOrderId : input.providerOrderId,
+      responseBody: input.responseBody === undefined ? existing.responseBody : clone(input.responseBody),
+      updatedAt: timestamp()
+    };
+    this.commerceOrdersById.set(updated.id, updated);
+    return clone(updated);
+  }
+
+  async getCommerceOrderByPaymentId(paymentId: string): Promise<CommerceOrderRecord | null> {
+    const id = this.commerceOrderIdByPaymentId.get(paymentId);
+    return clone(id ? (this.commerceOrdersById.get(id) ?? null) : null);
+  }
+
+  async recordCommerceFulfillment(input: {
+    orderId: string;
+    status: CommerceFulfillmentStatus;
+    tracking?: unknown;
+    rawPayload: unknown;
+  }): Promise<CommerceFulfillmentRecord> {
+    const existing = Array.from(this.commerceFulfillmentsById.values()).find((record) => record.orderId === input.orderId);
+    const now = timestamp();
+    const record: CommerceFulfillmentRecord = {
+      id: existing?.id ?? randomUUID(),
+      orderId: input.orderId,
+      status: input.status,
+      tracking: clone(input.tracking ?? null),
+      rawPayload: clone(input.rawPayload),
+      createdAt: existing?.createdAt ?? now,
+      updatedAt: now
+    };
+    this.commerceFulfillmentsById.set(record.id, record);
+    return clone(record);
+  }
+
+  async getCommerceFulfillmentByOrderId(orderId: string): Promise<CommerceFulfillmentRecord | null> {
+    return clone(Array.from(this.commerceFulfillmentsById.values()).find((record) => record.orderId === orderId) ?? null);
   }
 
   async completeCreditTopupCharge(
@@ -4011,6 +4191,59 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
         UNIQUE(source_kind, source_id)
       );
 
+      CREATE TABLE IF NOT EXISTS commerce_quotes (
+        id TEXT PRIMARY KEY,
+        service_id TEXT NOT NULL REFERENCES provider_services(id) ON DELETE CASCADE,
+        route_id TEXT NOT NULL,
+        provider TEXT NOT NULL,
+        operation TEXT NOT NULL,
+        quote_id TEXT NOT NULL UNIQUE,
+        status TEXT NOT NULL,
+        amount TEXT NOT NULL,
+        currency TEXT NOT NULL,
+        expires_at TIMESTAMPTZ,
+        request_body JSONB NOT NULL,
+        response_body JSONB NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+
+      CREATE TABLE IF NOT EXISTS commerce_consents (
+        id TEXT PRIMARY KEY,
+        quote_id TEXT NOT NULL REFERENCES commerce_quotes(quote_id) ON DELETE CASCADE,
+        buyer_wallet TEXT NOT NULL,
+        consent_payload JSONB NOT NULL,
+        consent_hash TEXT NOT NULL,
+        accepted_at TIMESTAMPTZ NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE(quote_id, buyer_wallet)
+      );
+
+      CREATE TABLE IF NOT EXISTS commerce_orders (
+        id TEXT PRIMARY KEY,
+        quote_id TEXT NOT NULL REFERENCES commerce_quotes(quote_id) ON DELETE RESTRICT,
+        payment_id TEXT NOT NULL UNIQUE,
+        buyer_wallet TEXT NOT NULL,
+        route_id TEXT NOT NULL,
+        request_id TEXT NOT NULL,
+        provider_order_id TEXT,
+        status TEXT NOT NULL,
+        request_body JSONB NOT NULL,
+        response_body JSONB,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+
+      CREATE TABLE IF NOT EXISTS commerce_fulfillments (
+        id TEXT PRIMARY KEY,
+        order_id TEXT NOT NULL UNIQUE REFERENCES commerce_orders(id) ON DELETE CASCADE,
+        status TEXT NOT NULL,
+        tracking JSONB,
+        raw_payload JSONB NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+
       CREATE TABLE IF NOT EXISTS credit_accounts (
         id TEXT PRIMARY KEY,
         service_id TEXT NOT NULL REFERENCES provider_services(id) ON DELETE CASCADE,
@@ -6017,6 +6250,205 @@ export class PostgresMarketplaceStore implements MarketplaceStore {
       [payoutIds, txHash]
     );
     return result.rows.map(mapProviderPayoutRow);
+  }
+
+  async saveCommerceQuote(input: {
+    serviceId: string;
+    routeId: string;
+    provider: string;
+    operation: string;
+    quoteId: string;
+    amount: string;
+    currency: CommerceQuoteRecord["currency"];
+    expiresAt?: string | null;
+    requestBody: unknown;
+    responseBody: unknown;
+  }): Promise<CommerceQuoteRecord> {
+    const result = await this.pool.query(
+      `
+      INSERT INTO commerce_quotes (
+        id, service_id, route_id, provider, operation, quote_id, status, amount, currency, expires_at, request_body, response_body
+      ) VALUES (
+        $1, $2, $3, $4, $5, $6, 'quoted', $7, $8, $9, $10::jsonb, $11::jsonb
+      )
+      ON CONFLICT (quote_id) DO UPDATE
+      SET
+        service_id = EXCLUDED.service_id,
+        route_id = EXCLUDED.route_id,
+        provider = EXCLUDED.provider,
+        operation = EXCLUDED.operation,
+        status = CASE WHEN commerce_quotes.status = 'accepted' THEN commerce_quotes.status ELSE 'quoted' END,
+        amount = EXCLUDED.amount,
+        currency = EXCLUDED.currency,
+        expires_at = EXCLUDED.expires_at,
+        request_body = EXCLUDED.request_body,
+        response_body = EXCLUDED.response_body,
+        updated_at = NOW()
+      RETURNING *
+      `,
+      [
+        randomUUID(),
+        input.serviceId,
+        input.routeId,
+        input.provider,
+        input.operation,
+        input.quoteId,
+        input.amount,
+        input.currency,
+        input.expiresAt ?? null,
+        JSON.stringify(input.requestBody),
+        JSON.stringify(input.responseBody)
+      ]
+    );
+    return mapCommerceQuoteRow(result.rows[0]);
+  }
+
+  async getCommerceQuote(quoteId: string): Promise<CommerceQuoteRecord | null> {
+    const result = await this.pool.query("SELECT * FROM commerce_quotes WHERE quote_id = $1", [quoteId]);
+    return result.rowCount ? mapCommerceQuoteRow(result.rows[0]) : null;
+  }
+
+  async recordCommerceConsent(input: {
+    quoteId: string;
+    buyerWallet: string;
+    consentPayload: unknown;
+    consentHash: string;
+    acceptedAt: string;
+  }): Promise<CommerceConsentRecord> {
+    const result = await this.pool.query(
+      `
+      WITH consent AS (
+      INSERT INTO commerce_consents (
+        id, quote_id, buyer_wallet, consent_payload, consent_hash, accepted_at
+      ) VALUES (
+        $1, $2, $3, $4::jsonb, $5, $6
+      )
+      ON CONFLICT (quote_id, buyer_wallet) DO UPDATE
+      SET id = commerce_consents.id
+      RETURNING *
+      ), quote AS (
+        UPDATE commerce_quotes
+        SET status = 'accepted', updated_at = NOW()
+        WHERE quote_id = $2
+        RETURNING quote_id
+      )
+      SELECT * FROM consent
+      `,
+      [randomUUID(), input.quoteId, input.buyerWallet, JSON.stringify(input.consentPayload), input.consentHash, input.acceptedAt]
+    );
+    return mapCommerceConsentRow(result.rows[0]);
+  }
+
+  async getCommerceConsentByQuote(quoteId: string, buyerWallet: string): Promise<CommerceConsentRecord | null> {
+    const result = await this.pool.query(
+      "SELECT * FROM commerce_consents WHERE quote_id = $1 AND buyer_wallet = $2",
+      [quoteId, buyerWallet]
+    );
+    return result.rowCount ? mapCommerceConsentRow(result.rows[0]) : null;
+  }
+
+  async createCommerceOrder(input: {
+    quoteId: string;
+    paymentId: string;
+    buyerWallet: string;
+    routeId: string;
+    requestId: string;
+    requestBody: unknown;
+  }): Promise<CommerceOrderRecord> {
+    const result = await this.pool.query(
+      `
+      INSERT INTO commerce_orders (
+        id, quote_id, payment_id, buyer_wallet, route_id, request_id, status, request_body
+      ) VALUES (
+        $1, $2, $3, $4, $5, $6, 'pending', $7::jsonb
+      )
+      ON CONFLICT (payment_id) DO UPDATE
+      SET updated_at = commerce_orders.updated_at
+      RETURNING *
+      `,
+      [
+        randomUUID(),
+        input.quoteId,
+        input.paymentId,
+        input.buyerWallet,
+        input.routeId,
+        input.requestId,
+        JSON.stringify(input.requestBody)
+      ]
+    );
+    return mapCommerceOrderRow(result.rows[0]);
+  }
+
+  async updateCommerceOrder(input: {
+    orderId: string;
+    status: CommerceOrderStatus;
+    providerOrderId?: string | null;
+    responseBody?: unknown;
+  }): Promise<CommerceOrderRecord> {
+    const result = await this.pool.query(
+      `
+      UPDATE commerce_orders
+      SET
+        status = $2,
+        provider_order_id = COALESCE($3, provider_order_id),
+        response_body = COALESCE($4::jsonb, response_body),
+        updated_at = NOW()
+      WHERE id = $1
+      RETURNING *
+      `,
+      [
+        input.orderId,
+        input.status,
+        input.providerOrderId ?? null,
+        input.responseBody === undefined ? null : JSON.stringify(input.responseBody)
+      ]
+    );
+    if (!result.rowCount) {
+      throw new Error("Commerce order not found.");
+    }
+    return mapCommerceOrderRow(result.rows[0]);
+  }
+
+  async getCommerceOrderByPaymentId(paymentId: string): Promise<CommerceOrderRecord | null> {
+    const result = await this.pool.query("SELECT * FROM commerce_orders WHERE payment_id = $1", [paymentId]);
+    return result.rowCount ? mapCommerceOrderRow(result.rows[0]) : null;
+  }
+
+  async recordCommerceFulfillment(input: {
+    orderId: string;
+    status: CommerceFulfillmentStatus;
+    tracking?: unknown;
+    rawPayload: unknown;
+  }): Promise<CommerceFulfillmentRecord> {
+    const result = await this.pool.query(
+      `
+      INSERT INTO commerce_fulfillments (
+        id, order_id, status, tracking, raw_payload
+      ) VALUES (
+        $1, $2, $3, $4::jsonb, $5::jsonb
+      )
+      ON CONFLICT (order_id) DO UPDATE
+      SET
+        status = EXCLUDED.status,
+        tracking = EXCLUDED.tracking,
+        raw_payload = EXCLUDED.raw_payload,
+        updated_at = NOW()
+      RETURNING *
+      `,
+      [
+        randomUUID(),
+        input.orderId,
+        input.status,
+        JSON.stringify(input.tracking ?? null),
+        JSON.stringify(input.rawPayload)
+      ]
+    );
+    return mapCommerceFulfillmentRow(result.rows[0]);
+  }
+
+  async getCommerceFulfillmentByOrderId(orderId: string): Promise<CommerceFulfillmentRecord | null> {
+    const result = await this.pool.query("SELECT * FROM commerce_fulfillments WHERE order_id = $1", [orderId]);
+    return result.rowCount ? mapCommerceFulfillmentRow(result.rows[0]) : null;
   }
 
   async completeCreditTopupCharge(
@@ -9266,6 +9698,66 @@ function mapProviderPayoutRow(row: Record<string, unknown>): ProviderPayoutRecor
     sentAt: row.sent_at ? new Date(row.sent_at as string | Date).toISOString() : null,
     attemptCount: Number(row.attempt_count),
     lastError: (row.last_error as string | null) ?? null,
+    createdAt: new Date(row.created_at as string | Date).toISOString(),
+    updatedAt: new Date(row.updated_at as string | Date).toISOString()
+  };
+}
+
+function mapCommerceQuoteRow(row: Record<string, unknown>): CommerceQuoteRecord {
+  return {
+    id: row.id as string,
+    serviceId: row.service_id as string,
+    routeId: row.route_id as string,
+    provider: row.provider as string,
+    operation: row.operation as string,
+    quoteId: row.quote_id as string,
+    status: row.status as CommerceQuoteRecord["status"],
+    amount: row.amount as string,
+    currency: row.currency as CommerceQuoteRecord["currency"],
+    expiresAt: row.expires_at ? new Date(row.expires_at as string | Date).toISOString() : null,
+    requestBody: row.request_body,
+    responseBody: row.response_body,
+    createdAt: new Date(row.created_at as string | Date).toISOString(),
+    updatedAt: new Date(row.updated_at as string | Date).toISOString()
+  };
+}
+
+function mapCommerceConsentRow(row: Record<string, unknown>): CommerceConsentRecord {
+  return {
+    id: row.id as string,
+    quoteId: row.quote_id as string,
+    buyerWallet: row.buyer_wallet as string,
+    consentPayload: row.consent_payload,
+    consentHash: row.consent_hash as string,
+    acceptedAt: new Date(row.accepted_at as string | Date).toISOString(),
+    createdAt: new Date(row.created_at as string | Date).toISOString()
+  };
+}
+
+function mapCommerceOrderRow(row: Record<string, unknown>): CommerceOrderRecord {
+  return {
+    id: row.id as string,
+    quoteId: row.quote_id as string,
+    paymentId: row.payment_id as string,
+    buyerWallet: row.buyer_wallet as string,
+    routeId: row.route_id as string,
+    requestId: row.request_id as string,
+    providerOrderId: (row.provider_order_id as string | null) ?? null,
+    status: row.status as CommerceOrderRecord["status"],
+    requestBody: row.request_body,
+    responseBody: row.response_body ?? null,
+    createdAt: new Date(row.created_at as string | Date).toISOString(),
+    updatedAt: new Date(row.updated_at as string | Date).toISOString()
+  };
+}
+
+function mapCommerceFulfillmentRow(row: Record<string, unknown>): CommerceFulfillmentRecord {
+  return {
+    id: row.id as string,
+    orderId: row.order_id as string,
+    status: row.status as CommerceFulfillmentRecord["status"],
+    tracking: row.tracking ?? null,
+    rawPayload: row.raw_payload,
     createdAt: new Date(row.created_at as string | Date).toISOString(),
     updatedAt: new Date(row.updated_at as string | Date).toISOString()
   };

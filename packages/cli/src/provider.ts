@@ -50,7 +50,7 @@ const providerAccountSchema = z.object({
 }).strict();
 
 const providerServiceTypeSchema = z.enum(["marketplace_proxy", "external_registry"]);
-const routeBillingTypeSchema = z.enum(["fixed_x402", "topup_x402_variable", "prepaid_credit", "free"]);
+const routeBillingTypeSchema = z.enum(["fixed_x402", "topup_x402_variable", "commerce_quote_x402", "prepaid_credit", "free"]);
 const decimalAmountSchema = z.string().regex(/^\d+(?:\.\d{1,6})?$/);
 
 const providerServiceSpecSchema = z.object({

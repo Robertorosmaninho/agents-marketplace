@@ -100,7 +100,7 @@ export function createFastPayMcpHandlers(config: FastPayMcpConfig, deps: CliDepe
     async marketplaceSearch(input: {
       q?: string;
       category?: string;
-      billingType?: "fixed_x402" | "topup_x402_variable" | "prepaid_credit" | "free";
+      billingType?: "fixed_x402" | "topup_x402_variable" | "commerce_quote_x402" | "prepaid_credit" | "free";
       mode?: "sync" | "async";
       settlementMode?: "verified_escrow";
       limit?: number;
@@ -180,7 +180,7 @@ export function createFastPayMcpServer(
   const marketplaceSearchInputSchema: Record<string, z.ZodTypeAny> = {
     q: z.string().optional(),
     category: z.string().optional(),
-    billingType: z.enum(["fixed_x402", "topup_x402_variable", "prepaid_credit", "free"]).optional(),
+    billingType: z.enum(["fixed_x402", "topup_x402_variable", "commerce_quote_x402", "prepaid_credit", "free"]).optional(),
     mode: z.enum(["sync", "async"]).optional(),
     settlementMode: z.enum(["verified_escrow"]).optional(),
     limit: z.number().int().min(1).max(100).optional()
@@ -219,7 +219,7 @@ export function createFastPayMcpServer(
   }, async (input) => createToolResult(await handlers.marketplaceSearch(input as {
     q?: string;
     category?: string;
-    billingType?: "fixed_x402" | "topup_x402_variable" | "prepaid_credit" | "free";
+    billingType?: "fixed_x402" | "topup_x402_variable" | "commerce_quote_x402" | "prepaid_credit" | "free";
     mode?: "sync" | "async";
     settlementMode?: "verified_escrow";
     limit?: number;

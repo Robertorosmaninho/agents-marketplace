@@ -476,6 +476,99 @@ describe("marketplace api", () => {
     expect(record?.payoutSplit.providerAccountId).toBe("provider_marketplace");
   });
 
+  it("records Shop Fast commerce quote, consent, order, and fulfillment around amazon-buy", async () => {
+    const { app, store } = await createTestApp();
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = String(input);
+      if (url === "https://shop.fast.xyz/api/amazon/quote") {
+        return new Response(JSON.stringify({
+          quoteId: "quote_api_test",
+          expiresAt: "2099-01-01T00:00:00.000Z",
+          payment: {
+            amount: "24.99",
+            currency: "USDC",
+            network: "fast"
+          }
+        }), {
+          status: 200,
+          headers: {
+            "content-type": "application/json"
+          }
+        });
+      }
+
+      if (url === "https://shop.fast.xyz/api/amazon/buy") {
+        return new Response(JSON.stringify({
+          orderId: "order_api_test",
+          status: "placed",
+          fulfillment: {
+            status: "pending_shipment",
+            tracking: null
+          }
+        }), {
+          status: 200,
+          headers: {
+            "content-type": "application/json"
+          }
+        });
+      }
+
+      return new Response(JSON.stringify({ error: "not found" }), { status: 404 });
+    });
+
+    const quoteResponse = await request(app)
+      .post("/api/shop-fast-amazon/amazon-quote")
+      .send({
+        productId: "B000EXAMPLE",
+        quantity: 1,
+        shipToCountry: "US",
+        paymentCurrency: "USDC"
+      });
+
+    expect(quoteResponse.status).toBe(200);
+    expect(await store.getCommerceQuote("quote_api_test")).toMatchObject({
+      amount: "24990000",
+      status: "quoted"
+    });
+
+    const buyBody = {
+      quoteId: "quote_api_test",
+      buyerConsent: {
+        accepted: true,
+        acceptedAt: "2026-03-19T00:10:00.000Z"
+      }
+    };
+    const paymentRequired = await request(app)
+      .post("/api/shop-fast-amazon/amazon-buy")
+      .send(buyBody);
+
+    expect(paymentRequired.status).toBe(402);
+    expect(paymentRequired.headers["payment-required"]).toBeDefined();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    const buyResponse = await request(app)
+      .post("/api/shop-fast-amazon/amazon-buy")
+      .set("PAYMENT-SIGNATURE", Buffer.from(JSON.stringify({ paid: true })).toString("base64"))
+      .set("PAYMENT-IDENTIFIER", "payment_commerce_api_1")
+      .send(buyBody);
+
+    expect(buyResponse.status).toBe(200);
+    expect(buyResponse.body.orderId).toBe("order_api_test");
+
+    const order = await store.getCommerceOrderByPaymentId("payment_commerce_api_1");
+    expect(order).toMatchObject({
+      quoteId: "quote_api_test",
+      status: "placed",
+      providerOrderId: "order_api_test"
+    });
+    expect(await store.getCommerceConsentByQuote("quote_api_test", order!.buyerWallet)).toMatchObject({
+      quoteId: "quote_api_test"
+    });
+    expect(await store.getCommerceFulfillmentByOrderId(order!.id)).toMatchObject({
+      status: "pending_shipment"
+    });
+  });
+
   it("replays the same sync response for the same payment id and request", async () => {
     const { app } = await createTestApp({
       deploymentNetwork: "testnet"

@@ -1,6 +1,7 @@
 import {
   MARKETPLACE_JOB_TOKEN_HEADER,
   PAYMENT_EXECUTION_RECOVERY_MS,
+  buildBaseUsdcUpstreamPaymentPolicy,
   computeTimeoutAt,
   buildMarketplaceIdentityHeaders,
   computeNextPollAt,
@@ -21,6 +22,7 @@ import {
   type RefundRecord,
   type RefundService,
   type UpstreamAuthMode,
+  type UpstreamPaymentPolicy,
   type UpstreamPaymentService
 } from "@marketplace/shared";
 
@@ -249,6 +251,28 @@ function shouldPayUpstreamForRoute(route: JobRecord["routeSnapshot"]): boolean {
   return requiresX402Payment(route) || isPrepaidCreditBilling(route);
 }
 
+async function buildPollUpstreamPaymentPolicy(input: {
+  job: JobRecord;
+  store: MarketplaceStore;
+}): Promise<UpstreamPaymentPolicy | null> {
+  if (isPrepaidCreditBilling(input.job.routeSnapshot)) {
+    if (!input.job.serviceId) {
+      return null;
+    }
+
+    const reservation = await input.store.getCreditReservationByJobToken(input.job.serviceId, input.job.jobToken);
+    return buildBaseUsdcUpstreamPaymentPolicy({
+      route: input.job.routeSnapshot,
+      maxAmountRaw: reservation?.reservedAmount ?? null
+    });
+  }
+
+  return buildBaseUsdcUpstreamPaymentPolicy({
+    route: input.job.routeSnapshot,
+    requestInput: input.job.requestBody
+  });
+}
+
 async function recoverAcceptedAsyncPlaceholder(
   store: MarketplaceStore,
   job: JobRecord,
@@ -437,11 +461,22 @@ async function pollHttpRoute(input: {
     }
 
     try {
+      const policy = await buildPollUpstreamPaymentPolicy(input);
+      if (!policy) {
+        return {
+          status: "failed",
+          permanent: false,
+          error: "Upstream poll requested payment, but this route does not have a bounded upstream x402 payment policy.",
+          providerState: input.job.providerState ?? undefined
+        };
+      }
+
       const paid = await input.upstreamPaymentService.payHttp({
         url,
         method: "POST",
         headers,
-        body
+        body,
+        policy
       });
       if (paid.statusCode < 200 || paid.statusCode >= 300) {
         return {

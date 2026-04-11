@@ -14,7 +14,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 
 function usesTokenPrice(billingType: MarketplaceServiceCatalogEndpoint["billingType"]): boolean {
-  return billingType === "fixed_x402" || billingType === "topup_x402_variable";
+  return billingType === "fixed_x402" || billingType === "topup_x402_variable" || billingType === "commerce_quote_x402";
 }
 
 function formatSummaryPriceRange(priceRange: string): string {

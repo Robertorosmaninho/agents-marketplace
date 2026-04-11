@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { isIP } from "node:net";
 import { URL } from "node:url";
 
@@ -12,6 +12,7 @@ import {
   MARKETPLACE_JOB_TOKEN_HEADER,
   buildLlmsTxt,
   buildMarketplaceCatalog,
+  buildBaseUsdcUpstreamPaymentPolicy,
   buildMarketplaceRouteDetail,
   buildOpenApiDocument,
   buildUcpDiscoveryProfile,
@@ -43,12 +44,14 @@ import {
   resolveAsyncJobFailure,
   serializeQueryInput,
   isPrepaidCreditBilling,
+  isCommerceQuoteX402Billing,
   isTopupX402Billing,
   normalizeFastWalletAddress,
   normalizePaymentHeaders,
   parseOpenApiImportDocument,
   parseBearerToken,
   quotedPriceRaw,
+  quotedPriceRawFromOverride,
   rawToDecimalString,
   requiresWalletSession,
   requiresX402Payment,
@@ -74,6 +77,7 @@ import {
   type IdempotencyRecord,
   type JobRecord,
   type MarketplaceRoute,
+  type MarketplaceTokenSymbol,
   type MarketplaceStore,
   type OpenApiImportPreview,
   type PollResult,
@@ -95,6 +99,7 @@ import {
   type SuggestionRecord,
   type UpdateProviderEndpointDraftInput,
   type UpstreamAuthMode,
+  type UpstreamPaymentPolicy,
   type UpstreamPaymentService
 } from "@marketplace/shared";
 
@@ -148,7 +153,7 @@ const suggestionStatusSchema = z.enum(["submitted", "reviewing", "accepted", "re
 const catalogSearchQuerySchema = z.object({
   q: z.string().min(1).optional(),
   category: z.string().min(1).optional(),
-  billingType: z.enum(["fixed_x402", "topup_x402_variable", "prepaid_credit", "free"]).optional(),
+  billingType: z.enum(["fixed_x402", "topup_x402_variable", "commerce_quote_x402", "prepaid_credit", "free"]).optional(),
   mode: z.enum(["sync", "async"]).optional(),
   settlementMode: z.enum(["verified_escrow"]).optional(),
   limit: z.coerce.number().int().min(1).max(100).optional()
@@ -218,7 +223,7 @@ const providerServiceUpdateSchema = z.object({
   featured: z.boolean().optional()
 });
 
-const routeBillingTypeSchema = z.enum(["fixed_x402", "topup_x402_variable", "prepaid_credit", "free"]);
+const routeBillingTypeSchema = z.enum(["fixed_x402", "topup_x402_variable", "commerce_quote_x402", "prepaid_credit", "free"]);
 const decimalAmountSchema = z.string().regex(/^\d+(?:\.\d{1,6})?$/);
 
 const marketplaceEndpointSchemaInput = z.object({
@@ -2052,6 +2057,7 @@ async function handleWalletSessionRoute(input: {
   store: MarketplaceStore;
   secretsKey: string;
   upstreamPaymentService?: UpstreamPaymentService;
+  upstreamPaymentPolicy?: UpstreamPaymentPolicy | null;
 }) {
   if (input.route.settlementMode !== "verified_escrow") {
     return input.res.status(500).json({ error: "Wallet-session routes require Verified escrow settlement." });
@@ -2321,10 +2327,178 @@ async function handleFreeRoute(input: {
     responsePayload: executeResult.body
   });
 
+  if (isShopFastAmazonQuoteRoute(input.route) && executeResult.statusCode >= 200 && executeResult.statusCode < 400) {
+    try {
+      await saveCommerceQuoteFromResponse({
+        store: input.store,
+        route: input.route,
+        requestBody,
+        responseBody: executeResult.body
+      });
+    } catch (error) {
+      return input.res.status(500).json({
+        error: error instanceof Error ? error.message : "Commerce quote persistence failed."
+      });
+    }
+  }
+
   return input.res
     .status(executeResult.statusCode)
     .set(executeResult.headers ?? {})
     .json(executeResult.body);
+}
+
+function isShopFastAmazonQuoteRoute(route: MarketplaceRoute): boolean {
+  return route.provider === "shop-fast-amazon" && route.operation === "amazon-quote";
+}
+
+function requireJsonObject(value: unknown, label: string): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`${label} must be a JSON object.`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function commerceQuoteIdFromRequest(requestBody: unknown): string {
+  const body = requireJsonObject(requestBody, "Commerce buy request");
+  const quoteId = body.quoteId;
+  if (typeof quoteId !== "string" || quoteId.trim().length === 0) {
+    throw new Error('Commerce buy requests require a "quoteId" string.');
+  }
+  return quoteId.trim();
+}
+
+function commerceConsentFromRequest(requestBody: unknown): { payload: unknown; acceptedAt: string } {
+  const body = requireJsonObject(requestBody, "Commerce buy request");
+  const consent = requireJsonObject(body.buyerConsent, "Commerce buyerConsent");
+  if (consent.accepted !== true) {
+    throw new Error("Commerce buyerConsent.accepted must be true before payment.");
+  }
+  const acceptedAt = typeof consent.acceptedAt === "string" && consent.acceptedAt.trim().length > 0
+    ? new Date(consent.acceptedAt).toISOString()
+    : new Date().toISOString();
+  return {
+    payload: body.buyerConsent,
+    acceptedAt
+  };
+}
+
+function commerceQuotePaymentFromResponse(responseBody: unknown): {
+  quoteId: string;
+  amount: string;
+  currency: MarketplaceTokenSymbol;
+  expiresAt: string | null;
+} {
+  const body = requireJsonObject(responseBody, "Commerce quote response");
+  const quoteId = typeof body.quoteId === "string" ? body.quoteId : typeof body.id === "string" ? body.id : null;
+  if (!quoteId || quoteId.trim().length === 0) {
+    throw new Error("Commerce quote response must include quoteId.");
+  }
+
+  const payment = requireJsonObject(body.payment, "Commerce quote payment");
+  const amount = payment.amount;
+  if (typeof amount !== "string" || amount.trim().length === 0) {
+    throw new Error("Commerce quote payment.amount must be a decimal string.");
+  }
+
+  const currency = payment.currency === "testUSDC" ? "testUSDC" : "USDC";
+  const expiresAt = typeof body.expiresAt === "string" && body.expiresAt.trim().length > 0
+    ? new Date(body.expiresAt).toISOString()
+    : null;
+  return {
+    quoteId: quoteId.trim(),
+    amount: decimalToRawString(amount.trim(), 6),
+    currency,
+    expiresAt
+  };
+}
+
+async function saveCommerceQuoteFromResponse(input: {
+  store: MarketplaceStore;
+  route: PublishedEndpointVersionRecord;
+  requestBody: unknown;
+  responseBody: unknown;
+}) {
+  const quote = commerceQuotePaymentFromResponse(input.responseBody);
+  return input.store.saveCommerceQuote({
+    serviceId: input.route.serviceId,
+    routeId: input.route.routeId,
+    provider: input.route.provider,
+    operation: input.route.operation,
+    quoteId: quote.quoteId,
+    amount: quote.amount,
+    currency: quote.currency,
+    expiresAt: quote.expiresAt,
+    requestBody: input.requestBody,
+    responseBody: input.responseBody
+  });
+}
+
+async function resolveCommerceQuotePayment(input: {
+  store: MarketplaceStore;
+  route: PublishedEndpointVersionRecord;
+  requestBody: unknown;
+}): Promise<{ quoteId: string; quotedPrice: string; price: string }> {
+  const quoteId = commerceQuoteIdFromRequest(input.requestBody);
+  commerceConsentFromRequest(input.requestBody);
+  const quote = await input.store.getCommerceQuote(quoteId);
+  if (!quote) {
+    throw new Error("Commerce quote was not found. Create it with amazon-quote before amazon-buy.");
+  }
+  if (quote.serviceId !== input.route.serviceId) {
+    throw new Error("Commerce quote belongs to a different service.");
+  }
+  if (quote.status !== "quoted" && quote.status !== "accepted") {
+    throw new Error(`Commerce quote is ${quote.status}.`);
+  }
+  if (quote.expiresAt) {
+    const expiresAtMs = Date.parse(quote.expiresAt);
+    if (!Number.isNaN(expiresAtMs) && expiresAtMs <= Date.now()) {
+      throw new Error("Commerce quote has expired.");
+    }
+  }
+  const price = `$${rawToDecimalString(quote.amount, 6)}`;
+  return {
+    quoteId,
+    quotedPrice: quote.amount,
+    price
+  };
+}
+
+function hashConsentPayload(payload: unknown): string {
+  return createHash("sha256").update(JSON.stringify(payload)).digest("hex");
+}
+
+function providerOrderIdFromResponse(body: unknown): string | null {
+  if (!body || typeof body !== "object") {
+    return null;
+  }
+  const candidate = body as Record<string, unknown>;
+  return typeof candidate.orderId === "string"
+    ? candidate.orderId
+    : typeof candidate.id === "string"
+      ? candidate.id
+      : null;
+}
+
+function commerceOrderStatusFromResponse(statusCode: number, body: unknown): "placed" | "failed" | "fulfilled" {
+  if (statusCode < 200 || statusCode >= 400) {
+    return "failed";
+  }
+  if (body && typeof body === "object" && (body as Record<string, unknown>).status === "fulfilled") {
+    return "fulfilled";
+  }
+  return "placed";
+}
+
+function fulfillmentStatusFromPayload(payload: unknown): "pending" | "pending_shipment" | "shipped" | "delivered" | "failed" | "cancelled" {
+  if (!payload || typeof payload !== "object") {
+    return "pending";
+  }
+  const status = (payload as Record<string, unknown>).status;
+  return status === "pending_shipment" || status === "shipped" || status === "delivered" || status === "failed" || status === "cancelled"
+    ? status
+    : "pending";
 }
 
 async function handleX402Route(input: {
@@ -2340,6 +2514,7 @@ async function handleX402Route(input: {
   store: MarketplaceStore;
   secretsKey: string;
   upstreamPaymentService?: UpstreamPaymentService;
+  upstreamPaymentPolicy?: UpstreamPaymentPolicy | null;
 }) {
   const requestBody = input.requestInput;
   const paymentHeaders = normalizePaymentHeaders(
@@ -2358,11 +2533,21 @@ async function handleX402Route(input: {
   let requiredHeaders: Record<string, string>;
   let paymentRequirement: ReturnType<typeof buildPaymentRequirementForRoute>;
   let quotedPrice: string;
+  let commerceQuoteContext: Awaited<ReturnType<typeof resolveCommerceQuotePayment>> | null = null;
   try {
-    requiredBody = buildPaymentRequiredResponse(input.route, paymentDestinationWallet, requestBody);
-    requiredHeaders = buildPaymentRequiredHeaders(input.route, paymentDestinationWallet, requestBody);
-    paymentRequirement = buildPaymentRequirementForRoute(input.route, paymentDestinationWallet, requestBody);
-    quotedPrice = quotedPriceRaw(input.route, requestBody);
+    commerceQuoteContext = isCommerceQuoteX402Billing(input.route)
+      ? await resolveCommerceQuotePayment({
+          store: input.store,
+          route: input.route,
+          requestBody
+        })
+      : null;
+    requiredBody = buildPaymentRequiredResponse(input.route, paymentDestinationWallet, requestBody, commerceQuoteContext?.price);
+    requiredHeaders = buildPaymentRequiredHeaders(input.route, paymentDestinationWallet, requestBody, commerceQuoteContext?.price);
+    paymentRequirement = buildPaymentRequirementForRoute(input.route, paymentDestinationWallet, requestBody, commerceQuoteContext?.price);
+    quotedPrice = commerceQuoteContext
+      ? quotedPriceRawFromOverride(commerceQuoteContext.price)
+      : quotedPriceRaw(input.route, requestBody);
   } catch (error) {
     return input.res.status(400).json({
       error: error instanceof Error ? error.message : "Unable to quote this route."
@@ -2500,6 +2685,62 @@ async function handleX402Route(input: {
   const requestId = existing.requestId ?? randomUUID();
   const asyncJobToken = input.route.mode === "async" ? (existing.jobToken ?? createOpaqueToken("job")) : null;
   const pendingAsyncNextPollAt = input.route.mode === "async" ? computeNextPollAt() : null;
+  let commerceOrder: Awaited<ReturnType<MarketplaceStore["createCommerceOrder"]>> | null = null;
+
+  if (commerceQuoteContext) {
+    try {
+      const consent = commerceConsentFromRequest(requestBody);
+      await input.store.recordCommerceConsent({
+        quoteId: commerceQuoteContext.quoteId,
+        buyerWallet,
+        consentPayload: consent.payload,
+        consentHash: hashConsentPayload(consent.payload),
+        acceptedAt: consent.acceptedAt
+      });
+      commerceOrder = await input.store.createCommerceOrder({
+        quoteId: commerceQuoteContext.quoteId,
+        paymentId: paymentHeaders.paymentId,
+        buyerWallet,
+        routeId: input.route.routeId,
+        requestId,
+        requestBody
+      });
+    } catch (error) {
+      const failedResponse = await buildRejectedSyncResponse({
+        executeResult: {
+          kind: "sync",
+          statusCode: 500,
+          body: {
+            error: error instanceof Error ? error.message : "Commerce order initialization failed."
+          }
+        },
+        paymentId: paymentHeaders.paymentId,
+        buyerWallet,
+        quotedPrice,
+        route: input.route,
+        store: input.store,
+        refundService: input.refundService
+      });
+
+      await input.store.saveSyncIdempotency({
+        paymentId: paymentHeaders.paymentId,
+        normalizedRequestHash: requestHash,
+        buyerWallet,
+        routeId: input.route.routeId,
+        routeVersion: input.route.version,
+        quotedPrice,
+        payoutSplit,
+        paymentPayload: paymentHeaders.paymentPayload,
+        facilitatorResponse: verifyResult,
+        statusCode: failedResponse.statusCode,
+        body: failedResponse.body,
+        headers: failedResponse.headers,
+        requestId
+      });
+
+      return input.res.status(failedResponse.statusCode).set(failedResponse.headers).json(failedResponse.body);
+    }
+  }
 
   if (isTopupX402Billing(input.route)) {
     try {
@@ -2626,7 +2867,12 @@ async function handleX402Route(input: {
       providers: input.providers,
       store: input.store,
       secretsKey: input.secretsKey,
-      upstreamPaymentService: input.upstreamPaymentService
+      upstreamPaymentService: input.upstreamPaymentService,
+      upstreamPaymentPolicy: buildBaseUsdcUpstreamPaymentPolicy({
+        route: input.route,
+        requestInput: requestBody,
+        maxAmountRaw: quotedPrice
+      })
     });
   } catch (error) {
     if (asyncJobToken) {
@@ -2644,6 +2890,15 @@ async function handleX402Route(input: {
           error: error instanceof Error ? error.message : "Route execution failed."
         },
         errorMessage: error instanceof Error ? error.message : "Route execution failed."
+      });
+    }
+    if (commerceOrder) {
+      await input.store.updateCommerceOrder({
+        orderId: commerceOrder.id,
+        status: "failed",
+        responseBody: {
+          error: error instanceof Error ? error.message : "Route execution failed."
+        }
       });
     }
     const failedResponse = await buildRejectedSyncResponse({
@@ -2709,6 +2964,27 @@ async function handleX402Route(input: {
           ? "Async route returned a synchronous response."
           : `Async route failed with status ${executeResult.statusCode} before acceptance.`
       );
+    }
+    if (commerceOrder) {
+      const updatedOrder = await input.store.updateCommerceOrder({
+        orderId: commerceOrder.id,
+        status: commerceOrderStatusFromResponse(executeResult.statusCode, executeResult.body),
+        providerOrderId: providerOrderIdFromResponse(executeResult.body),
+        responseBody: executeResult.body
+      });
+      if (executeResult.statusCode >= 200 && executeResult.statusCode < 400) {
+        const fulfillmentPayload = executeResult.body && typeof executeResult.body === "object"
+          ? (executeResult.body as Record<string, unknown>).fulfillment
+          : null;
+        await input.store.recordCommerceFulfillment({
+          orderId: updatedOrder.id,
+          status: fulfillmentStatusFromPayload(fulfillmentPayload),
+          tracking: fulfillmentPayload && typeof fulfillmentPayload === "object"
+            ? (fulfillmentPayload as Record<string, unknown>).tracking
+            : null,
+          rawPayload: fulfillmentPayload ?? {}
+        });
+      }
     }
     if (asyncJobToken || executeResult.statusCode < 200 || executeResult.statusCode >= 400) {
       const failedResponse = await buildRejectedSyncResponse({
@@ -2970,6 +3246,7 @@ async function executeRoute(input: {
   store: MarketplaceStore;
   secretsKey: string;
   upstreamPaymentService?: UpstreamPaymentService;
+  upstreamPaymentPolicy?: UpstreamPaymentPolicy | null;
 }) {
   switch (input.route.executorKind) {
     case "mock":
@@ -2992,7 +3269,8 @@ async function executeRoute(input: {
         marketplaceBaseUrl: input.marketplaceBaseUrl,
         store: input.store,
         secretsKey: input.secretsKey,
-        upstreamPaymentService: input.upstreamPaymentService
+        upstreamPaymentService: input.upstreamPaymentService,
+        upstreamPaymentPolicy: input.upstreamPaymentPolicy
       });
     default:
       throw new Error(`Unsupported route executor: ${String(input.route.executorKind)}`);
@@ -3010,6 +3288,7 @@ async function executeHttpRoute(input: {
   store: MarketplaceStore;
   secretsKey: string;
   upstreamPaymentService?: UpstreamPaymentService;
+  upstreamPaymentPolicy?: UpstreamPaymentPolicy | null;
 }) {
   if (!input.route.upstreamBaseUrl || !input.route.upstreamPath || !input.route.upstreamAuthMode) {
     throw new Error("HTTP route is missing upstream configuration.");
@@ -3111,7 +3390,10 @@ async function executeHttpRoute(input: {
     upstreamBaseUrl: input.route.upstreamBaseUrl!,
     upstreamPath: input.route.upstreamPath!,
     requestSchemaJson: input.route.requestSchemaJson
-  }, input.input, headers, input.upstreamPaymentService);
+  }, input.input, headers, input.upstreamPaymentService, input.upstreamPaymentPolicy ?? buildBaseUsdcUpstreamPaymentPolicy({
+    route: input.route,
+    requestInput: input.input
+  }));
 }
 
 async function executeUpstreamHttpRequest(
@@ -3124,7 +3406,8 @@ async function executeUpstreamHttpRequest(
   },
   requestInput: unknown,
   headers: Record<string, string>,
-  upstreamPaymentService?: UpstreamPaymentService
+  upstreamPaymentService?: UpstreamPaymentService,
+  upstreamPaymentPolicy?: UpstreamPaymentPolicy | null
 ) {
   let response: globalThis.Response;
   const url = route.method === "GET"
@@ -3174,11 +3457,25 @@ async function executeUpstreamHttpRequest(
       };
     }
 
+    if (!upstreamPaymentPolicy) {
+      return {
+        kind: "sync" as const,
+        statusCode: 502,
+        body: {
+          error: "Upstream requested payment, but this route does not have a bounded upstream x402 payment policy."
+        },
+        headers: {
+          "content-type": "application/json"
+        }
+      };
+    }
+
     try {
       const paid = await upstreamPaymentService.payHttp({
         url,
         method: route.method,
         headers,
+        policy: upstreamPaymentPolicy,
         ...(requestBody ? { body: requestBody } : {})
       });
 
@@ -3525,6 +3822,10 @@ async function validateProviderEndpointInput(input: {
     }
     if (nextBaseUrl || nextPath || nextAuthMode || nextHeaderName || input.input.upstreamSecret || hasStoredSecret) {
       return { ok: false, statusCode: 400, error: "Marketplace top-up routes cannot include upstream configuration." };
+    }
+  } else if (billingType === "commerce_quote_x402") {
+    if (nextMode !== "sync") {
+      return { ok: false, statusCode: 400, error: "Commerce quote x402 routes must use mode=sync." };
     }
   } else {
     if (!nextBaseUrl || !nextPath || !nextAuthMode) {

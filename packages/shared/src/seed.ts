@@ -77,7 +77,37 @@ export const SHOP_FAST_SERVICE_SEED: ProviderServiceRecord = {
   updatedAt: SEEDED_AT
 };
 
-export const SEEDED_PROVIDER_SERVICE_IDS = [MOCK_PROVIDER_SERVICE_SEED.id, SHOP_FAST_SERVICE_SEED.id];
+export const SHOP_FAST_EXECUTION_SERVICE_SEED: ProviderServiceRecord = {
+  id: "service_shop_fast_amazon_execution",
+  providerAccountId: MARKETPLACE_PROVIDER_ACCOUNT_SEED.id,
+  serviceType: "marketplace_proxy",
+  settlementMode: "verified_escrow",
+  slug: "shop-fast-amazon-execute",
+  apiNamespace: "shop-fast-amazon",
+  name: "Shop Fast Amazon Execute",
+  tagline: "Quote-bound Amazon purchases executed through Fast Marketplace records.",
+  about:
+    "Shop Fast Amazon Execute creates marketplace-held quote, consent, order, and fulfillment records around Shop Fast Amazon purchases. Use the free quote route first, then submit buyer consent and x402 payment to the buy route.",
+  categories: ["Commerce", "Shopping", "Fast"],
+  featured: true,
+  promptIntro: 'I want to execute an Amazon purchase through "Shop Fast Amazon Execute".',
+  setupInstructions: [
+    "Call amazon-quote to create a marketplace-saved quote.",
+    "Review the quote response and collect explicit buyer consent.",
+    "Call amazon-buy with the quoteId and buyerConsent using x402 payment for the quote amount."
+  ],
+  websiteUrl: "https://shop.fast.xyz",
+  payoutWallet: null,
+  status: "published",
+  createdAt: SEEDED_AT,
+  updatedAt: SEEDED_AT
+};
+
+export const SEEDED_PROVIDER_SERVICE_IDS = [
+  MOCK_PROVIDER_SERVICE_SEED.id,
+  SHOP_FAST_SERVICE_SEED.id,
+  SHOP_FAST_EXECUTION_SERVICE_SEED.id
+];
 
 function buildQuickInsightRoute(config: MarketplaceNetworkConfig): MarketplaceRoute {
   return {
@@ -221,6 +251,155 @@ function buildAsyncReportRoute(config: MarketplaceNetworkConfig): MarketplaceRou
     },
     upstreamBaseUrl: null,
     upstreamPath: null,
+    upstreamAuthMode: "none",
+    upstreamAuthHeaderName: null,
+    upstreamSecretRef: null
+  };
+}
+
+function buildShopFastAmazonQuoteRoute(config: MarketplaceNetworkConfig): MarketplaceRoute {
+  return {
+    routeId: "shop-fast-amazon.amazon-quote.v1",
+    provider: "shop-fast-amazon",
+    operation: "amazon-quote",
+    version: "v1",
+    method: "POST",
+    settlementMode: "verified_escrow",
+    mode: "sync",
+    network: config.paymentNetwork,
+    price: "Free",
+    billing: {
+      type: "free"
+    },
+    title: "Amazon Quote",
+    description: "Create and save a marketplace quote for an Amazon purchase through Shop Fast.",
+    requestExample: {
+      productId: "B000EXAMPLE",
+      quantity: 1,
+      shipToCountry: "US",
+      paymentCurrency: "USDC"
+    },
+    responseExample: {
+      quoteId: "quote_example",
+      expiresAt: "2026-03-19T00:15:00.000Z",
+      payment: {
+        amount: "24.99",
+        currency: "USDC",
+        network: "fast"
+      }
+    },
+    usageNotes: "The returned quoteId is persisted by the marketplace and required by amazon-buy.",
+    requestSchemaJson: {
+      type: "object",
+      properties: {
+        productId: { type: "string", minLength: 1 },
+        quantity: { type: "integer", minimum: 1 },
+        shipToCountry: { type: "string", minLength: 2, maxLength: 2 },
+        paymentCurrency: { type: "string", const: "USDC" }
+      },
+      required: ["productId", "quantity", "shipToCountry", "paymentCurrency"],
+      additionalProperties: true
+    },
+    responseSchemaJson: {
+      type: "object",
+      properties: {
+        quoteId: { type: "string" },
+        expiresAt: { type: "string" },
+        payment: {
+          type: "object",
+          properties: {
+            amount: { type: "string" },
+            currency: { type: "string" },
+            network: { type: "string" }
+          },
+          required: ["amount", "currency"]
+        }
+      },
+      required: ["quoteId", "payment"],
+      additionalProperties: true
+    },
+    payout: {
+      providerAccountId: MARKETPLACE_PROVIDER_ACCOUNT_SEED.id,
+      providerWallet: null,
+      providerBps: 0
+    },
+    executorKind: "http",
+    asyncConfig: null,
+    upstreamBaseUrl: "https://shop.fast.xyz",
+    upstreamPath: "/api/amazon/quote",
+    upstreamAuthMode: "none",
+    upstreamAuthHeaderName: null,
+    upstreamSecretRef: null
+  };
+}
+
+function buildShopFastAmazonBuyRoute(config: MarketplaceNetworkConfig): MarketplaceRoute {
+  return {
+    routeId: "shop-fast-amazon.amazon-buy.v1",
+    provider: "shop-fast-amazon",
+    operation: "amazon-buy",
+    version: "v1",
+    method: "POST",
+    settlementMode: "verified_escrow",
+    mode: "sync",
+    network: config.paymentNetwork,
+    price: "Quote-bound",
+    billing: {
+      type: "commerce_quote_x402"
+    },
+    title: "Amazon Buy",
+    description: "Place an Amazon purchase through Shop Fast after a saved quote and explicit buyer consent.",
+    requestExample: {
+      quoteId: "quote_example",
+      buyerConsent: {
+        accepted: true,
+        acceptedAt: "2026-03-19T00:10:00.000Z"
+      }
+    },
+    responseExample: {
+      orderId: "order_example",
+      status: "pending",
+      fulfillment: {
+        status: "pending_shipment"
+      }
+    },
+    usageNotes:
+      "Requires a quote created by amazon-quote. The marketplace records consent, order, and fulfillment state around the upstream purchase request.",
+    requestSchemaJson: {
+      type: "object",
+      properties: {
+        quoteId: { type: "string", minLength: 1 },
+        buyerConsent: {
+          type: "object",
+          properties: {
+            accepted: { type: "boolean", const: true },
+            acceptedAt: { type: "string" }
+          },
+          required: ["accepted"]
+        }
+      },
+      required: ["quoteId", "buyerConsent"],
+      additionalProperties: true
+    },
+    responseSchemaJson: {
+      type: "object",
+      properties: {
+        orderId: { type: "string" },
+        status: { type: "string" },
+        fulfillment: { type: "object" }
+      },
+      required: ["orderId", "status"],
+      additionalProperties: true
+    },
+    payout: {
+      providerAccountId: MARKETPLACE_PROVIDER_ACCOUNT_SEED.id,
+      providerWallet: null,
+      providerBps: 0
+    },
+    executorKind: "http",
+    asyncConfig: null,
+    upstreamBaseUrl: "https://shop.fast.xyz",
+    upstreamPath: "/api/amazon/buy",
     upstreamAuthMode: "none",
     upstreamAuthHeaderName: null,
     upstreamSecretRef: null
@@ -433,6 +612,10 @@ function buildPublishedServiceVersion(input: {
 }
 
 function buildSeededServiceGroups(config: MarketplaceNetworkConfig) {
+  const shopFastExecutionRoutes = [
+    buildShopFastAmazonQuoteRoute(config),
+    buildShopFastAmazonBuyRoute(config)
+  ];
   const groups = [
     {
       service: SHOP_FAST_SERVICE_SEED,
@@ -443,6 +626,16 @@ function buildSeededServiceGroups(config: MarketplaceNetworkConfig) {
       }),
       routes: [],
       externalEndpoints: buildShopFastExternalEndpointDrafts()
+    },
+    {
+      service: SHOP_FAST_EXECUTION_SERVICE_SEED,
+      publishedService: buildPublishedServiceVersion({
+        service: SHOP_FAST_EXECUTION_SERVICE_SEED,
+        routeIds: shopFastExecutionRoutes.map((route) => route.routeId),
+        versionId: "published_service_shop_fast_amazon_execution_v1"
+      }),
+      routes: shopFastExecutionRoutes,
+      externalEndpoints: []
     }
   ];
 
