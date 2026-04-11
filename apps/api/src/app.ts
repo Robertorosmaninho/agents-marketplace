@@ -47,7 +47,6 @@ import {
   normalizeFastWalletAddress,
   normalizePaymentHeaders,
   parseOpenApiImportDocument,
-  parseUcpImportProfile,
   parseBearerToken,
   quotedPriceRaw,
   rawToDecimalString,
@@ -77,7 +76,6 @@ import {
   type MarketplaceRoute,
   type MarketplaceStore,
   type OpenApiImportPreview,
-  type UcpImportPreview,
   type PollResult,
   type ProviderEndpointDraftRecord,
   type ProviderExecuteContext,
@@ -287,10 +285,6 @@ const endpointUpdateSchema = z.discriminatedUnion("endpointType", [
 
 const openApiImportSchema = z.object({
   documentUrl: z.string().url()
-});
-
-const ucpImportSchema = z.object({
-  profileUrl: z.string().url()
 });
 
 const reviewRequestSchema = z.object({
@@ -1341,117 +1335,6 @@ export function createMarketplaceApi(options: MarketplaceApiOptions): Express {
 
         if (!isSameOrSubdomain(serviceHost, new URL(endpoint.upstreamBaseUrl).hostname)) {
           warnings.push("Upstream base URL host must match the service website host or one of its subdomains.");
-        }
-
-        return {
-          ...endpoint,
-          warnings
-        };
-      })
-    });
-  });
-
-  app.post("/provider/services/:id/ucp/import", async (req, res) => {
-    const session = requireSiteSession(req, res, options.sessionSecret, webBaseUrl);
-    if (!session) {
-      return;
-    }
-
-    const service = await options.store.getProviderServiceForOwner(req.params.id, session.wallet);
-    if (!service) {
-      return res.status(404).json({ error: "Provider service not found." });
-    }
-
-    if (service.service.serviceType !== "external_registry") {
-      return res.status(400).json({ error: "UCP import creates discovery-only endpoints for external registry services." });
-    }
-
-    const parsed = ucpImportSchema.safeParse(req.body ?? {});
-    if (!parsed.success) {
-      return res.status(400).json({ error: "UCP import validation failed.", issues: parsed.error.issues });
-    }
-
-    if (!service.service.websiteUrl) {
-      return res.status(400).json({ error: "websiteUrl is required before UCP import." });
-    }
-
-    if (!isSafePublicHttpsUrl(service.service.websiteUrl) || !isSafePublicHttpsUrl(parsed.data.profileUrl)) {
-      return res.status(400).json({ error: "UCP import only supports public HTTPS URLs." });
-    }
-
-    const serviceHost = new URL(service.service.websiteUrl).hostname;
-    const profileHost = new URL(parsed.data.profileUrl).hostname;
-    if (!isSameOrSubdomain(serviceHost, profileHost)) {
-      return res.status(400).json({
-        error: "profileUrl host must match the service website host or one of its subdomains."
-      });
-    }
-
-    let profileResponse: globalThis.Response;
-    let profileUrl: string;
-    try {
-      const result = await fetchSafePublicHttpsUrl({
-        url: parsed.data.profileUrl,
-        init: {
-          headers: {
-            accept: "application/json"
-          }
-        },
-        validateUrl(url) {
-          return isSameOrSubdomain(serviceHost, url.hostname);
-        },
-        invalidRedirectMessage: "UCP profile redirects must stay on the service website host or one of its subdomains."
-      });
-      profileResponse = result.response;
-      profileUrl = result.finalUrl;
-    } catch (error) {
-      if (error instanceof UnsafePublicUrlError) {
-        return res.status(400).json({ error: error.message });
-      }
-      return res.status(502).json({
-        error: error instanceof Error ? error.message : "UCP profile fetch failed."
-      });
-    }
-
-    if (!profileResponse.ok) {
-      return res.status(502).json({
-        error: `UCP profile fetch failed with status ${profileResponse.status}.`
-      });
-    }
-
-    let profile: unknown;
-    try {
-      profile = JSON.parse(await profileResponse.text());
-    } catch {
-      return res.status(400).json({
-        error: "Only JSON UCP profiles are supported right now."
-      });
-    }
-
-    let preview: UcpImportPreview;
-    try {
-      preview = parseUcpImportProfile({
-        profile,
-        profileUrl
-      });
-    } catch (error) {
-      return res.status(400).json({
-        error: error instanceof Error ? error.message : "UCP import parsing failed."
-      });
-    }
-
-    const existingExternalUrls = new Set(
-      service.endpoints
-        .filter((endpoint) => endpoint.endpointType === "external_registry")
-        .map((endpoint) => `${endpoint.method} ${endpoint.publicUrl}`)
-    );
-
-    return res.json({
-      ...preview,
-      endpoints: preview.endpoints.map((endpoint) => {
-        const warnings = [...endpoint.warnings];
-        if (existingExternalUrls.has(`${endpoint.method} ${endpoint.publicUrl}`)) {
-          warnings.push("An external endpoint draft with this method and URL already exists.");
         }
 
         return {

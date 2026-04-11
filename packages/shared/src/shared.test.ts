@@ -21,7 +21,6 @@ import {
   listServiceDefinitions,
   normalizeFastWalletAddress,
   normalizePaymentHeaders,
-  parseUcpImportProfile,
   resolveMarketplaceNetworkConfig,
   serializeQueryInput,
   validateJsonSchema,
@@ -1502,52 +1501,6 @@ describe("shared marketplace helpers", () => {
     const capabilities = profile.ucp.capabilities as Record<string, unknown>;
     expect(capabilities["dev.ucp.shopping.checkout"]).toBeUndefined();
     expect(capabilities["dev.ucp.shopping.order"]).toBeUndefined();
-  });
-
-  it("parses UCP REST service bindings into external registry import candidates", () => {
-    const preview = parseUcpImportProfile({
-      profileUrl: "https://merchant.example.com/.well-known/ucp",
-      profile: {
-        ucp: {
-          version: "2026-01-01",
-          services: {
-            "dev.ucp.shopping": [
-              {
-                version: "2026-01-01",
-                id: "merchant:catalog-search",
-                spec: "https://merchant.example.com/docs/ucp",
-                transport: "rest",
-                endpoint: "https://merchant.example.com/ucp/catalog/search"
-              },
-              {
-                version: "2026-01-01",
-                transport: "mcp",
-                endpoint: "https://merchant.example.com/mcp"
-              }
-            ]
-          },
-          capabilities: {
-            "dev.ucp.shopping.catalog.search": [
-              {
-                version: "2026-01-01"
-              }
-            ]
-          }
-        }
-      }
-    });
-
-    expect(preview.services).toEqual(["dev.ucp.shopping"]);
-    expect(preview.capabilities).toEqual(["dev.ucp.shopping.catalog.search"]);
-    expect(preview.endpoints).toHaveLength(1);
-    expect(preview.endpoints[0]).toMatchObject({
-      endpointType: "external_registry",
-      title: "Merchant Catalog Search",
-      method: "POST",
-      publicUrl: "https://merchant.example.com/ucp/catalog/search",
-      docsUrl: "https://merchant.example.com/docs/ucp"
-    });
-    expect(preview.warnings[0]).toContain("only REST imports are supported");
   });
 
   it("resolves published services by the published snapshot slug even after draft slug edits", async () => {
