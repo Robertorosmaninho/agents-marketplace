@@ -19,8 +19,6 @@
   },
   "include": [
     "apps/api/**/*.ts",
-    "apps/facilitator/**/*.ts",
-    "apps/worker/**/*.ts",
     "packages/**/*.ts"
   ]
 }
