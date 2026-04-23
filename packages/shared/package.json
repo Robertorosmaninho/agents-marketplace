@@ -3,7 +3,6 @@
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./src/index.ts",
-    "./browser-request-input": "./src/browser-request-input.ts"
+    ".": "./src/index.ts"
   }
 }
