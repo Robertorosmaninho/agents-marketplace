@@ -1,8 +1,0 @@
-{
-  "name": "@marketplace/valyu-service",
-  "private": true,
-  "type": "module",
-  "exports": {
-    ".": "./src/index.ts"
-  }
-}
